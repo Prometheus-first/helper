@@ -2,7 +2,10 @@
 // 单独生成 text_bridge.dll，不替换仍在运行的 selftest_bridge.dll。
 #define WXBOT_EXTENDED_RECEIVE
 #define WXBOT_MEDIA_RECEIVE
+#define WXBOT_FRIEND_RECEIVE
 #include "selftest_bridge.cpp"
+
+static DWORD friend_receive_start();
 
 struct TextConfig {
     TestConfig base;
@@ -314,6 +317,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
         MH_RemoveHook(target); MH_Uninitialize(); return 600 + status;
     }
     receive_hook_created = true;
+    const DWORD friend_status = friend_receive_start();
+    if (friend_status != ERROR_SUCCESS) return friend_status;
     return 0;
 }
 
@@ -356,6 +361,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "voice_send.h"
 #include "file_download.h"
 #include "file_send.h"
+#include "group_management.h"
+#include "friend_request.h"
+#include "friend_receive.h"
 
 // 定向只读探针：仅在手动发送 WXBOT_AT_PROBE 的消息中记录 msgsource 字符串。
 // 不发送消息、不改写消息对象，用于核对该版本真实艾特的元数据布局。

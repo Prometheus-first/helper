@@ -33,6 +33,19 @@ export-emoticons raw
 
 需要先配置当前账号的 `wechat_data_directory`。第一条导出并尝试转成可发送的 GIF；`raw` 只导出原件和缩略图。
 
+## 好友与群管理
+
+```text
+friend-requests
+accept-friend fr_申请ID
+invite-members 12345678@chatroom wxid_example_friend
+create-group wxid_example_first wxid_example_second
+enable friend_auto_accept
+disable friend_auto_accept
+```
+
+好友申请票据只保留在当前连接的内存中。群管理仅支持控制台操作，人数和验证范围见[好友申请与群管理](./friends-and-groups.md)。
+
 ## 管理插件
 
 ```text

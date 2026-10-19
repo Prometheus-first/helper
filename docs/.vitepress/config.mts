@@ -26,6 +26,7 @@ export default defineConfig({
       { text: '使用框架', items: [
         { text: '控制台命令', link: '/guide/commands' },
         { text: '群聊功能', link: '/guide/features' },
+        { text: '好友申请与群管理', link: '/guide/friends-and-groups' },
         { text: '文本与真实艾特', link: '/messages/text' },
         { text: '图片收发', link: '/messages/images' },
         { text: '文件收发', link: '/messages/files' },

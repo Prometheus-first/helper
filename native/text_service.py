@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 import ctypes as c
 from collections import deque
 from pathlib import Path
@@ -92,6 +93,8 @@ class NativeTextService(NativeFileHelperService):
         self.voice_directory = Path(voice_directory or
                                     Path(__file__).resolve().parent.parent / ".runtime/voices")
         self.last_send_result = None
+        self._friend_requests = None
+        self._friend_session_id = ""
 
     @property
     def self_wxid(self):
@@ -120,6 +123,9 @@ class NativeTextService(NativeFileHelperService):
         if self.preferred_account and account != self.preferred_account:
             raise RuntimeError("目标进程登录的不是绑定的机器人账号，等待正确账号登录")
         self.router.set_account(account)
+        from wxbot_framework.friend_requests import PendingFriendRequests
+        self._friend_session_id = uuid.uuid4().hex
+        self._friend_requests = PendingFriendRequests(account, self._friend_session_id)
         self._next_account_check = time.monotonic() + 1
         from wxbot_framework.image_metadata import ImageStore
         from wxbot_framework.image_receiver import ImageReceiver
@@ -192,6 +198,9 @@ class NativeTextService(NativeFileHelperService):
 
     def stop(self):
         self._stop.set()
+        if self._friend_requests is not None:
+            self._friend_requests.close()
+            self._friend_requests = None
         if self._file_receiver is not None:
             self._file_receiver.close(timeout=30)
             if self._file_receiver.is_alive:
@@ -229,6 +238,8 @@ class NativeTextService(NativeFileHelperService):
         return name
 
     def _map_message(self, message):
+        if message.type == 37:
+            return self._map_friend_request(message)
         if message.type not in (1, 3, 49):
             return None
         previous = self.self_wxid
@@ -272,6 +283,94 @@ class NativeTextService(NativeFileHelperService):
             if self.router.unparsed_groups == 1:
                 logger.warning("群文本作者格式未匹配，已跳过；需要用测试群消息核对实际布局")
         return data
+
+    def _map_friend_request(self, message):
+        from wxbot_framework.friend_requests import FriendRequestError, parse_friend_request
+        if self._stop.is_set() or self._friend_requests is None:
+            return None
+        try:
+            receiver = message.receiver.decode("utf-8")
+            sender = message.sender.decode("utf-8")
+            if receiver != self.self_wxid or sender == self.self_wxid:
+                return None
+            request = parse_friend_request(message.image_xml.decode("utf-8"))
+            # type37 也包含验证结果等通知；仅处理明确的入站申请。
+            if request.opcode != 2:
+                return None
+            public = self._friend_requests.add(request)
+        except (UnicodeError, FriendRequestError):
+            logger.warning("好友申请元数据无效或不是当前支持的格式，已跳过")
+            return None
+        return {"msg": "", "content": "", "wx_type": 37, "chat_id": "fmessage",
+                "from_wxid": request.sender_id, "sender_id": request.sender_id,
+                "native_receiver": receiver, "self_wxid": self.self_wxid,
+                "room_wxid": "", "is_self": False, "sequence": message.sequence,
+                "friend_request": public, "dispatch_to_plugins": public["status"] == "pending"}
+
+    def friend_requests(self):
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._friend_requests is None:
+                raise RuntimeError("好友申请接收服务没有运行")
+            self._check_account(force=True)
+            return self._friend_requests.list()
+
+    def accept_friend(self, request_id):
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._friend_requests is None:
+                raise RuntimeError("好友申请接收服务没有运行")
+            self._check_account(force=True)
+            catalog = self._friend_requests
+            owner = {"account": self.self_wxid, "session_id": self._friend_session_id}
+            record = catalog.resolve(request_id, **owner)
+            if record.status == "accepted":
+                return True
+            if record.status != "pending" or record.request.opcode != 2:
+                raise ValueError("好友申请已处理或不可通过；请让对方重新发送申请")
+            try:
+                self.last_result = self._run("--accept-friend", pid=self.pid, keep_loaded=True,
+                    preserve_report=self.preserve_reports, account=self.self_wxid,
+                    friend_request=record.request)
+                self._check_account(force=True)
+            except Exception:
+                catalog.mark_failed(request_id, **owner)
+                raise RuntimeError("通过好友申请失败，请检查连接及申请状态") from None
+            accepted = self.last_result.get("success") is True
+            if accepted:
+                catalog.mark_accepted(request_id, **owner)
+            else:
+                catalog.mark_failed(request_id, **owner)
+            return accepted
+
+    def invite_group_members(self, room, members):
+        from wxbot_framework.group_management import validate_group_id, validate_group_members
+        room = validate_group_id(room)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生群管理服务没有运行")
+            self._check_account(force=True)
+            members = validate_group_members(members, self_wxid=self.self_wxid)
+            self.last_result = self._run("--manage-group", pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports, account=self.self_wxid,
+                target=room, group_operation="invite", group_members=members)
+            self._check_account(force=True)
+            return self.last_result.get("success") is True
+
+    def create_group(self, members):
+        from wxbot_framework.group_management import validate_group_id, validate_group_members
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生群管理服务没有运行")
+            self._check_account(force=True)
+            members = validate_group_members(members, creating=True, self_wxid=self.self_wxid)
+            self.last_result = self._run("--manage-group", pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports, account=self.self_wxid,
+                group_operation="create", group_members=members)
+            self._check_account(force=True)
+            if self.last_result.get("success") is not True:
+                raise RuntimeError("微信未确认创建群聊，请检查返回状态")
+            room = validate_group_id(self.last_result.get("report", {}).get("room_id"))
+            self.chats[room] = {"chat_id": room, "is_group": True}
+            return room
 
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)

@@ -52,7 +52,7 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type in (3, 49):
+        if msg_type in (3, 37, 49):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -229,6 +229,41 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 return result
 
+    def _manage(self, operation, *arguments, expected_session=None):
+        """将账号管理操作与发送、切号和卸载串行化，不使用文本等待。"""
+        with self._lock:
+            if self._backend is None or not self._available:
+                raise RuntimeError("微信尚未连接")
+            if expected_session is not None and expected_session != self._backend.session_id:
+                raise RuntimeError("操作所属的微信连接已结束")
+            method = getattr(self._backend, operation, None)
+            if not callable(method):
+                raise CapabilityError("当前后端尚未开放此账号管理操作")
+            backend, cancel = self._backend, self._cancel
+        with self._send_lock:
+            with self._lock:
+                self._check_pending(backend, cancel)
+                return method(*arguments)
+
+    def friend_requests(self, *, expected_session=None):
+        return self._manage("friend_requests", expected_session=expected_session)
+
+    def accept_friend(self, request_id, *, expected_session=None):
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 80:
+            raise ValueError("请提供 friend-requests 中显示的申请 ID")
+        return self._manage("accept_friend", request_id, expected_session=expected_session)
+
+    def invite_group_members(self, room, members, *, expected_session=None):
+        from .group_management import validate_group_id, validate_group_members
+        room = validate_group_id(room)
+        members = validate_group_members(members)
+        return self._manage("invite_group_members", room, members, expected_session=expected_session)
+
+    def create_group(self, members, *, expected_session=None):
+        from .group_management import validate_group_members
+        members = validate_group_members(members, creating=True)
+        return self._manage("create_group", members, expected_session=expected_session)
+
     def send_at_text(self, room_wxid, content, at_list, *, expected_session=None, display_names=None, delivery_guard=None):
         members = validate_mentions(room_wxid, at_list)
         if not isinstance(content, str) or not content:
@@ -331,6 +366,9 @@ class PluginContext:
     def send_file(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_file(chat_id, path, expected_session=expected_session,
                                        delivery_guard=delivery_guard)
+
+    def accept_friend(self, request_id, *, expected_session=None):
+        return self._service.accept_friend(request_id, expected_session=expected_session)
 
     def send_voice(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_voice(chat_id, path, expected_session=expected_session,

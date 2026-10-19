@@ -63,7 +63,7 @@ def main():
             if plugins.load_errors:
                 raise ValueError(str(plugins.load_errors))
             for spec in specs.values():
-                enabled = config.get("plugins", {}).get(spec.name, {}).get("enabled", True)
+                enabled = config.get("plugins", {}).get(spec.name, {}).get("enabled", spec.default_enabled)
                 if args.check and enabled:
                     for source in spec.path.parent.rglob("*.py"):
                         compile(source.read_bytes(), str(source), "exec")

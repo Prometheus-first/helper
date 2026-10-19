@@ -20,6 +20,10 @@
     "max_seconds": 0.3
   },
   "plugins": {
+    "friend_auto_accept": {
+      "enabled": false,
+      "verification_keywords": []
+    },
     "personality": {
       "enabled": true
     },

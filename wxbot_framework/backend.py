@@ -14,6 +14,8 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
                                            "file.receive", "file.send",
                                            "friend.file.receive", "friend.file.send",
                                            "group.file.receive", "group.file.send",
+                                           "friend.request.receive", "friend.request.accept",
+                                           "group.member.invite", "group.create",
                                            "voice.send", "friend.voice.send", "group.voice.send",
                                            "emoticon.send", "emoticon.extract"})
 
@@ -52,7 +54,7 @@ class NativeFileHelperBackend:
 
 
 class NativeTextBackend(NativeFileHelperBackend):
-    scope = "文件传输助手、好友和群聊的文本、图片与文件；语音、表情发送和本地缓存导出"
+    scope = "文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理"
 
     def __init__(self, root, config):
         native = Path(root) / "native"
@@ -97,6 +99,18 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def send_file(self, chat_id, path):
         return self.raw.send_file(chat_id, path)
+
+    def friend_requests(self):
+        return self.raw.friend_requests()
+
+    def accept_friend(self, request_id):
+        return self.raw.accept_friend(request_id)
+
+    def invite_group_members(self, room, members):
+        return self.raw.invite_group_members(room, members)
+
+    def create_group(self, members):
+        return self.raw.create_group(members)
 
     def send_emoticon(self, chat_id, path):
         return self.raw.send_emoticon(chat_id, path)

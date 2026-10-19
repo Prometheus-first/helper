@@ -64,6 +64,14 @@ class BotApplication:
             self._disconnect()
 
     def _emit(self, message):
+        if message.type == 37:
+            request = message.data.get("friend_request", {})
+            logger.info("好友申请 | 申请ID=%s | 微信ID=%s | 昵称=%s", request.get("request_id", ""),
+                        request.get("sender_id", ""), json.dumps(request.get("nickname", ""), ensure_ascii=False))
+            # 好友申请是独立事件，不受聊天会话白名单控制、不写群历史。
+            if message.data.get("dispatch_to_plugins", True):
+                self.plugins.dispatch(message)
+            return
         # 先显示会话 ID，未加入白名单的新群也能被发现；群正文不进入消息日志。
         if message.is_group or message.chat_id.endswith("@chatroom"):
             logger.info("群消息 | 群ID=%s", message.chat_id)
@@ -113,6 +121,7 @@ class BotApplication:
             self.stop_event.set()
         elif action == "help" and len(words) == 1:
             logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-file 会话ID \"文件路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
+            logger.info("好友与群管理：friend-requests / accept-friend 申请ID / invite-members 群ID 好友ID [好友ID...] / create-group 好友ID 好友ID [好友ID...]")
         elif action == "status" and len(words) == 1:
             logger.info("状态：%s", json.dumps({"connected": self._connection_ready,
                                                "pid": self.backend.pid if self.backend else None,
@@ -121,6 +130,19 @@ class BotApplication:
         elif action == "chats" and len(words) == 1:
             rows = self.backend.chats() if self.backend and hasattr(self.backend, "chats") else []
             logger.info("本次连接已接收的会话：%s", json.dumps(rows, ensure_ascii=False))
+        elif action == "friend-requests" and len(words) == 1:
+            logger.info("本次连接的好友申请：%s", json.dumps(self.service.friend_requests(), ensure_ascii=False))
+        elif action == "accept-friend" and len(words) == 2:
+            if not self.service.accept_friend(words[1]):
+                raise RuntimeError("微信未确认通过好友申请，请核对申请状态")
+            logger.info("好友申请已通过：申请ID=%s", words[1])
+        elif action == "invite-members" and len(words) >= 3:
+            if not self.service.invite_group_members(words[1], words[2:]):
+                raise RuntimeError("微信未确认群邀请操作，请核对权限及成员状态")
+            logger.info("群邀请操作完成：群ID=%s，好友数=%d", words[1], len(words) - 2)
+        elif action == "create-group" and len(words) >= 3:
+            room = self.service.create_group(words[1:])
+            logger.info("新群已创建：群ID=%s", room)
         elif action == "send-image" and len(words) == 3:
             if not self.service.send_image(words[1], words[2]):
                 raise RuntimeError("微信未接受图片发送请求，请查看原生结果")

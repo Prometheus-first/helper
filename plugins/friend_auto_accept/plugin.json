@@ -1,0 +1,7 @@
+{
+  "api": "v1",
+  "default_enabled": false,
+  "description": "自动通过实时好友申请，可按验证文字关键词匹配",
+  "message_types": [37],
+  "requires": ["friend.request.receive", "friend.request.accept"]
+}

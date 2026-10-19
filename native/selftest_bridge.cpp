@@ -45,6 +45,9 @@ static DWORD factory_tls = TLS_OUT_OF_INDEXES;
 using ReceiveFunction = uintptr_t (__fastcall*)(void*, const uintptr_t*, uint8_t, uint8_t);
 static ReceiveFunction original_receive = nullptr;
 static bool receive_hook_created = false;
+#ifdef WXBOT_FRIEND_RECEIVE
+static bool friend_receive_hook_created = false;
+#endif
 static TestConfig receive_config{};
 static bool receive_queue_mode = false;
 
@@ -545,6 +548,7 @@ static DWORD poll_received(ReceivedMessage* output) {
     output->dropped = receive_dropped;
     if (receive_count) {
         *output = received_messages[receive_head];
+        SecureZeroMemory(&received_messages[receive_head], sizeof(ReceivedMessage));
         receive_head = (receive_head + 1) % 64;
         --receive_count;
     }
@@ -580,6 +584,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_DisableHook(receive_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
+#ifdef WXBOT_FRIEND_RECEIVE
+    void* friend_receive_target = reinterpret_cast<void*>(core_base + 0x3866510);
+    if (friend_receive_hook_created) {
+        status = MH_DisableHook(friend_receive_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+#endif
     void* factory_target = reinterpret_cast<void*>(core_base + 0x6f4c70);
     if (factory_hook_created) {
         status = MH_DisableHook(factory_target);
@@ -592,8 +603,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
     }
     for (int attempt = 0; (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) && attempt < 100; ++attempt) Sleep(50);
     if (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
-    if (!hook_created && !receive_hook_created && !factory_hook_created &&
-        !image_download_factory_hook_created) return 0;
+    bool hooks_present = hook_created || receive_hook_created || factory_hook_created ||
+        image_download_factory_hook_created;
+#ifdef WXBOT_FRIEND_RECEIVE
+    hooks_present = hooks_present || friend_receive_hook_created;
+#endif
+    if (!hooks_present) return 0;
     if (hook_created) {
         status = MH_RemoveHook(target);
         if (status != MH_OK) return 600 + status;
@@ -602,6 +617,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_RemoveHook(receive_target);
         if (status != MH_OK) return 600 + status;
     }
+#ifdef WXBOT_FRIEND_RECEIVE
+    if (friend_receive_hook_created) {
+        status = MH_RemoveHook(friend_receive_target);
+        if (status != MH_OK) return 600 + status;
+    }
+#endif
     if (factory_hook_created) {
         status = MH_RemoveHook(factory_target);
         if (status != MH_OK) return 600 + status;
@@ -614,6 +635,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
     if (status == MH_OK) {
         hook_created = false; receive_hook_created = false; factory_hook_created = false;
         image_download_factory_hook_created = false;
+#ifdef WXBOT_FRIEND_RECEIVE
+        friend_receive_hook_created = false;
+#endif
         if (factory_tls != TLS_OUT_OF_INDEXES) { TlsFree(factory_tls); factory_tls = TLS_OUT_OF_INDEXES; }
     }
     return status == MH_OK ? 0 : 600 + status;

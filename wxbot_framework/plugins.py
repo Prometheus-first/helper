@@ -27,6 +27,7 @@ class PluginSpec:
     description: str
     requires: frozenset
     message_types: frozenset = frozenset({1})
+    default_enabled: bool = True
 
 
 class PluginRecord:
@@ -141,13 +142,16 @@ class PluginManager:
                 api = manifest.get("api", "v1")
                 requires = manifest.get("requires", ["text.receive"])
                 message_types = manifest.get("message_types", [1])
+                default_enabled = manifest.get("default_enabled", True)
+                if type(default_enabled) is not bool:
+                    raise ValueError("plugin.json 的 default_enabled 必须是布尔值")
                 if api not in ("v1", "legacy") or not isinstance(requires, list) or not all(isinstance(x, str) for x in requires):
                     raise ValueError("plugin.json 的 api / requires 不合法")
                 if (not isinstance(message_types, list) or not message_types or
                         any(type(value) is not int or value <= 0 for value in message_types)):
                     raise ValueError("plugin.json 的 message_types 必须是非空正整数列表")
                 specs[name] = PluginSpec(name, path, api, str(manifest.get("description", "")),
-                                         frozenset(requires), frozenset(message_types))
+                                         frozenset(requires), frozenset(message_types), default_enabled)
             except Exception as error:
                 self.load_errors[directory.name] = str(error)
                 logger.error("插件 %s 无法发现：%s", directory.name, error)
@@ -245,7 +249,7 @@ class PluginManager:
         targets = [name] if name else sorted(set(specs) | set(self.records))
         for target in targets:
             try:
-                if target not in specs or not self.config.get("plugins", {}).get(target, {}).get("enabled", True):
+                if target not in specs or not self.config.get("plugins", {}).get(target, {}).get("enabled", specs[target].default_enabled):
                     self.disable(target, persist=False)
                 else:
                     self.load_one(target)
@@ -269,7 +273,7 @@ class PluginManager:
                 spec = specs.get(name)
                 missing = spec.requires - self.capabilities if spec else frozenset()
                 rows.append({"name": name, "active": bool(record and record.active),
-                             "enabled": self.config.get("plugins", {}).get(name, {}).get("enabled", True),
+                             "enabled": self.config.get("plugins", {}).get(name, {}).get("enabled", spec.default_enabled if spec else True),
                              "api": spec.api if spec else "unknown", "missing_capabilities": sorted(missing),
                              "handled": record.handled if record else 0, "errors": record.errors if record else 0,
                              "dropped": record.dropped if record else 0,

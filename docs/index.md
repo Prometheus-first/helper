@@ -69,6 +69,7 @@ python main.py
 | 找到账号 ID、加入新的群 | [账号与群聊](./guide/account-and-groups.md) |
 | 发送文本、图片、文件、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [文件](./messages/files.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
 | 开启接龙和聊天总结 | [群聊功能](./guide/features.md) |
+| 自动通过好友申请、使用控制台群管理 | [好友申请与群管理](./guide/friends-and-groups.md) |
 | 编写自己的插件 | [插件开发](./development/plugins.md) |
 | 处理启动或清理问题 | [常见问题](./guide/faq.md) |
 
