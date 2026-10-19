@@ -258,20 +258,20 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
             _InterlockedExchange64(&receive_statistics.last_type, type);
             if (type == 1) _InterlockedIncrement64(&receive_statistics.texts);
             if (type == 3) _InterlockedIncrement64(&receive_statistics.images);
-            if (type != 1 && type != 3) continue;
+            if (type != 1 && type != 3 && type != 49) continue;
             char sender[128]{}, receiver[128]{}, text[1024]{};
             if (!read_pb_string(message, 8, sender, sizeof(sender)) || !valid_target(sender) ||
                 !read_pb_string(message, 0x18, receiver, sizeof(receiver)) || !valid_target(receiver)) continue;
             // 接收瞬间复制元数据，不持有任何微信消息对象或字符串指针。
             char source[4096]{};
             if (!try_read_source(message, 0x38, source, sizeof(source))) source[0] = 0;
-            if (type == 3) {
+            if (type == 3 || type == 49) {
                 char image_xml[16384]{};
                 if (read_pb_string(message, 0x20, image_xml, sizeof(image_xml))) {
                     enqueue_received(sender, receiver, "", source, type, image_xml);
-                    _InterlockedIncrement64(&receive_statistics.queued_images);
+                    if (type == 3) _InterlockedIncrement64(&receive_statistics.queued_images);
                 } else {
-                    _InterlockedIncrement64(&receive_statistics.invalid_images);
+                    if (type == 3) _InterlockedIncrement64(&receive_statistics.invalid_images);
                 }
             } else if (read_pb_string(message, 0x20, text, sizeof(text))) {
                 enqueue_received(sender, receiver, text, source);
@@ -354,6 +354,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "image_download.h"
 #include "emoticon_send.h"
 #include "voice_send.h"
+#include "file_download.h"
+#include "file_send.h"
 
 // 定向只读探针：仅在手动发送 WXBOT_AT_PROBE 的消息中记录 msgsource 字符串。
 // 不发送消息、不改写消息对象，用于核对该版本真实艾特的元数据布局。

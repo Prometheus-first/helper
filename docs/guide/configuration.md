@@ -14,11 +14,12 @@
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `backend` | `native_text` | 文本、图片、表情和语音能力使用此后端 |
+| `backend` | `native_text` | 文本、图片、文件、表情和语音能力使用此后端 |
 | `wechat_account` | `null` | 首次启动自动识别或选择，之后保存机器人 wxid |
 | `wechat_pid` | `null` | 通常保持默认，程序按绑定账号寻找进程 |
 | `chat_allowlist` | `[]` | 空列表允许全部会话；非空时只分发指定会话 |
 | `image_directory` | `.runtime/images` | 收到图片的保存目录 |
+| `file_directory` | `.runtime/files` | 收到文件的保存目录，按微信账号隔离 |
 | `emoticon_directory` | `.runtime/emoticons` | 表情缓存导出目录 |
 | `wechat_data_directory` | `null` | 仅导出表情时设置当前账号的数据目录 |
 | `reconnect_seconds` | `5` | 连接重试间隔，单位秒 |

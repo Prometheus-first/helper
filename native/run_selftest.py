@@ -64,9 +64,18 @@ class VoiceConfig(TextConfig):
     _fields_ = [("account", c.c_char * 128), ("duration_ms", c.c_uint32), ("send", c.c_uint32)]
 
 
+class FileConfig(TextConfig):
+    _fields_ = [("account", c.c_char * 128), ("send", c.c_uint32), ("reserved", c.c_uint32)]
+
+
 class ImageDownloadConfig(Config):
     _fields_ = [("filekey", c.c_char * 1024), ("aeskey", c.c_char * 65),
                 ("image_type", c.c_uint32)]
+
+
+class FileDownloadConfig(Config):
+    _fields_ = [("filekey", c.c_char * 1024), ("aeskey", c.c_char * 65),
+                ("expected_size", c.c_uint64), ("account", c.c_char * 128)]
 
 
 assert c.sizeof(Config) == 1560 and c.sizeof(TextConfig) == 1688 and c.sizeof(AtTextConfig) == 2712
@@ -75,6 +84,10 @@ assert c.sizeof(EmoticonConfig) == 1824 and EmoticonConfig.account.offset == 168
 assert EmoticonConfig.send.offset == 1816 and EmoticonConfig.reserved.offset == 1820
 assert c.sizeof(VoiceConfig) == 1824 and VoiceConfig.account.offset == 1688
 assert VoiceConfig.duration_ms.offset == 1816 and VoiceConfig.send.offset == 1820
+assert c.sizeof(FileConfig) == 1824 and FileConfig.account.offset == 1688
+assert FileConfig.send.offset == 1816 and FileConfig.reserved.offset == 1820
+assert c.sizeof(FileDownloadConfig) == 2792
+assert FileDownloadConfig.expected_size.offset == 2656 and FileDownloadConfig.account.offset == 2664
 
 
 class ProcessEntry(c.Structure):
@@ -164,11 +177,51 @@ def find_wechat():
 def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_report=True,
         bridge_path=None, target="filehelper", mentions=None, image_path=None, image_probe=False,
         download_image=None, emoticon_path=None, emoticon_probe=False, account=None,
-        voice_path=None, voice_duration_ms=None, voice_probe=False):
+        voice_path=None, voice_duration_ms=None, voice_probe=False,
+        file_path=None, file_probe=False, download_file=None):
     dll = Path(bridge_path or DLL).resolve()
     if dll not in (DLL.resolve(), TEXT_DLL.resolve()):
         raise ValueError("不支持的桥接 DLL 路径")
     generic = dll == TEXT_DLL.resolve()
+    downloading_file = mode == "--download-file"
+    if downloading_file:
+        if (not generic or not isinstance(download_file, dict) or download_image is not None or
+                file_path is not None or file_probe or image_path is not None or image_probe or
+                voice_path is not None or voice_probe or voice_duration_ms is not None or
+                emoticon_path is not None or emoticon_probe or mentions is not None):
+            raise ValueError("文件下载需要通用桥接和完整下载参数，不能混用发送参数")
+        from wxbot_framework.account import validate_account
+        from wxbot_framework.files import MAX_FILE_BYTES
+        account = validate_account(account)
+        destination = Path(download_file["destination"]).resolve()
+        if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
+            raise ValueError("文件下载路径必须是现有目录内的全新文件")
+        filekey, aeskey = download_file["filekey"], download_file["aeskey"]
+        if (not isinstance(filekey, str) or not 1 <= len(filekey.encode("utf-8")) <= 1023 or
+                any(ord(ch) < 32 or ord(ch) == 127 for ch in filekey)):
+            raise ValueError("文件 CDN filekey 无效")
+        if (not isinstance(aeskey, str) or len(aeskey) not in (32, 64) or
+                any(ch not in "0123456789abcdefABCDEF" for ch in aeskey)):
+            raise ValueError("文件 CDN AES 参数无效")
+        expected_size = download_file.get("expected_size")
+        if type(expected_size) is not int or not 1 <= expected_size <= MAX_FILE_BYTES:
+            raise ValueError("文件下载需要 1 到 20 MiB 范围内的声明大小")
+        text = str(destination)
+    elif download_file is not None:
+        raise ValueError("文件下载参数仅用于文件下载操作")
+    if type(file_probe) is not bool:
+        raise ValueError("文件检查标志必须是布尔值")
+    if file_path is not None:
+        if (not generic or mode != "--dispatch" or mentions is not None or
+                image_path is not None or image_probe or emoticon_path is not None or emoticon_probe or
+                voice_path is not None or voice_duration_ms is not None or voice_probe or download_image is not None):
+            raise ValueError("文件附件仅用于通用文件发送或检查，不能混用其他发送参数")
+        from wxbot_framework.account import validate_account
+        from wxbot_framework.files import inspect_file
+        account = validate_account(account)
+        text = str(inspect_file(file_path).path)
+    elif file_probe:
+        raise ValueError("文件检查参数需要 file_path")
     downloading = mode == "--download-image"
     if downloading:
         if (not generic or not isinstance(download_image, dict) or image_path is not None or
@@ -220,7 +273,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         account = validate_account(account)
         from wxbot_framework.emoticons import validate_emoticon_path
         text = str(validate_emoticon_path(emoticon_path))
-    elif emoticon_probe or (account is not None and voice_path is None):
+    elif emoticon_probe or (account is not None and voice_path is None and file_path is None and not downloading_file):
         raise ValueError("表情路径检查和账号参数需要 emoticon_path")
     if image_path is not None:
         if not generic or mode != "--dispatch" or mentions is not None:
@@ -229,7 +282,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         text = str(validate_image_path(image_path))
     elif image_probe:
         raise ValueError("图片路径检查需要 image_path")
-    if generic and mode not in ("--dispatch", "--listen", "--remove", "--probe-at", "--download-image"):
+    if generic and mode not in ("--dispatch", "--listen", "--remove", "--probe-at", "--download-image", "--download-file"):
         raise ValueError("通用桥接只支持文本、图片与表情、监听和卸载")
     if not generic and target != "filehelper":
         raise ValueError("旧自测桥接仅支持文件传输助手")
@@ -241,11 +294,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             raise ValueError("艾特成员列表仅用于通用文本发送")
         from wxbot_framework.text import validate_mentions
         mentions = validate_mentions(target, mentions)
-    if mode not in ("--arm", "--dispatch", "--receive", "--listen", "--remove", "--probe-at", "--download-image"):
+    if mode not in ("--arm", "--dispatch", "--receive", "--listen", "--remove", "--probe-at", "--download-image", "--download-file"):
         raise RuntimeError("不支持的原生桥接操作")
     if mode == "--probe-at" and not generic:
         raise ValueError("艾特探针仅用于通用桥接")
-    if keep_loaded and mode not in ("--dispatch", "--download-image"):
+    if keep_loaded and mode not in ("--dispatch", "--download-image", "--download-file"):
         raise ValueError("keep_loaded 只用于接收服务内的发送")
     if c.sizeof(PTR) != 8: raise RuntimeError("需要 64 位 Python")
     encoded = text.encode("utf-8")
@@ -275,13 +328,13 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         if mode != "--remove" and other.name.lower() in loaded_modules:
             raise RuntimeError("另一版本的桥接仍在运行，请先在旧 main.py 中输入 quit")
         pe = pefile.PE(str(dll))
-        name = b"WxDownloadImage" if downloading else b"WxArmMentionProbe" if mode == "--probe-at" else {
+        name = b"WxDownloadFile" if downloading_file else b"WxDownloadImage" if downloading else b"WxArmMentionProbe" if mode == "--probe-at" else {
             "--arm":b"WxArmSelfTest", "--dispatch":b"WxDispatchSelfTest", "--receive":b"WxArmReceiveTest",
             "--listen":b"WxStartFileHelperReceiver", "--remove":b"WxRemoveSelfTest"}[mode]
         if generic:
             name = {"--dispatch": b"WxSendText", "--listen": b"WxStartTextReceiver",
                     "--remove": b"WxRemoveSelfTest", "--probe-at": b"WxArmMentionProbe",
-                    "--download-image": b"WxDownloadImage"}[mode]
+                    "--download-image": b"WxDownloadImage", "--download-file": b"WxDownloadFile"}[mode]
             if mentions is not None:
                 name = b"WxSendAtText"
             if image_path is not None:
@@ -290,6 +343,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                 name = b"WxInspectEmoticonPath" if emoticon_probe else b"WxSendEmoticon"
             if voice_path is not None:
                 name = b"WxInspectVoicePath" if voice_probe else b"WxSendVoice"
+            if file_path is not None:
+                name = b"WxInspectFilePath" if file_probe else b"WxSendFile"
         export = next(item.address for item in pe.DIRECTORY_ENTRY_EXPORT.symbols if item.name == name)
 
         def allocate(data):
@@ -300,7 +355,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             if written.value != len(data): raise RuntimeError("参数写入不完整")
             return pointer
 
-        if mode in ("--arm", "--dispatch", "--receive", "--listen", "--probe-at", "--download-image"):
+        if mode in ("--arm", "--dispatch", "--receive", "--listen", "--probe-at", "--download-image", "--download-file"):
             existing = dll.name.lower() in loaded_modules
             if existing and not keep_loaded: raise RuntimeError("桥接 DLL 已加载，请先清理")
             if not existing:
@@ -312,16 +367,21 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         report_path = ROOT / f".runtime/native_requests/{uuid.uuid4().hex}.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         if len(str(report_path)) >= 260: raise RuntimeError("报告路径超过原生接口长度")
-        config = (VoiceConfig() if voice_path is not None else EmoticonConfig() if emoticon_path is not None else ImageDownloadConfig() if downloading else
+        config = (FileDownloadConfig() if downloading_file else FileConfig() if file_path is not None else VoiceConfig() if voice_path is not None else EmoticonConfig() if emoticon_path is not None else ImageDownloadConfig() if downloading else
                   AtTextConfig() if mentions is not None else TextConfig() if generic else Config())
         config.size, config.pid, config.manager = c.sizeof(config), pid, 0
         config.log_path, config.text = str(report_path), encoded
-        if generic and not downloading:
+        if generic and not downloading and not downloading_file:
             config.target = target.encode("ascii")
         if downloading:
             config.filekey = filekey.encode("utf-8")
             config.aeskey = aeskey.encode("ascii")
             config.image_type = download_image.get("image_type", 2)
+        if downloading_file:
+            config.filekey = filekey.encode("utf-8")
+            config.aeskey = aeskey.encode("ascii")
+            config.expected_size = expected_size
+            config.account = account.encode("ascii")
         if mentions is not None:
             config.members = ",".join(mentions).encode("ascii")
         if emoticon_path is not None:
@@ -331,6 +391,9 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             config.account = account.encode("ascii")
             config.duration_ms = voice_duration_ms
             config.send = 0 if voice_probe else 1
+        if file_path is not None:
+            config.account = account.encode("ascii")
+            config.send = 0 if file_probe else 1
         config_parameter = allocate(bytes(config))
         exit_code = remote_call(process, loaded[0] + export, config_parameter)
         if mode == "--remove" and exit_code == 0:
@@ -340,8 +403,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         result = {"mode":mode,"pid":pid,"code":exit_code,"target":target,"report_path":str(report_path)}
         if mode == "--remove":
             result["dll_unloaded"] = dll.name.lower() not in modules(pid)
-        if mode in ("--dispatch", "--download-image"):
-            deadline = time.monotonic() + (120 if downloading or emoticon_path is not None or voice_path is not None else 15)
+        if mode in ("--dispatch", "--download-image", "--download-file"):
+            deadline = time.monotonic() + (120 if downloading or downloading_file or emoticon_path is not None or voice_path is not None or file_path is not None else 15)
             while exit_code == 0 and not report_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             if report_path.exists():
@@ -362,7 +425,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             else:
                 result["dll_unloaded"] = False
             result["success"] = (exit_code == 0 and result.get("report", {}).get("completion_success") is True
-                                 and ((result["report"].get("image_path") == text) if downloading else
+                                 and ((result["report"].get("file_path") == text) if downloading_file else
+                                      (result["report"].get("image_path") == text) if downloading else
                                       (result["report"].get("target") == target and result["report"].get("text") == text))
                                  and cleanup_code == 0 and (keep_loaded or result.get("dll_unloaded") is True))
             if emoticon_path is not None:
@@ -376,6 +440,16 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                     report.get("voice_path") == text and report.get("duration_ms") == voice_duration_ms and
                     report.get("sent") is (not voice_probe) and
                     report.get("operation") == ("voice_probe" if voice_probe else "voice_send"))
+            if file_path is not None:
+                report = result.get("report", {})
+                result["success"] = (result["success"] and report.get("message_type") == 49 and
+                    report.get("app_type") == 6 and report.get("file_path") == text and
+                    report.get("sent") is (not file_probe) and
+                    report.get("operation") == ("file_probe" if file_probe else "file_send"))
+            if downloading_file:
+                report = result.get("report", {})
+                result["success"] = (result["success"] and report.get("operation") == "file_download" and
+                                     report.get("file_size") == expected_size)
             if mentions is not None:
                 result["success"] = result["success"] and result["report"].get("at_members") == ",".join(mentions)
             if not preserve_report and result["success"]:

@@ -58,6 +58,7 @@ assert c.sizeof(ReceivedTextMessage) == 5408
 
 
 class ReceivedMediaMessage(ReceivedTextMessage):
+    # V3 保留字段名及 ABI；type 3 为图片 XML，type 49 为 appmsg XML。
     _fields_ = [("image_xml", c.c_char * 16384)]
 
 

@@ -28,6 +28,7 @@ export default defineConfig({
         { text: '群聊功能', link: '/guide/features' },
         { text: '文本与真实艾特', link: '/messages/text' },
         { text: '图片收发', link: '/messages/images' },
+        { text: '文件收发', link: '/messages/files' },
         { text: '表情提取与发送', link: '/messages/emoticons' },
         { text: '语音条发送', link: '/messages/voice' }
       ] },

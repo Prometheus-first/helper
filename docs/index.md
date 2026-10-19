@@ -4,7 +4,7 @@ title: 微信机器人 Python 插件框架
 hero:
   name: helper
   text: 微信机器人的 Python 插件框架
-  tagline: 一个 main.py 持续运行。把文本、图片、表情和语音发送，接进自己的插件。
+  tagline: 一个 main.py 持续运行。把文本、图片、文件收发和表情、语音发送接进自己的插件。
   image:
     src: /logo.svg
     alt: helper 标志
@@ -31,6 +31,10 @@ features:
     title: 原生语音条
     details: 发送 SILK 或将 PCM WAV 转成语音条，文件传输助手已验证手机端播放。
     link: /messages/voice
+  - icon: 📎
+    title: 普通文件附件
+    details: 发送本地文件，下载实时到达的附件并按账号隔离保存，单个文件最多 20 MiB。
+    link: /messages/files
   - icon: 🧩
     title: 功能按插件加载
     details: 每个插件独立处理消息，可在控制台启停、重载，也能扩展自己的业务。
@@ -63,7 +67,7 @@ python main.py
 | --- | --- |
 | 第一次安装并运行 | [安装与启动](./guide/quick-start.md) |
 | 找到账号 ID、加入新的群 | [账号与群聊](./guide/account-and-groups.md) |
-| 发送文本、图片、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
+| 发送文本、图片、文件、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [文件](./messages/files.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
 | 开启接龙和聊天总结 | [群聊功能](./guide/features.md) |
 | 编写自己的插件 | [插件开发](./development/plugins.md) |
 | 处理启动或清理问题 | [常见问题](./guide/faq.md) |

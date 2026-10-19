@@ -112,6 +112,6 @@ class TextRouter:
                 "native_receiver": receiver, "sequence": sequence,
                 "dispatch_to_plugins": not (room and is_self and not own_group_input),
                 "native_thread_id": thread_id}
-        if msg_type == 3:
+        if msg_type in (3, 49):
             result["raw_content"] = body
         return result

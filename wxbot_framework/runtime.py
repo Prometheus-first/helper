@@ -70,6 +70,11 @@ class BotApplication:
         elif message.type == 3:
             logger.info("图片消息 | 会话ID=%s | 状态=%s | 文件=%s", message.chat_id,
                         message.data.get("image_status", "pending"), message.image_path or "")
+        elif message.type == 49:
+            logger.info("文件消息 | 发送者微信ID=%s | 状态=%s | 文件名=%s | 大小=%s | 路径=%s",
+                        message.sender_id or message.chat_id, message.data.get("file_status", "pending"),
+                        json.dumps(message.data.get("file_name", ""), ensure_ascii=False),
+                        message.data.get("file_size", 0), json.dumps(message.file_path, ensure_ascii=False))
         else:
             logger.info("私聊消息 | 发送者微信ID=%s | 内容=%s",
                         message.sender_id or message.chat_id,
@@ -107,7 +112,7 @@ class BotApplication:
         if action in ("quit", "exit", "stop") and len(words) == 1:
             self.stop_event.set()
         elif action == "help" and len(words) == 1:
-            logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
+            logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-file 会话ID \"文件路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
         elif action == "status" and len(words) == 1:
             logger.info("状态：%s", json.dumps({"connected": self._connection_ready,
                                                "pid": self.backend.pid if self.backend else None,
@@ -124,6 +129,10 @@ class BotApplication:
             if not self.service.send_voice(words[1], words[2]):
                 raise RuntimeError("微信未接受语音发送请求，请查看原生结果")
             logger.info("语音发送请求已提交：会话ID=%s", words[1])
+        elif action == "send-file" and len(words) == 3:
+            if not self.service.send_file(words[1], words[2]):
+                raise RuntimeError("微信未接受文件发送请求，请查看原生结果")
+            logger.info("文件发送请求已提交：会话ID=%s", words[1])
         elif action == "send-emoticon" and len(words) == 3:
             if not self.service.send_emoticon(words[1], words[2]):
                 raise RuntimeError("微信未接受表情发送请求，请查看原生结果")

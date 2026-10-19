@@ -2,6 +2,7 @@
   "backend": "native_text",
   "chat_allowlist": [],
   "image_directory": ".runtime/images",
+  "file_directory": ".runtime/files",
   "emoticon_directory": ".runtime/emoticons",
   "wechat_data_directory": null,
   "wechat_pid": null,

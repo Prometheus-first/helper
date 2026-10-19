@@ -19,9 +19,10 @@
 send-image filehelper "E:\图片\示例.png"
 send-emoticon filehelper "E:\表情\示例.gif"
 send-voice filehelper "E:\语音\示例.wav"
+send-file filehelper "E:\文件\示例.txt"
 ```
 
-把 `filehelper` 换成好友或群的实际 ID，即可向该会话提交发送。路径有空格时保留双引号。格式和时长限制分别见[图片](../messages/images.md)、[表情](../messages/emoticons.md)、[语音](../messages/voice.md)。
+把 `filehelper` 换成好友或群的实际 ID，即可向该会话提交发送。路径有空格时保留双引号。格式、大小和时长限制分别见[图片](../messages/images.md)、[文件](../messages/files.md)、[表情](../messages/emoticons.md)、[语音](../messages/voice.md)。
 
 ## 导出本地表情
 

@@ -40,6 +40,10 @@ class Message:
     def image_path(self):
         return self.data.get("image_path") or ""
 
+    @property
+    def file_path(self):
+        return self.data.get("file_path") or ""
+
     @classmethod
     def from_native(cls, protocol, data, session_id):
         snapshot = copy.deepcopy(data)
@@ -48,7 +52,7 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type == 3:
+        if msg_type in (3, 49):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -183,6 +187,28 @@ class ServiceFacade:
                     self._check_pending(backend, cancel)
                     return backend.send_voice(to_wxid, str(voice.path))
 
+    def send_file(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
+        validate_target(to_wxid)
+        with self._lock:
+            if self._backend is None or not self._available:
+                raise RuntimeError("微信尚未连接")
+            if expected_session is not None and expected_session != self._backend.session_id:
+                raise RuntimeError("消息所属的微信连接已结束，跳过旧会话回复")
+            if not callable(getattr(self._backend, "send_file", None)):
+                raise CapabilityError("当前后端尚未开放文件发送")
+            backend, cancel = self._backend, self._cancel
+        from .files import inspect_file
+        file = inspect_file(path)
+        with self._send_lock:
+            with self._lock:
+                self._check_pending(backend, cancel)
+            file = inspect_file(file.path)
+            with self._lock:
+                self._check_pending(backend, cancel)
+                with delivery_guard() if delivery_guard is not None else nullcontext():
+                    self._check_pending(backend, cancel)
+                    return backend.send_file(to_wxid, str(file.path))
+
     def export_emoticons(self, *, convert=True, expected_session=None):
         if type(convert) is not bool:
             raise ValueError("convert 必须是布尔值")
@@ -253,6 +279,9 @@ class LegacyService:
     def send_image(self, to_wxid, path):
         return self._service.send_image(to_wxid, path, expected_session=self._session_id)
 
+    def send_file(self, to_wxid, path):
+        return self._service.send_file(to_wxid, path, expected_session=self._session_id)
+
     def send_voice(self, to_wxid, path, *, delivery_guard=None):
         return self._service.send_voice(to_wxid, path, expected_session=self._session_id,
                                         delivery_guard=delivery_guard)
@@ -299,6 +328,10 @@ class PluginContext:
     def send_image(self, chat_id, path):
         return self._service.send_image(chat_id, path)
 
+    def send_file(self, chat_id, path, *, expected_session=None, delivery_guard=None):
+        return self._service.send_file(chat_id, path, expected_session=expected_session,
+                                       delivery_guard=delivery_guard)
+
     def send_voice(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_voice(chat_id, path, expected_session=expected_session,
                                         delivery_guard=delivery_guard)
@@ -334,6 +367,10 @@ class PluginContext:
     def reply_image(self, message, path, *, delivery_guard=None):
         return self._service.send_image(message.chat_id, path, expected_session=message.session_id,
                                         delivery_guard=delivery_guard)
+
+    def reply_file(self, message, path, *, delivery_guard=None):
+        return self._service.send_file(message.chat_id, path, expected_session=message.session_id,
+                                       delivery_guard=delivery_guard)
 
     def reply_voice(self, message, path, *, delivery_guard=None):
         return self._service.send_voice(message.chat_id, path, expected_session=message.session_id,

@@ -64,6 +64,8 @@ class Plugin:
 | `ctx.send_text(chat_id, text)` | 向明确的会话发送文本 |
 | `ctx.reply_image(message, path)` | 回复本地图片 |
 | `ctx.send_image(chat_id, path)` | 发送本地图片 |
+| `ctx.reply_file(message, path)` | 回复本地文件附件 |
+| `ctx.send_file(chat_id, path)` | 发送本地文件附件 |
 | `ctx.reply_emoticon(message, path)` | 回复 GIF 表情 |
 | `ctx.send_emoticon(chat_id, path)` | 发送 GIF 表情 |
 | `ctx.reply_voice(message, path)` | 回复语音条 |
@@ -76,6 +78,10 @@ class Plugin:
 
 把 `message_types` 改为 `[1, 3]`，并在 `requires` 中加入 `image.receive`。收到类型 `3` 后，查看 `message.image_path` 与 `message.data["image_status"]`。图片正文为空，不会自动作为文字交给模型。
 
+## 处理文件附件
+
+在 `plugin.json` 中声明 `"message_types": [49]` 和 `"requires": ["file.receive"]`。文件接收事件的 `message.text` 为空；仅在 `message.data["file_status"] == "ready"` 时使用 `message.file_path`。失败原因位于 `file_error`，不包含原始 CDN 参数。完整示例和限制见[文件收发](../messages/files.md)。
+
 ## 能力声明
 
 只声明实际需要的能力。当前 `native_text` 后端提供：
@@ -85,6 +91,9 @@ text.receive / text.send
 friend.text.receive / friend.text.send
 group.text.receive / group.text.send / group.text.mention
 image.receive / image.send
+file.receive / file.send
+friend.file.receive / friend.file.send
+group.file.receive / group.file.send
 emoticon.extract / emoticon.send
 voice.send / friend.voice.send / group.voice.send
 ```
