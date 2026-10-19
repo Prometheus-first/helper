@@ -1,0 +1,3 @@
+# 发送 PCM WAV 时安装；直接发送已编码的 Tencent SILK 不需要此依赖。
+-r requirements.txt
+silk-python==0.2.8

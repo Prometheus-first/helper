@@ -353,6 +353,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "image_send.h"
 #include "image_download.h"
 #include "emoticon_send.h"
+#include "voice_send.h"
 
 // 定向只读探针：仅在手动发送 WXBOT_AT_PROBE 的消息中记录 msgsource 字符串。
 // 不发送消息、不改写消息对象，用于核对该版本真实艾特的元数据布局。

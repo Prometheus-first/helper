@@ -10,6 +10,7 @@
 - `bridge_watchdog.py`：主程序异常退出后的隐藏清理守护入口，运行时需要一起保留。
 - `build_text/text_bridge.dll`：当前文本收发和真实艾特桥接。
 - `emoticon_send.h`：本地 GIF 的原生类型 47 发送，含账号核对、文件限制和共享引用清理。
+- `voice_send.h`：语音对象构造与原生类型 34 发送，入口为 `WxSendVoice` / `WxInspectVoicePath`；排队前复制音频字节，沿用任务存活和安全卸载检查。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
 
 源码 `text_bridge.cpp` 复用 `selftest_bridge.cpp` 的公共结构、任务调度和清理逻辑，因此两个源文件都要保留。`vendor/` 中只保留编译所需的 MinHook 源码、头文件和许可。

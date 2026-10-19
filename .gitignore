@@ -41,6 +41,12 @@ dist/
 # Editor and desktop metadata
 .idea/
 .vscode/
+
+# Documentation dependencies and generated pages
+/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/.vitepress/.temp/
 .DS_Store
 Thumbs.db
 desktop.ini

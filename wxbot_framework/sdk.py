@@ -160,6 +160,29 @@ class ServiceFacade:
                     self._check_pending(backend, cancel)
                     return backend.send_emoticon(to_wxid, str(emoticon_path))
 
+    def send_voice(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
+        validate_target(to_wxid)
+        with self._lock:
+            if self._backend is None or not self._available:
+                raise RuntimeError("微信尚未连接")
+            if expected_session is not None and expected_session != self._backend.session_id:
+                raise RuntimeError("消息所属的微信连接已结束，跳过旧会话回复")
+            if not callable(getattr(self._backend, "send_voice", None)):
+                raise CapabilityError("当前后端尚未开放语音发送")
+            backend, cancel = self._backend, self._cancel
+        # 在文件校验之前固定账号连接，校验或排队期间重连也不能串到新账号。
+        from .voices import inspect_voice_file
+        voice = inspect_voice_file(path)
+        with self._send_lock:
+            with self._lock:
+                self._check_pending(backend, cancel)
+            voice = inspect_voice_file(voice.path)
+            with self._lock:
+                self._check_pending(backend, cancel)
+                with delivery_guard() if delivery_guard is not None else nullcontext():
+                    self._check_pending(backend, cancel)
+                    return backend.send_voice(to_wxid, str(voice.path))
+
     def export_emoticons(self, *, convert=True, expected_session=None):
         if type(convert) is not bool:
             raise ValueError("convert 必须是布尔值")
@@ -230,6 +253,10 @@ class LegacyService:
     def send_image(self, to_wxid, path):
         return self._service.send_image(to_wxid, path, expected_session=self._session_id)
 
+    def send_voice(self, to_wxid, path, *, delivery_guard=None):
+        return self._service.send_voice(to_wxid, path, expected_session=self._session_id,
+                                        delivery_guard=delivery_guard)
+
     def send_emoticon(self, to_wxid, path):
         return self._service.send_emoticon(to_wxid, path, expected_session=self._session_id)
 
@@ -272,6 +299,10 @@ class PluginContext:
     def send_image(self, chat_id, path):
         return self._service.send_image(chat_id, path)
 
+    def send_voice(self, chat_id, path, *, expected_session=None, delivery_guard=None):
+        return self._service.send_voice(chat_id, path, expected_session=expected_session,
+                                        delivery_guard=delivery_guard)
+
     def send_emoticon(self, chat_id, path):
         return self._service.send_emoticon(chat_id, path)
 
@@ -302,6 +333,10 @@ class PluginContext:
 
     def reply_image(self, message, path, *, delivery_guard=None):
         return self._service.send_image(message.chat_id, path, expected_session=message.session_id,
+                                        delivery_guard=delivery_guard)
+
+    def reply_voice(self, message, path, *, delivery_guard=None):
+        return self._service.send_voice(message.chat_id, path, expected_session=message.session_id,
                                         delivery_guard=delivery_guard)
 
     def reply_emoticon(self, message, path, *, delivery_guard=None):

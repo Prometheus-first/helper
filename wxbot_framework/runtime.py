@@ -107,7 +107,7 @@ class BotApplication:
         if action in ("quit", "exit", "stop") and len(words) == 1:
             self.stop_event.set()
         elif action == "help" and len(words) == 1:
-            logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
+            logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
         elif action == "status" and len(words) == 1:
             logger.info("状态：%s", json.dumps({"connected": self._connection_ready,
                                                "pid": self.backend.pid if self.backend else None,
@@ -120,6 +120,10 @@ class BotApplication:
             if not self.service.send_image(words[1], words[2]):
                 raise RuntimeError("微信未接受图片发送请求，请查看原生结果")
             logger.info("图片发送请求已提交：会话ID=%s", words[1])
+        elif action == "send-voice" and len(words) == 3:
+            if not self.service.send_voice(words[1], words[2]):
+                raise RuntimeError("微信未接受语音发送请求，请查看原生结果")
+            logger.info("语音发送请求已提交：会话ID=%s", words[1])
         elif action == "send-emoticon" and len(words) == 3:
             if not self.service.send_emoticon(words[1], words[2]):
                 raise RuntimeError("微信未接受表情发送请求，请查看原生结果")

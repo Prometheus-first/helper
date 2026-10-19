@@ -1,4 +1,4 @@
-"""好友、群聊和文件传输助手的原生文本、图片服务。"""
+"""好友、群聊和文件传输助手的原生文本、图片与语音服务。"""
 from __future__ import annotations
 
 import logging
@@ -71,7 +71,7 @@ class NativeTextService(NativeFileHelperService):
     _run = staticmethod(run_text)
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
-                 wechat_data_directory=None, emoticon_directory=None, **options):
+                 wechat_data_directory=None, emoticon_directory=None, voice_directory=None, **options):
         super().__init__(**options)
         self.preferred_account = validate_account(account) if account is not None else None
         self.router = TextRouter(include_self_groups=True)
@@ -85,6 +85,9 @@ class NativeTextService(NativeFileHelperService):
         self.wechat_data_directory = Path(wechat_data_directory) if wechat_data_directory is not None else None
         self.emoticon_directory = Path(emoticon_directory or
                                        Path(__file__).resolve().parent.parent / ".runtime/emoticons")
+        self.voice_directory = Path(voice_directory or
+                                    Path(__file__).resolve().parent.parent / ".runtime/voices")
+        self.last_send_result = None
 
     @property
     def self_wxid(self):
@@ -255,6 +258,33 @@ class NativeTextService(NativeFileHelperService):
                                         preserve_report=self.preserve_reports)
             self._check_account(force=True)
             return self.last_result["success"]
+
+    def send_voice(self, to_wxid, path):
+        from wxbot_framework.voices import prepare_voice
+        validate_target(to_wxid)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生语音服务没有运行")
+            self._check_account(force=True)
+            account = validate_account(self.self_wxid)
+            voice_root = self.voice_directory.resolve()
+            account_directory = (voice_root / account).resolve()
+            if account_directory.parent != voice_root:
+                raise ValueError("语音账号目录必须位于当前项目的语音目录内")
+            # 转码和快照归当前账号所有；原生调用结束前保持快照文件有效。
+            with prepare_voice(path, account_directory) as voice:
+                if not self._owns_bridge or self._stop.is_set():
+                    raise RuntimeError("微信连接已结束，取消待发送语音")
+                self._check_account(force=True)
+                if self.self_wxid != account:
+                    raise RuntimeError("微信账号已发生变化，取消待发送语音")
+                self.last_result = self.last_send_result = self._run(
+                    "--dispatch", pid=self.pid, keep_loaded=True,
+                    preserve_report=self.preserve_reports, target=to_wxid,
+                    voice_path=str(voice.path), voice_duration_ms=voice.duration_ms,
+                    account=account)
+                self._check_account(force=True)
+                return self.last_send_result.get("success", False)
 
     def export_emoticons(self, *, convert=True):
         from wxbot_framework.emoticon_account import read_emoticon_cache_key

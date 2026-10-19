@@ -1,4 +1,6 @@
 # 微信机器人框架
+
+📚 [在线文档](https://prometheus-first.github.io/helper/) · [安装与启动](https://prometheus-first.github.io/helper/guide/quick-start.html) · [插件开发](https://prometheus-first.github.io/helper/development/plugins.html)
 项目已在linux.do公开声明[https://linux.do/](https://linux.do/t/topic/3029497/51)
 交流群
 <img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/908a812a-e6e8-4e31-873c-77514adfff96" />
@@ -10,9 +12,10 @@
 消息类型区分  
 收发图片  
 本地表情导出、动态表情发送
+语音条发送
 
 
-面向 Windows x64、微信 4.1.15.13 的 Python 插件框架。统一入口为 `main.py`，原生桥接负责文本、图片收发和表情发送，功能以插件加载。
+面向 Windows x64、微信 4.1.15.13 的 Python 插件框架。统一入口为 `main.py`，原生桥接负责文本、图片收发和表情、语音发送，功能以插件加载。
 
 
 # 本项目仅供学习，请勿用于违法行为
@@ -20,6 +23,7 @@
 ## 功能
 
 - 文件传输助手、好友和群聊文本收发，以及真正的群艾特。
+- 原生语音条发送：插件和控制台可发送 SILK 语音，安装可选编码依赖后支持 PCM WAV。
 - 图片消息自动下载保存，插件可取得本地图片路径；支持发送本地图片。
 - 导出当前账号的本地缓存表情，转换 WXGF 动画，并通过原生表情通道发送 GIF。
 - 成语接龙：独立玩家、合并抢答和退出模式。
@@ -92,6 +96,7 @@ chats
 send-image filehelper "E:\图片\示例.png"
 export-emoticons
 send-emoticon filehelper "E:\表情\示例.gif"
+send-voice filehelper "E:\语音\示例.wav"
 members [群ID]
 history 称呼 [条数]
 plugins
@@ -179,6 +184,28 @@ for item in items:
 ```
 
 运行产生的表情、聊天记录、日志和本地配置均是个人数据，请勿提交。发布检查会拒绝图片、GIF、WXGF、数据库及非空账号数据目录配置；测试只使用程序生成的样本。
+
+## 语音发送
+
+已在微信 4.1.15.13 的文件传输助手完成 2 秒合成测试音发送，手机端确认收到并可正常播放。好友、群聊共用目标 ID 接口，尚未分别实机验证。
+
+控制台输入 `send-voice 会话ID "完整语音路径"`；会话 ID 可为 `filehelper`、好友 ID 或群 ID。
+
+```powershell
+python -m pip install -r requirements-voice.txt
+python main.py
+```
+
+安装可选依赖后，可以发送单声道、16-bit PCM WAV，采样率支持 8/12/16/24 kHz。WAV 会转成 Tencent SILK，并补齐最后不足 20 毫秒的一帧；源文件保留。直接发送已经编码好的微信 SILK 不需要编码依赖；标准 SILK 的完整头尾会在发送快照中规范化。只支持 20 ms/包的 SILK v3 封装，时长按包计数，不保证任意第三方 SILK 载荷都可解码。暂不支持 MP3、AAC、立体声或其他 WAV 编码；单条最多 60 秒，输入文件最多 20 MiB。
+
+插件声明 `"requires": ["voice.send"]` 后调用：
+
+```python
+ctx.send_voice("filehelper", voice_path)
+ctx.reply_voice(message, voice_path)
+```
+
+发送按连接和账号核对，不使用文本随机等待，也不调用大模型。文件快照放在本项目 `.runtime/voices/` 的当前账号子目录，调用结束后清理；原生入口在排队前把音频字节复制到任务持有的内存，避免超时或退出时删除快照影响已排队任务。底层仍锁定微信 4.1.15.13，发送结果为微信原生接口返回的接受状态，不能单独证明对方已经收到或成功播放。本功能尚未接入语音接收、语音识别或文字转语音。
 
 ## 目录
 
