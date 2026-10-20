@@ -15,7 +15,7 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
                                            "friend.file.receive", "friend.file.send",
                                            "group.file.receive", "group.file.send",
                                            "friend.request.receive", "friend.request.accept",
-                                           "group.member.invite", "group.create",
+                                           "group.member.invite", "group.create", "group.members.read", "group.events",
                                            "voice.send", "friend.voice.send", "group.voice.send",
                                            "emoticon.send", "emoticon.extract"})
 
@@ -111,6 +111,9 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def create_group(self, members):
         return self.raw.create_group(members)
+
+    def group_members(self, room):
+        return self.raw.group_members(room)
 
     def send_emoticon(self, chat_id, path):
         return self.raw.send_emoticon(chat_id, path)

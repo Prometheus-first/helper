@@ -261,14 +261,14 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
             _InterlockedExchange64(&receive_statistics.last_type, type);
             if (type == 1) _InterlockedIncrement64(&receive_statistics.texts);
             if (type == 3) _InterlockedIncrement64(&receive_statistics.images);
-            if (type != 1 && type != 3 && type != 49) continue;
+            if (type != 1 && type != 3 && type != 49 && type != 10000 && type != 10002) continue;
             char sender[128]{}, receiver[128]{}, text[1024]{};
             if (!read_pb_string(message, 8, sender, sizeof(sender)) || !valid_target(sender) ||
                 !read_pb_string(message, 0x18, receiver, sizeof(receiver)) || !valid_target(receiver)) continue;
             // 接收瞬间复制元数据，不持有任何微信消息对象或字符串指针。
             char source[4096]{};
             if (!try_read_source(message, 0x38, source, sizeof(source))) source[0] = 0;
-            if (type == 3 || type == 49) {
+            if (type == 3 || type == 49 || type == 10000 || type == 10002) {
                 char image_xml[16384]{};
                 if (read_pb_string(message, 0x20, image_xml, sizeof(image_xml))) {
                     enqueue_received(sender, receiver, "", source, type, image_xml);

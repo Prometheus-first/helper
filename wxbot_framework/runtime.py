@@ -12,7 +12,7 @@ from dataclasses import asdict
 
 from .backend import CAPABILITIES, TEXT_CAPABILITIES, NativeFileHelperBackend, NativeTextBackend
 from .plugins import PluginManager
-from .sdk import ServiceFacade
+from .sdk import Message, ServiceFacade
 from .members import MemberStore
 from .personality import prepare_switch
 
@@ -40,6 +40,9 @@ class BotApplication:
         self._connection_ready = False
         self._last_connection_log = 0
         self._last_connection_error = ""
+        self._group_tracker = None
+        self._next_group_poll = 0
+        self._group_poll_failures = set()
 
     def _log_connection_error(self, error):
         text = f"{type(error).__name__}: {error}"
@@ -56,6 +59,12 @@ class BotApplication:
             candidate.start(self._emit)
             self._connection_ready = True
             self._last_connection_error = ""
+            if callable(getattr(candidate, "group_members", None)):
+                from .group_events import GroupMembershipTracker
+                account = self.config.get("wechat_account")
+                if account:
+                    self._group_tracker = GroupMembershipTracker(account, candidate.session_id)
+            self._next_group_poll = 0
             logger.info("微信已连接，PID=%s；收发范围：%s", candidate.pid,
                         getattr(candidate, "scope", "文本"))
         except Exception as error:
@@ -64,6 +73,37 @@ class BotApplication:
             self._disconnect()
 
     def _emit(self, message):
+        if message.type in (10000, 10002):
+            logger.info("群系统事件 | 群ID=%s", message.chat_id)
+            allowed = self.config.get("chat_allowlist", [])
+            if not message.is_group or (allowed and message.chat_id not in allowed):
+                return
+            event = message.data.get("group_event")
+            if event:
+                self.plugins.dispatch(message)
+            elif (tracker := self._group_tracker) is not None:
+                from .group_events import GroupEventError, parse_group_system_message
+                try:
+                    parsed = parse_group_system_message(message.data.get("system_content", ""),
+                        msg_type=message.type, room_id=message.chat_id, self_id=tracker.account)
+                    identified = [item for item in parsed if item.member_id]
+                    if not identified or not tracker.members(message.chat_id):
+                        return
+                    # 系统消息也可能是历史同步。只有完整实时名单支持同一变化时才提前通知。
+                    rows = self.service.group_members(message.chat_id, expected_session=message.session_id)
+                    current = {row["wxid"] for row in rows or ()}
+                    if tracker.account not in current or any(
+                            (item.member_id in current) != (item.kind == "join") for item in identified):
+                        return
+                    self._remember_group_members(message.chat_id, rows)
+                    events = tracker.observe_system(message.chat_id,
+                        message.data.get("system_content", ""), message.type,
+                        sequence=message.sequence, session_id=message.session_id)
+                except (GroupEventError, RuntimeError, OSError):
+                    logger.debug("群系统事件未匹配或连接已结束：群ID=%s", message.chat_id)
+                    return
+                self._publish_group_events(events, message.session_id)
+            return
         if message.type == 37:
             request = message.data.get("friend_request", {})
             logger.info("好友申请 | 申请ID=%s | 微信ID=%s | 昵称=%s", request.get("request_id", ""),
@@ -72,6 +112,9 @@ class BotApplication:
             if message.data.get("dispatch_to_plugins", True):
                 self.plugins.dispatch(message)
             return
+        self._emit_chat(message)
+
+    def _emit_chat(self, message):
         # 先显示会话 ID，未加入白名单的新群也能被发现；群正文不进入消息日志。
         if message.is_group or message.chat_id.endswith("@chatroom"):
             logger.info("群消息 | 群ID=%s", message.chat_id)
@@ -99,8 +142,72 @@ class BotApplication:
                     message = prepare_switch(message, self.members)
                 self.plugins.dispatch(message)
 
+    def _publish_group_events(self, events, session_id):
+        if not self._connection_ready or self.backend is None or self.backend.session_id != session_id:
+            return
+        for event in events:
+            self._emit(Message(text="", chat_id=event.room_id, sender_id=event.member_id,
+                type=10002, is_group=True, session_id=session_id,
+                data={"group_event": asdict(event)}))
+
+    def _remember_group_members(self, room, rows):
+        if self.members is None:
+            return
+        for row in rows:
+            if row.get("wechat_name"):
+                self.members.remember_wechat_name(row["wxid"], row["wechat_name"])
+            nickname = row.get("group_nickname", row.get("nickname", ""))
+            self.members.remember_group_nickname(row["wxid"], room, nickname[:64])
+
+    def _poll_group_members(self):
+        if not self._connection_ready or self._group_tracker is None or self.backend is None:
+            return
+        tracker = self._group_tracker
+        now = time.monotonic()
+        if now < self._next_group_poll:
+            return
+        self._next_group_poll = now + 15
+        session_id = self.backend.session_id
+        allowed = self.config.get("chat_allowlist", [])
+        rooms = {room for room in allowed if room.endswith("@chatroom")}
+        if self.members is not None:
+            rooms.update(self.members.groups)
+        if callable(getattr(self.backend, "chats", None)):
+            rooms.update(row["chat_id"] for row in self.backend.chats()
+                         if row.get("is_group") and row["chat_id"].endswith("@chatroom"))
+        if allowed:
+            rooms.intersection_update(allowed)
+        for room in sorted(rooms):
+            if self.stop_event.is_set() or not self._connection_ready:
+                break
+            try:
+                rows = self.service.group_members(room, expected_session=session_id)
+                snapshot = None if rows is None else {
+                    row["wxid"]: row.get("nickname") or row.get("wechat_name") or "群友" for row in rows}
+                events = tracker.update(room, snapshot, session_id=session_id)
+                if rows is not None:
+                    self._remember_group_members(room, rows)
+                    self._group_poll_failures.discard(room)
+                elif room not in self._group_poll_failures:
+                    logger.info("群成员缓存尚未就绪，等待完整名单：群ID=%s", room)
+                    self._group_poll_failures.add(room)
+                self._publish_group_events(events, session_id)
+            except Exception:
+                # 缓存变化和查询失败不等同于退群，更不能影响文本收发。
+                try:
+                    tracker.update(room, None, session_id=session_id)
+                except (ValueError, RuntimeError):
+                    pass
+                if room not in self._group_poll_failures:
+                    logger.warning("群成员查询暂不可用，将稍后重试：群ID=%s", room)
+                    self._group_poll_failures.add(room)
+
     def _disconnect(self):
         self._connection_ready = False
+        if self._group_tracker is not None:
+            self._group_tracker.close()
+            self._group_tracker = None
+        self._group_poll_failures.clear()
         try:
             result = self.service.close()
             if result is not None:
@@ -122,6 +229,7 @@ class BotApplication:
         elif action == "help" and len(words) == 1:
             logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-file 会话ID \"文件路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
             logger.info("好友与群管理：friend-requests / accept-friend 申请ID / invite-members 群ID 好友ID [好友ID...] / create-group 好友ID 好友ID [好友ID...]")
+            logger.info("群成员：group-members 群ID / group-nickname 群ID 微信ID；欢迎提醒：enable group_notice / disable group_notice")
         elif action == "status" and len(words) == 1:
             logger.info("状态：%s", json.dumps({"connected": self._connection_ready,
                                                "pid": self.backend.pid if self.backend else None,
@@ -143,6 +251,16 @@ class BotApplication:
         elif action == "create-group" and len(words) >= 3:
             room = self.service.create_group(words[1:])
             logger.info("新群已创建：群ID=%s", room)
+        elif action == "group-members" and len(words) == 2:
+            rows = self.service.group_members(words[1])
+            if rows is None:
+                raise RuntimeError("微信尚未提供完整群成员缓存，请先在微信打开该群的成员列表后重试")
+            self._remember_group_members(words[1], rows)
+            logger.info("群成员：%s", json.dumps(rows, ensure_ascii=False))
+        elif action == "group-nickname" and len(words) == 3:
+            name = self.service.group_member_name(words[1], words[2])
+            logger.info("群友昵称：群ID=%s 微信ID=%s 昵称=%s", words[1], words[2],
+                        json.dumps(name, ensure_ascii=False))
         elif action == "send-image" and len(words) == 3:
             if not self.service.send_image(words[1], words[2]):
                 raise RuntimeError("微信未接受图片发送请求，请查看原生结果")
@@ -233,6 +351,7 @@ class BotApplication:
                     if self.backend is None or self._disconnect():
                         self._connect()
                     next_connect = time.monotonic() + self.config.get("reconnect_seconds", 5)
+                self._poll_group_members()
                 self.stop_event.wait(0.1)
         except KeyboardInterrupt:
             logger.info("收到退出指令")

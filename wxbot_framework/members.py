@@ -172,6 +172,9 @@ class MemberStore:
                 CREATE TABLE IF NOT EXISTS room_members (
                     account TEXT NOT NULL, room TEXT NOT NULL, wxid TEXT NOT NULL,
                     PRIMARY KEY(account,room,wxid));
+                CREATE TABLE IF NOT EXISTS group_nicknames (
+                    account TEXT NOT NULL, room TEXT NOT NULL, wxid TEXT NOT NULL, nickname TEXT NOT NULL,
+                    PRIMARY KEY(account,room,wxid));
                 INSERT OR IGNORE INTO room_members SELECT DISTINCT account,room,sender_id FROM messages;
             """)
             if "self_named" not in {row["name"] for row in db.execute("PRAGMA table_info(people)")}:
@@ -279,7 +282,7 @@ class MemberStore:
                 number = speakers.setdefault(item["sender_id"], len(speakers) + 1)
                 # 发给模型的稳定编号替代真实微信 ID；昵称只用于可读性。
                 item["speaker"] = f"P{number}"
-                item["speaker_name"] = item["speaker_name"] or self.wechat_name(item["sender_id"]) or f"未绑定成员{number}"
+                item["speaker_name"] = item["speaker_name"] or self.display_name(item["sender_id"], room) or f"未绑定成员{number}"
                 messages.append(item)
             return GroupChatSnapshot(room, day, state[0], tuple(messages))
 
@@ -352,7 +355,7 @@ class MemberStore:
             state = db.execute("SELECT generation FROM chat_buffers WHERE account=? AND room=?",
                                (self.account, message.chat_id)).fetchone()
             return ConversationSnapshot(message.chat_id, day, state[0], member.name if member else
-                                        self.wechat_name(message.sender_id) or "群友",
+                                        self.display_name(message.sender_id, message.chat_id) or "群友",
                                         tuple(reversed(previous)), message.text)
 
     @contextmanager
@@ -392,7 +395,28 @@ class MemberStore:
     def display_name(self, wxid, room):
         """群内绑定优先；其他群的绑定永远不作为默认名字。"""
         member = self.find_by_wxid(wxid, room)
-        return member.display_name if member else self.wechat_name(wxid)
+        return member.display_name if member else self.group_nickname(wxid, room) or self.wechat_name(wxid)
+
+    def remember_group_nickname(self, wxid, room, nickname):
+        """微信群昵称按账号、群和成员隔离，不覆盖 /绑定 的称呼。"""
+        validate_mentions(room, [wxid])
+        if not isinstance(nickname, str) or len(nickname) > 64 or any(ord(ch) < 32 for ch in nickname):
+            raise MemberError("群昵称应为最多 64 字符的单行文本")
+        with self._lock, self._connection() as db:
+            if nickname.strip():
+                db.execute("""INSERT INTO group_nicknames VALUES(?,?,?,?)
+                    ON CONFLICT(account,room,wxid) DO UPDATE SET nickname=excluded.nickname""",
+                    (self.account, room, wxid, nickname.strip()))
+            else:
+                db.execute("DELETE FROM group_nicknames WHERE account=? AND room=? AND wxid=?",
+                           (self.account, room, wxid))
+
+    def group_nickname(self, wxid, room):
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT nickname FROM group_nicknames WHERE account=? AND room=? AND wxid=?",
+                (self.account, room, wxid)).fetchone()
+            return row[0] if row else None
 
     def _row(self, name, room=None):
         sql = """SELECT p.* FROM people p JOIN aliases a USING(account,room,person_key)

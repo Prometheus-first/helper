@@ -71,6 +71,8 @@ class Plugin:
 | `ctx.reply_voice(message, path)` | 回复语音条 |
 | `ctx.send_voice(chat_id, path)` | 发送语音条 |
 | `ctx.export_emoticons(convert=True)` | 显式导出当前账号本地缓存表情 |
+| `ctx.group_members(room, expected_session=message.session_id)` | 读取完整群成员快照，缓存不可用时返回 `None` |
+| `ctx.group_member_name(room, wxid, expected_session=message.session_id)` | 查询群昵称，未设置时返回微信名 |
 
 每类文件有独立限制，见对应的消息章节。语音发送不等于语音识别或文字转语音。
 
@@ -84,6 +86,8 @@ class Plugin:
 
 ## 能力声明
 
+群成员变动通过 `message.type == 10002`、`message.data["group_event"]` 传给声明了 `group.events` 的插件，字段为 `kind`（`join` / `leave`）、`room_id`、`member_id`、`nickname`、`source`。`message.text` 为空，不会作为普通聊天交给大模型。只读群成员接口的能力名称为 `group.members.read`。
+
 只声明实际需要的能力。当前 `native_text` 后端提供：
 
 ```text
@@ -96,6 +100,7 @@ friend.file.receive / friend.file.send
 group.file.receive / group.file.send
 friend.request.receive / friend.request.accept
 group.member.invite / group.create
+group.members.read / group.events
 emoticon.extract / emoticon.send
 voice.send / friend.voice.send / group.voice.send
 ```
@@ -105,6 +110,14 @@ voice.send / friend.voice.send / group.voice.send
 好友申请插件订阅 `message_types: [37]`，通过 `message.data["friend_request"]` 取得公开申请 ID、昵称、验证文字及状态，不会取得验证票据或原始 XML。使用 `ctx.accept_friend(request_id, expected_session=message.session_id)` 通过申请。群管理仅提供程序控制台入口。
 
 需要明确启用的插件可在 `plugin.json` 设置 `"default_enabled": false`。当旧配置尚无该插件条目时，框架也会保持关闭；控制台 `enable 插件名` 才会启用并保存设置。
+
+## 群成员与昵称
+
+`ctx.group_members(room, expected_session=message.session_id)` 返回完整成员快照的元组；缓存不可用时返回 `None`，不能把它当成空群。每项含 `wxid`（成员 ID）、`group_nickname`（本群原始昵称）、`wechat_name`（微信名）、`nickname`（群昵称优先、再回退到微信名）。未读取到的名字为空字符串。
+
+`ctx.group_member_name(room, wxid, expected_session=message.session_id)` 返回该群的昵称或微信名，找不到时返回 `None`。这些接口读取当前微信缓存；框架 `/绑定` 设置的称呼可用 `ctx.members.display_name(wxid, room)` 查询，两者分别保留，不相互覆盖。
+
+订阅成员变化时在清单声明 `"message_types": [10002]` 和 `"requires": ["group.events", "text.send"]`，参考 `plugins/group_notice`。首次名单只建立基线，确认变化后才分发；始终用 `ctx.reply(message, text)` 保留连接隔离。
 
 ## 成员目录与模型
 

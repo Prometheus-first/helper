@@ -47,6 +47,10 @@ features:
     title: 绑定机器人账号
     details: 首次启动自动识别或选择账号，多开时按绑定身份连接，各群称呼独立保存。
     link: /guide/account-and-groups
+  - icon: 👋
+    title: 群成员与欢迎提醒
+    details: 查询成员 ID 和群昵称，按群监控新人加入与成员退出，自定义欢迎和提醒文案。
+    link: /guide/friends-and-groups#进群欢迎退群提醒和群友昵称
 ---
 
 ## 先了解运行条件
@@ -70,6 +74,7 @@ python main.py
 | 发送文本、图片、文件、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [文件](./messages/files.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
 | 开启接龙和聊天总结 | [群聊功能](./guide/features.md) |
 | 自动通过好友申请、使用控制台群管理 | [好友申请与群管理](./guide/friends-and-groups.md) |
+| 进群欢迎、退群提醒、查询群昵称 | [群成员与欢迎提醒](./guide/friends-and-groups.md#进群欢迎退群提醒和群友昵称) |
 | 编写自己的插件 | [插件开发](./development/plugins.md) |
 | 处理启动或清理问题 | [常见问题](./guide/faq.md) |
 

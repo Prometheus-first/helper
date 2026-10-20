@@ -11,6 +11,8 @@
 | `chats` | 查看本次连接收到过的会话 ID |
 | `members` | 查看成员目录 |
 | `members 群ID` | 查看指定群成员 |
+| `group-members 群ID` | 从微信读取本群完整成员名单、成员 ID 和昵称 |
+| `group-nickname 群ID 微信ID` | 查询指定成员的群昵称，未设置时返回微信名 |
 | `history 昵称 10` | 查询该称呼的最近文字记录 |
 
 ## 发送媒体

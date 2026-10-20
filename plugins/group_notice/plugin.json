@@ -1,0 +1,7 @@
+{
+  "api": "v1",
+  "default_enabled": false,
+  "description": "新人进群欢迎、成员退群提醒，使用当前群昵称",
+  "message_types": [10002],
+  "requires": ["group.events", "text.send"]
+}

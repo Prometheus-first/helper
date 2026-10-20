@@ -227,6 +227,19 @@ class NativeTextService(NativeFileHelperService):
     def _before_poll(self):
         self._check_account()
 
+    def group_members(self, room):
+        from wxbot_framework.group_management import validate_group_id
+        from wxbot_framework.group_members import read_group_members
+        room = validate_group_id(room)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError("群成员查询需要已连接的微信账号")
+            self._check_account(force=True)
+            rows = read_group_members(self._channel.read_memory, self._channel.core_base, room,
+                                      expected_account=self.self_wxid)
+            self._check_account(force=True)
+            return rows
+
     def _sender_wechat_name(self, wxid):
         if self._channel is None:
             return None
@@ -240,6 +253,8 @@ class NativeTextService(NativeFileHelperService):
     def _map_message(self, message):
         if message.type == 37:
             return self._map_friend_request(message)
+        if message.type in (10000, 10002):
+            return self._map_group_system(message)
         if message.type not in (1, 3, 49):
             return None
         previous = self.self_wxid
@@ -283,6 +298,20 @@ class NativeTextService(NativeFileHelperService):
             if self.router.unparsed_groups == 1:
                 logger.warning("群文本作者格式未匹配，已跳过；需要用测试群消息核对实际布局")
         return data
+
+    def _map_group_system(self, message):
+        # 系统事件不作为聊天正文，不进入模型或普通文本插件。
+        sender = message.sender.decode("utf-8")
+        receiver = message.receiver.decode("utf-8")
+        if not sender.endswith("@chatroom") or receiver != self.self_wxid:
+            return None
+        validate_target(sender)
+        content = message.image_xml.decode("utf-8")
+        self.chats[sender] = {"chat_id": sender, "is_group": True}
+        return {"msg": "", "content": "", "system_content": content, "wx_type": message.type,
+                "chat_id": sender, "room_wxid": sender, "sender_id": "",
+                "native_sender": sender, "native_receiver": receiver,
+                "self_wxid": self.self_wxid, "is_self": False, "sequence": message.sequence}
 
     def _map_friend_request(self, message):
         from wxbot_framework.friend_requests import FriendRequestError, parse_friend_request

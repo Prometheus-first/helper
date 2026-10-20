@@ -16,6 +16,7 @@
 - `friend_receive.h`：独立好友验证接收通道，仅复制实时申请，跳过历史初始化记录；沿用 V3 内存队列。
 - `friend_request.h`：`WxInspectFriendRequest` / `WxAcceptFriendRequest`，核对账号并等待微信原生验证结果；申请凭据不写报告。
 - `group_management.h`：原生邀请好友进群及创建群聊，创建成功时读取服务器返回的群 ID；未进行真实群管理操作测试。
+- 群系统消息 `10000/10002` 沿用 V3 元数据缓冲区，不作为普通聊天正文；完整群成员和真实群昵称由 `wxbot_framework/group_members.py` 只读获取，`group_events.py` 负责变动确认与去重。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
 
 源码 `text_bridge.cpp` 复用 `selftest_bridge.cpp` 的公共结构、任务调度和清理逻辑，因此两个源文件都要保留。`vendor/` 中只保留编译所需的 MinHook 源码、头文件和许可。

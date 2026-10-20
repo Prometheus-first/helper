@@ -52,7 +52,7 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type in (3, 37, 49):
+        if msg_type in (3, 37, 49, 10000, 10002):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -264,6 +264,20 @@ class ServiceFacade:
         members = validate_group_members(members, creating=True)
         return self._manage("create_group", members, expected_session=expected_session)
 
+    def group_members(self, room, *, expected_session=None):
+        """读取当前账号的完整群成员快照；缓存未就绪时返回 None。"""
+        from .group_management import validate_group_id
+        return self._manage("group_members", validate_group_id(room), expected_session=expected_session)
+
+    def group_member_name(self, room, wxid, *, expected_session=None):
+        from .account import validate_account
+        validate_account(wxid)
+        rows = self.group_members(room, expected_session=expected_session)
+        for row in rows or ():
+            if row["wxid"] == wxid:
+                return row.get("nickname") or row.get("wechat_name") or None
+        return None
+
     def send_at_text(self, room_wxid, content, at_list, *, expected_session=None, display_names=None, delivery_guard=None):
         members = validate_mentions(room_wxid, at_list)
         if not isinstance(content, str) or not content:
@@ -370,6 +384,12 @@ class PluginContext:
     def accept_friend(self, request_id, *, expected_session=None):
         return self._service.accept_friend(request_id, expected_session=expected_session)
 
+    def group_members(self, room, *, expected_session=None):
+        return self._service.group_members(room, expected_session=expected_session)
+
+    def group_member_name(self, room, wxid, *, expected_session=None):
+        return self._service.group_member_name(room, wxid, expected_session=expected_session)
+
     def send_voice(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_voice(chat_id, path, expected_session=expected_session,
                                         delivery_guard=delivery_guard)
@@ -426,7 +446,7 @@ class PluginContext:
             if member is not None and (display_name is None or member.self_named):
                 display_name = member.display_name
             elif display_name is None:
-                display_name = self._members.wechat_name(message.sender_id)
+                display_name = self._members.display_name(message.sender_id, message.chat_id)
         return self._service.send_at_text(message.chat_id, text, [message.sender_id],
                                          expected_session=message.session_id,
                                          display_names=[display_name] if display_name is not None else None,

@@ -20,6 +20,13 @@
     "max_seconds": 0.3
   },
   "plugins": {
+    "group_notice": {
+      "enabled": false,
+      "welcome": true,
+      "leave_notice": true,
+      "welcome_template": "欢迎 {nickname} 加入群聊！",
+      "leave_template": "{nickname} 离开了群聊。"
+    },
     "friend_auto_accept": {
       "enabled": false,
       "verification_keywords": []

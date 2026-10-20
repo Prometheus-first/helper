@@ -58,6 +58,26 @@
 
 示例只展示相关字段，不要用这一小段覆盖整个配置。也可以在运行窗口使用 `enable chat_summary`、`disable chat_summary`、`reload chat_summary`。
 
+### 进群欢迎和退群提醒
+
+`group_notice` 默认关闭，在 `plugins` 中加入以下配置或使用控制台 `enable group_notice` 开启：
+
+```json
+{
+  "plugins": {
+    "group_notice": {
+      "enabled": true,
+      "welcome": true,
+      "leave_notice": true,
+      "welcome_template": "欢迎 {nickname} 加入群聊！",
+      "leave_template": "{nickname} 离开了群聊。"
+    }
+  }
+}
+```
+
+文案只支持 `{nickname}` 占位符，最多 700 个 UTF-8 字节；`welcome` 与 `leave_notice` 可以独立关闭。改完文案后执行 `reload group_notice`。监控群范围和缓存更新限制见[群成员与欢迎提醒](./friends-and-groups.md#进群欢迎退群提醒和群友昵称)。
+
 ## 群聊和记录配置
 
 ```json
