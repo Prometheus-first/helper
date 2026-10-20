@@ -1,0 +1,8 @@
+{
+  "base_url": "https://api.fish.audio",
+  "api_key": "",
+  "model": "s2.1-pro-free",
+  "default_voice": "",
+  "timeout_seconds": 45,
+  "max_chars_per_clip": 160
+}

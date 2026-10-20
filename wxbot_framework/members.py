@@ -66,6 +66,15 @@ class Member:
     self_named: bool = False
 
 
+@dataclass(frozen=True)
+class VoiceSelection:
+    room: str
+    voice_id: str = ""
+    name: str = ""
+    enabled: bool = True
+    generation: int = 0
+
+
 def name_key(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 64 or any(c in value for c in "\0\n\r"):
         raise MemberError("成员称呼应为 1–64 字符的单行文本")
@@ -175,6 +184,10 @@ class MemberStore:
                 CREATE TABLE IF NOT EXISTS group_nicknames (
                     account TEXT NOT NULL, room TEXT NOT NULL, wxid TEXT NOT NULL, nickname TEXT NOT NULL,
                     PRIMARY KEY(account,room,wxid));
+                CREATE TABLE IF NOT EXISTS room_voices (
+                    account TEXT NOT NULL, room TEXT NOT NULL, voice_id TEXT NOT NULL,
+                    name TEXT NOT NULL, enabled INTEGER NOT NULL, generation INTEGER NOT NULL,
+                    PRIMARY KEY(account,room));
                 INSERT OR IGNORE INTO room_members SELECT DISTINCT account,room,sender_id FROM messages;
             """)
             if "self_named" not in {row["name"] for row in db.execute("PRAGMA table_info(people)")}:
@@ -317,6 +330,39 @@ class MemberStore:
 
     def personality_is_current(self, state):
         return self.personality(state.room) == state
+
+    def voice_selection(self, room):
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT voice_id,name,enabled,generation FROM room_voices WHERE account=? AND room=?",
+                (self.account, room)).fetchone()
+            return VoiceSelection(room, row[0], row[1], bool(row[2]), row[3]) if row else VoiceSelection(room)
+
+    def set_voice(self, room, voice_id, name, *, enabled=True):
+        from .tts import VOICE_ID
+        if room not in self.groups or type(enabled) is not bool:
+            raise MemberError("请在已配置的群中切换音色")
+        if enabled and (not isinstance(voice_id, str) or not VOICE_ID.fullmatch(voice_id)):
+            raise MemberError("音色 ID 无效")
+        if not isinstance(name, str) or len(name) > 128 or any(ord(ch) < 32 for ch in name):
+            raise MemberError("音色名称无效")
+        with self._lock, self._connection() as db:
+            current = self.voice_selection(room)
+            if not enabled:
+                voice_id, name = current.voice_id, current.name
+            if (current.voice_id, current.name, current.enabled) != (voice_id, name, enabled):
+                db.execute("""INSERT INTO room_voices VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(account,room) DO UPDATE SET voice_id=excluded.voice_id,
+                    name=excluded.name,enabled=excluded.enabled,generation=excluded.generation""",
+                    (self.account, room, voice_id, name, int(enabled), current.generation + 1))
+            return self.voice_selection(room)
+
+    @contextmanager
+    def voice_delivery_guard(self, state):
+        with self._lock:
+            if self.voice_selection(state.room) != state:
+                raise SnapshotExpired("音色已切换，取消旧语音")
+            yield
 
     @contextmanager
     def personality_delivery_guard(self, state):

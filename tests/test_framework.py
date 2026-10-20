@@ -80,6 +80,7 @@ class FrameworkTests(unittest.TestCase):
         self.config["plugins"]["chat_records"]["enabled"] = False
         self.config["plugins"]["personality"]["enabled"] = False
         self.config["plugins"]["mention_chat"]["enabled"] = False
+        self.config["plugins"].setdefault("voice_reply", {})["enabled"] = False
         self.config["members_config_file"] = None
         self.write_config()
         self.store = ConfigStore(self.path)

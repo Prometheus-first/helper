@@ -20,11 +20,14 @@ def initialize_configs(directory):
     """只补齐缺失的本地配置，不覆盖已经填写的账号、群聊或密钥。"""
     directory = Path(directory)
     created = []
-    for stem in ("bot_config", "members_config", "llm_config"):
+    for stem in ("bot_config", "members_config", "llm_config", "tts_config"):
         destination = directory / (stem + ".json")
         if destination.exists():
             continue
-        template = (directory / (stem + ".example.json")).read_text(encoding="utf-8-sig")
+        template_path = directory / (stem + ".example.json")
+        if stem == "tts_config" and not template_path.exists():
+            continue
+        template = template_path.read_text(encoding="utf-8-sig")
         try:
             with destination.open("x", encoding="utf-8", newline="\n") as output:
                 output.write(template)
@@ -55,6 +58,9 @@ class ConfigStore:
         llm_file = data.get("llm_config_file", "llm_config.json")
         if not isinstance(llm_file, str) or not llm_file.strip() or "\0" in llm_file:
             raise ValueError("llm_config_file 应为大模型配置文件路径")
+        tts_file = data.get("tts_config_file", "tts_config.json")
+        if not isinstance(tts_file, str) or not tts_file.strip() or "\0" in tts_file:
+            raise ValueError("tts_config_file 应为语音合成配置文件路径")
         members_file = data.get("members_config_file")
         if members_file is not None and (not isinstance(members_file, str) or not members_file.strip() or "\0" in members_file):
             raise ValueError("members_config_file 应为成员配置文件路径或 null")

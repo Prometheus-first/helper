@@ -12,6 +12,7 @@
   "console": true,
   "log_level": "INFO",
   "llm_config_file": "llm_config.json",
+  "tts_config_file": "tts_config.json",
   "members_config_file": "members_config.json",
   "text_send_delay": {
     "enabled": true,
@@ -20,6 +21,9 @@
     "max_seconds": 0.3
   },
   "plugins": {
+    "voice_reply": {
+      "enabled": false
+    },
     "group_notice": {
       "enabled": false,
       "welcome": true,

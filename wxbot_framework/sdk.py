@@ -90,6 +90,11 @@ class ServiceFacade:
         with self._lock:
             return self._backend is not None and self._available
 
+    def session_is_current(self, session_id):
+        with self._lock:
+            return bool(self._backend is not None and self._available and
+                        self._backend.session_id == session_id)
+
     def send_text(self, to_wxid, content, *, expected_session=None, _mentions=(), delivery_guard=None):
         validate_target(to_wxid)
         if not isinstance(content, str):
@@ -346,7 +351,7 @@ class LegacyService:
 
 
 class PluginContext:
-    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, member_store=None):
+    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, member_store=None, speech=None):
         self.name = name
         self.config = MappingProxyType(copy.deepcopy(options))
         self.logger = logging.getLogger(f"Plugin.{name}")
@@ -355,6 +360,13 @@ class PluginContext:
         self._llm_config_path = llm_config_path
         self._llm = None
         self._members = member_store
+        self._speech = speech
+
+    @property
+    def speech(self):
+        if self._speech is None:
+            raise CapabilityError("尚未配置语音回复服务")
+        return self._speech
 
     @property
     def members(self):

@@ -3,7 +3,7 @@ from wxbot_framework.dialogue import Dialogue
 from wxbot_framework.llm import LLMError
 from wxbot_framework.members import SnapshotExpired
 from wxbot_framework.personality import personality_text
-from wxbot_framework.summary import split_text
+from wxbot_framework.speech import deliver_model_reply
 
 
 class Plugin:
@@ -26,10 +26,7 @@ class Plugin:
             reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(snapshot),
                                      personality.name)
             display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
-            budget = 1023 - len(("@" + display + "\u2005\n").encode("utf-8"))
-            for part in split_text(reply, byte_limit=budget):
-                if not ctx.reply_at(message, part, display_name=display, delivery_guard=guard):
-                    raise RuntimeError("原生艾特发送未成功")
+            deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=guard)
             ctx.logger.info("艾特对话完成：room=%s persona=%s context=%d", message.chat_id,
                             personality.name, len(snapshot.messages))
         except SnapshotExpired:

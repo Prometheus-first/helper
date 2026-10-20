@@ -35,7 +35,8 @@ def inspect(root, private_markers=()):
         total += len(raw)
         label = relative.as_posix()
         if path.suffix.lower() in ('.pyc','.obj','.pdb','.lib','.exp','.exe','.dmp','.db','.sqlite','.sqlite3','.bak','.zip',
-                                   '.wxgf','.hevc','.gif','.png','.jpg','.jpeg','.webp','.bmp'):
+                                   '.wxgf','.hevc','.gif','.png','.jpg','.jpeg','.webp','.bmp',
+                                   '.wav','.pcm','.silk','.mp3','.opus','.ogg','.flac','.aac','.amr','.m4a'):
             findings.append({'file':label,'kind':'unnecessary_or_private_artifact'})
         if path.suffix.lower() == '.dll' and label not in ALLOWED_DLLS:
             findings.append({'file':label,'kind':'unexpected_binary'})
@@ -49,7 +50,7 @@ def inspect(root, private_markers=()):
                for marker in private_markers):
             findings.append({'file':label,'kind':'known_private_marker'})
     findings.extend({'file':name,'kind':'runtime_or_legacy_directory'} for name in sorted(forbidden_dirs))
-    for name in ('bot_config','members_config','llm_config'):
+    for name in ('bot_config','members_config','llm_config','tts_config'):
         template = root / (name + '.example.json')
         if not template.is_file():
             findings.append({'file':template.name,'kind':'missing_config_template'})
@@ -67,10 +68,12 @@ def inspect(root, private_markers=()):
         path=root/filename
         if path.exists() and json.loads(path.read_text(encoding='utf-8')).get('groups'):
             findings.append({'file':filename,'kind':'nonempty_group_bindings'})
-    for filename in ('llm_config.json','llm_config.example.json'):
+    for filename in ('llm_config.json','llm_config.example.json','tts_config.json','tts_config.example.json'):
         path=root/filename
         if path.exists() and json.loads(path.read_text(encoding='utf-8')).get('api_key'):
             findings.append({'file':filename,'kind':'nonempty_api_key'})
+        if filename.startswith('tts_config') and path.exists() and json.loads(path.read_text(encoding='utf-8')).get('default_voice'):
+            findings.append({'file':filename,'kind':'nonempty_personal_voice'})
     return {'passed':not findings,'files_scanned':count,'bytes_scanned':total,'findings':findings}
 
 

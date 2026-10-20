@@ -28,8 +28,8 @@ features:
     details: 下载普通图片、发送本地图片，提取本地缓存表情并发送动态 GIF。
     link: /messages/images
   - icon: 🎙️
-    title: 原生语音条
-    details: 发送 SILK 或将 PCM WAV 转成语音条，文件传输助手已验证手机端播放。
+    title: 语音合成与发送
+    details: 将模型回复合成为微信语音条，浏览中文公开音色，按群保存音色选择。
     link: /messages/voice
   - icon: 📎
     title: 普通文件附件
@@ -73,6 +73,7 @@ python main.py
 | 找到账号 ID、加入新的群 | [账号与群聊](./guide/account-and-groups.md) |
 | 发送文本、图片、文件、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [文件](./messages/files.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
 | 开启接龙和聊天总结 | [群聊功能](./guide/features.md) |
+| 艾特后用语音回复、查看和切换音色 | [Fish Audio 语音回复](./messages/voice.md#fish-audio-文字转语音) |
 | 自动通过好友申请、使用控制台群管理 | [好友申请与群管理](./guide/friends-and-groups.md) |
 | 进群欢迎、退群提醒、查询群昵称 | [群成员与欢迎提醒](./guide/friends-and-groups.md#进群欢迎退群提醒和群友昵称) |
 | 编写自己的插件 | [插件开发](./development/plugins.md) |

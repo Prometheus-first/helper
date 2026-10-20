@@ -7,6 +7,7 @@
 | `bot_config.json` | 账号、会话范围、插件开关、发送节奏 |
 | `members_config.json` | 支持的群、群内称呼、消息记录 |
 | `llm_config.json` | 大模型地址、密钥、模型与超时 |
+| `tts_config.json` | Fish Audio 密钥、模型、默认音色与合成参数 |
 
 ## 机器人配置
 
@@ -112,6 +113,10 @@
 模板默认关闭 `idiom_chain`、`chat_summary`、`mention_chat`。填写有效模型配置后，开启需要的插件，再执行 `--check`。
 
 修改模型配置后重载对应插件或重启。聊天总结、艾特对话会将对应文本交给你配置的模型服务；记录范围见[群聊功能](./features.md)。
+
+## 语音合成配置
+
+`voice_reply` 的配置和按群音色切换见[语音回复](../messages/voice.md#fish-audio-文字转语音)。模板默认关闭，`tts_config.json` 的密钥与默认音色为空；填好后再启用。`tts_config_file` 默认指向本地 `tts_config.json`。
 
 ## 更新项目时保留本地配置
 
