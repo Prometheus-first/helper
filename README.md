@@ -1,9 +1,12 @@
 # 微信机器人框架
 
 📚 [在线文档](https://prometheus-first.github.io/helper/) · [安装与启动](https://prometheus-first.github.io/helper/guide/quick-start.html) · [插件开发](https://prometheus-first.github.io/helper/development/plugins.html)
+
 项目已在linux.do公开声明[https://linux.do/](https://linux.do/t/topic/3029497/51)
+
 交流群
-<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/908a812a-e6e8-4e31-873c-77514adfff96" />
+<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/f6125f82-b369-4106-90c4-052c624fa400" />
+
 
 # 已完成
 - 账号识别与绑定
