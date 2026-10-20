@@ -31,6 +31,10 @@ features:
     title: 语音合成与发送
     details: 将模型回复合成为微信语音条，浏览中文公开音色，按群保存音色选择。
     link: /messages/voice
+  - icon: 🧩
+    title: 看图猜成语
+    details: 在线获取题图和答案，失败回退本地题库；群友抢答、真实艾特、提示和自动换题。
+    link: /guide/features#看图猜成语
   - icon: 📎
     title: 普通文件附件
     details: 发送本地文件，下载实时到达的附件并按账号隔离保存，单个文件最多 20 MiB。

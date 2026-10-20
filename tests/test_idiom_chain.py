@@ -85,6 +85,13 @@ class IdiomPluginTests(unittest.TestCase):
         self.send("意气风发", room="87654321@chatroom")
         self.assertEqual(len(self.ctx.sent), 1)
 
+    def test_starting_picture_game_clears_chain_only_when_plugin_is_active(self):
+        self.start()
+        self.ctx.plugin_is_active = lambda name: name == 'picture_idiom'
+        self.send('看图猜成语')
+        self.assertNotIn(ROOM, self.plugin.games)
+        self.assertEqual(len(self.ctx.sent), 1)
+
     def test_bad_answer_keeps_current_question(self):
         self.start()
         self.send("异想天开")
@@ -133,8 +140,9 @@ class IdiomPluginTests(unittest.TestCase):
     def test_help_and_primary_phone_commands(self):
         self.send("/help", is_self=True)
         self.assertEqual(self.ctx.sent[-1][1], HELP)
-        self.assertIn("\n\n7. /查看音色\n\n8. /音色 名称|关闭", HELP)
-        self.assertTrue(HELP.endswith("10. /help"))
+        self.assertIn("\n\n2. 看图猜成语", HELP)
+        self.assertIn("\n\n8. /查看音色\n\n9. /音色 名称|关闭", HELP)
+        self.assertTrue(HELP.endswith("11. /help"))
         self.assertLessEqual(len(HELP.encode("utf-8")), 1023)
         self.send("成语接龙", is_self=True)
         self.assertEqual(self.ctx.sent[-1][1], "一心一意")

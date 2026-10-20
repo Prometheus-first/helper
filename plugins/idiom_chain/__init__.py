@@ -10,7 +10,7 @@ from wxbot_framework.personality import game_reply, personality_text
 from wxbot_framework.text import GROUP_CONTROL_COMMANDS, FOUR_CHINESE, validate_mentions
 from .judge import IdiomJudge
 
-HELP = "1. 成语接龙\n\n2. /绑定 昵称\n\n3. /总结 昵称\n\n4. /总结群聊\n\n5. /切换人格 嘴臭|卑微|夸夸|取消\n\n6. 艾特机器人对话\n\n7. /查看音色\n\n8. /音色 名称|关闭\n\n9. /清空\n\n10. /help"
+HELP = "1. 成语接龙\n\n2. 看图猜成语\n\n3. /绑定 昵称\n\n4. /总结 昵称\n\n5. /总结群聊\n\n6. /切换人格 嘴臭|卑微|夸夸|取消\n\n7. 艾特机器人对话\n\n8. /查看音色\n\n9. /音色 名称|关闭\n\n10. /清空\n\n11. /help"
 
 
 @dataclass
@@ -72,6 +72,9 @@ class Plugin:
             ctx.reply(message, HELP, delivery_guard=guard)
             return
         game = self.games.get(message.chat_id)
+        if text in ('看图猜成语', '/看图猜成语') and getattr(ctx, 'plugin_is_active', lambda name: False)('picture_idiom'):
+            self.games.pop(message.chat_id, None)
+            return
         if text == "退出接龙":
             self.games.pop(message.chat_id, None)
             ctx.reply(message, "已退出接龙。", delivery_guard=guard)

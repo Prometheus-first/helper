@@ -21,6 +21,12 @@
     "max_seconds": 0.3
   },
   "plugins": {
+    "picture_idiom": {
+      "enabled": false,
+      "source": "ffapi",
+      "timeout_seconds": 8,
+      "wrong_reply_cooldown_seconds": 3
+    },
     "voice_reply": {
       "enabled": false
     },

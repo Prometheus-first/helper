@@ -351,7 +351,8 @@ class LegacyService:
 
 
 class PluginContext:
-    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, member_store=None, speech=None):
+    def __init__(self, name, options, service, capabilities, *, llm_config_path=None, member_store=None, speech=None,
+                 plugin_active=None):
         self.name = name
         self.config = MappingProxyType(copy.deepcopy(options))
         self.logger = logging.getLogger(f"Plugin.{name}")
@@ -361,6 +362,10 @@ class PluginContext:
         self._llm = None
         self._members = member_store
         self._speech = speech
+        self._plugin_active = plugin_active
+
+    def plugin_is_active(self, name):
+        return bool(self._plugin_active and self._plugin_active(name))
 
     @property
     def speech(self):
