@@ -104,6 +104,10 @@ class FishTTS:
             data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
         except (OSError, ValueError):
             raise TTSError("请先填写 tts_config.json 语音配置") from None
+        return cls.from_options(data)
+
+    @classmethod
+    def from_options(cls, data):
         if not isinstance(data, dict):
             raise TTSError("语音配置必须是 JSON 对象")
         base = data.get('base_url', 'https://api.fish.audio')

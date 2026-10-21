@@ -22,7 +22,7 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
 
 class NativeFileHelperBackend:
     scope = "文件传输助手文本"
-    def __init__(self, root, config):
+    def __init__(self, root, config, *, data_root=None):
         native = Path(root) / "native"
         if not native.is_dir():
             raise RuntimeError("未找到已验证的原生适配目录")
@@ -34,6 +34,7 @@ class NativeFileHelperBackend:
         self.session_id = uuid.uuid4().hex
 
     def start(self, emit):
+        self.raw.monitor_handler = lambda data: emit(Message.from_native(11046, data, self.session_id))
         self.raw.register_msg_handler(lambda _client, protocol, data, _service:
                                       emit(Message.from_native(protocol, data, self.session_id)))
         return self.raw.start()
@@ -56,7 +57,8 @@ class NativeFileHelperBackend:
 class NativeTextBackend(NativeFileHelperBackend):
     scope = "文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理"
 
-    def __init__(self, root, config):
+    def __init__(self, root, config, *, data_root=None):
+        data_root = Path(data_root or root)
         native = Path(root) / "native"
         if not native.is_dir():
             raise RuntimeError("未找到原生适配目录")
@@ -64,13 +66,13 @@ class NativeTextBackend(NativeFileHelperBackend):
             sys.path.insert(0, str(native))
         from text_service import NativeTextService
         self.raw = NativeTextService(pid=config.get("wechat_pid"), account=config.get("wechat_account"),
-                                     media_directory=Path(root) / config.get("image_directory", ".runtime/images"),
+                                     media_directory=data_root / config.get("image_directory", ".runtime/images"),
                                      image_allowlist=config.get("chat_allowlist", []),
-                                     wechat_data_directory=(Path(root) / config["wechat_data_directory"]
+                                     wechat_data_directory=(data_root / config["wechat_data_directory"]
                                                             if config.get("wechat_data_directory") else None),
-                                     emoticon_directory=Path(root) / config.get("emoticon_directory", ".runtime/emoticons"),
-                                     voice_directory=Path(root) / ".runtime/voices",
-                                     file_directory=Path(root) / config.get("file_directory", ".runtime/files"),
+                                     emoticon_directory=data_root / config.get("emoticon_directory", ".runtime/emoticons"),
+                                     voice_directory=data_root / ".runtime/voices",
+                                     file_directory=data_root / config.get("file_directory", ".runtime/files"),
                                      preserve_reports=False)
         self.session_id = uuid.uuid4().hex
 

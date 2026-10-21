@@ -40,6 +40,9 @@ native/.build/
 dist/
 
 # Editor and desktop metadata
+.impeccable/questions/
+.impeccable/review/
+.impeccable/build/
 .idea/
 .vscode/
 

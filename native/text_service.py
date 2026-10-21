@@ -255,11 +255,11 @@ class NativeTextService(NativeFileHelperService):
             return self._map_friend_request(message)
         if message.type in (10000, 10002):
             return self._map_group_system(message)
-        if message.type not in (1, 3, 49):
+        if message.type not in (1, 3, 34, 43, 47, 49, 62):
             return None
         previous = self.self_wxid
         previous_unparsed = self.router.unparsed_groups
-        body = (getattr(message, "image_xml", b"") if message.type in (3, 49) else message.text).decode("utf-8")
+        body = (getattr(message, "image_xml", b"") if message.type != 1 else message.text).decode("utf-8", errors="replace")
         data = self.router.convert(message.sender.decode("utf-8"), message.receiver.decode("utf-8"),
                                    body, sequence=message.sequence, msg_type=message.type,
                                    thread_id=message.thread_id)
@@ -284,6 +284,13 @@ class NativeTextService(NativeFileHelperService):
                 data["dispatch_to_plugins"] = True
             self.chats[data["chat_id"]] = {"chat_id": data["chat_id"],
                                            "is_group": bool(data["room_wxid"])}
+            if message.type in (34, 43, 47, 62):
+                data['monitor_only'] = True
+                return data
+            if message.type in (3, 49):
+                monitor = getattr(self, 'monitor_handler', None)
+                if monitor is not None:
+                    monitor(dict(data, monitor_only=True))
             if message.type == 3 and self._image_receiver is not None:
                 if not self.image_allowlist or data["chat_id"] in self.image_allowlist:
                     self._image_receiver.submit(data)

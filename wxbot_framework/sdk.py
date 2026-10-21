@@ -52,7 +52,7 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type in (3, 37, 49, 10000, 10002):
+        if msg_type in (3, 34, 37, 43, 47, 49, 62, 10000, 10002):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -76,6 +76,19 @@ class ServiceFacade:
         self._available = False
         self._cancel = threading.Event()
         self.text_delay = TextSendDelay.from_config(text_delay)
+        self.message_observer = None
+
+    def _sent(self, result, backend, chat_id, msg_type, *, text='', path=''):
+        observer = self.message_observer
+        if observer is not None and result is not False:
+            try:
+                observer(Message(text, chat_id, type=msg_type, is_self=True,
+                    is_group=chat_id.endswith('@chatroom'), session_id=backend.session_id,
+                    data={'monitor_outgoing': True, 'bot_generated': True,
+                          'file_name': str(path).replace('\\', '/').rsplit('/', 1)[-1] if path else ''}))
+            except Exception:
+                logger.warning('发送已完成，消息监控记录暂不可用')
+        return result
 
     def bind(self, backend):
         with self._lock:
@@ -124,8 +137,10 @@ class ServiceFacade:
                 # 在文本节奏等待之后检查记录版本，清空后不发送旧总结。
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     if _mentions:
-                        return backend.send_at_text(to_wxid, content, _mentions)
-                    return backend.send_text(to_wxid, content)
+                        result = backend.send_at_text(to_wxid, content, _mentions)
+                    else:
+                        result = backend.send_text(to_wxid, content)
+                    return self._sent(result, backend, to_wxid, 1, text=content)
 
     def send_image(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -144,7 +159,7 @@ class ServiceFacade:
             with self._lock:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
-                    return backend.send_image(to_wxid, str(image_path))
+                    return self._sent(backend.send_image(to_wxid, str(image_path)), backend, to_wxid, 3)
 
     def send_emoticon(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -167,7 +182,7 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
-                    return backend.send_emoticon(to_wxid, str(emoticon_path))
+                    return self._sent(backend.send_emoticon(to_wxid, str(emoticon_path)), backend, to_wxid, 47)
 
     def send_voice(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -190,7 +205,7 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
-                    return backend.send_voice(to_wxid, str(voice.path))
+                    return self._sent(backend.send_voice(to_wxid, str(voice.path)), backend, to_wxid, 34)
 
     def send_file(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -212,7 +227,7 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
-                    return backend.send_file(to_wxid, str(file.path))
+                    return self._sent(backend.send_file(to_wxid, str(file.path)), backend, to_wxid, 49, path=file.path)
 
     def export_emoticons(self, *, convert=True, expected_session=None):
         if type(convert) is not bool:

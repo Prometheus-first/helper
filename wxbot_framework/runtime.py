@@ -8,6 +8,7 @@ import shlex
 import sys
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import asdict
 
 from .backend import CAPABILITIES, TEXT_CAPABILITIES, NativeFileHelperBackend, NativeTextBackend
@@ -24,18 +25,21 @@ class BotApplication:
         self.root, self.store = root, store
         self.config = store.load()
         self.service = ServiceFacade(text_delay=self.config.get("text_send_delay"))
+        self.message_observer = None
+        self.service.message_observer = self._observe_message
         self.members = MemberStore.from_config(self.config, self.store.path.parent)
         generic = self.config.get("backend") == "native_text"
         capabilities = TEXT_CAPABILITIES if generic else CAPABILITIES
         self.plugins = PluginManager(root / "plugins", store, self.service, capabilities,
                                      self.config.get("plugin_queue_size", 128), member_store=self.members)
         backend_type = NativeTextBackend if generic else NativeFileHelperBackend
-        self.backend_factory = backend_factory or (lambda: backend_type(root, self.config))
+        self.backend_factory = backend_factory or (lambda: backend_type(root, self.config, data_root=self.store.path.parent))
         self.backend = None
         self.stop_event = threading.Event()
         self.stopped_event = threading.Event()
         self._shutdown_complete = False
         self.commands = queue.Queue()
+        self.controls = queue.Queue(maxsize=64)
         self.last_cleanup = None
         self._connection_ready = False
         self._last_connection_log = 0
@@ -72,7 +76,18 @@ class BotApplication:
             self._log_connection_error(error)
             self._disconnect()
 
+    def _observe_message(self, message):
+        observer = getattr(self, 'message_observer', None)
+        if observer is not None:
+            try:
+                observer(message)
+            except Exception:
+                logger.warning('消息监控暂不可用，消息继续处理')
+
     def _emit(self, message):
+        self._observe_message(message)
+        if message.data.get('monitor_only'):
+            return
         if message.type in (10000, 10002):
             logger.info("群系统事件 | 群ID=%s", message.chat_id)
             allowed = self.config.get("chat_allowlist", [])
@@ -314,6 +329,33 @@ class BotApplication:
         except (OSError, ValueError):
             pass
 
+    def submit_control(self, callback):
+        """网页控制任务交给运行线程；HTTP 线程不直接调用原生接口。"""
+        future = Future()
+        if self.stop_event.is_set():
+            future.set_exception(RuntimeError('机器人正在停止'))
+        else:
+            try:
+                self.controls.put_nowait((callback, future))
+            except queue.Full:
+                future.set_exception(RuntimeError('管理操作排队过多，请稍后再试'))
+        return future
+
+    def _drain_controls(self, *, stopping=False):
+        for _ in range(64):
+            try:
+                callback, future = self.controls.get_nowait()
+            except queue.Empty:
+                return
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                if stopping or self.stop_event.is_set():
+                    raise RuntimeError('机器人已停止，操作未执行')
+                future.set_result(callback())
+            except Exception as error:
+                future.set_exception(error)
+
     def run(self, *, seconds=0):
         started = time.monotonic()
         next_connect = 0
@@ -332,6 +374,7 @@ class BotApplication:
                     next_rollover = now + 0.5
                 if seconds and now - started >= seconds:
                     break
+                self._drain_controls()
                 while True:
                     try:
                         command = self.commands.get_nowait()
@@ -362,6 +405,7 @@ class BotApplication:
         if self._shutdown_complete:
             return
         self.stop_event.set()
+        self._drain_controls(stopping=True)
         self.service.cancel_pending()
         cleaned = False
         try:

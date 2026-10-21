@@ -24,6 +24,7 @@ export default defineConfig({
         { text: '账号与群聊', link: '/guide/account-and-groups' }
       ] },
       { text: '使用框架', items: [
+        { text: '网页管理台', link: '/guide/web-panel' },
         { text: '控制台命令', link: '/guide/commands' },
         { text: '群聊功能', link: '/guide/features' },
         { text: '好友申请与群管理', link: '/guide/friends-and-groups' },

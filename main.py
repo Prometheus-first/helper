@@ -22,16 +22,17 @@ from wxbot_framework.shutdown import ShutdownHandlers
 ROOT = Path(__file__).resolve().parent
 
 
-def configure_logging(config):
-    directory = ROOT / "logs"
-    directory.mkdir(exist_ok=True)
+def configure_logging(config, *, directory=None, console_enabled=True):
+    directory = Path(directory) if directory is not None else ROOT / "logs"
+    directory.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     console = logging.StreamHandler()
     console.setFormatter(formatter)
     file = RotatingFileHandler(directory / "bot.log", maxBytes=2 * 1024 * 1024,
                                backupCount=3, encoding="utf-8")
     file.setFormatter(formatter)
-    logging.basicConfig(level=config.get("log_level", "INFO").upper(), handlers=[console, file], force=True)
+    logging.basicConfig(level=config.get("log_level", "INFO").upper(),
+                        handlers=([console, file] if console_enabled else [file]), force=True)
 
 
 def main():

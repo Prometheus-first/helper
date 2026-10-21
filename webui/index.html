@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="helper-token" content="__HELPER_TOKEN__">
+  <meta name="color-scheme" content="light dark">
+  <title>helper · 本地管理台</title>
+  <link rel="icon" href="data:,">
+  <script src="/app.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip-link" href="#workspace">跳转到主要内容</a>
+<aside class="sidebar" id="primary-sidebar" aria-label="工作空间导航">
+  <a class="brand" href="#overview" aria-label="helper 管理台首页">helper</a>
+  <nav aria-label="主导航">
+    <a href="#overview" data-page="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/></svg>运行概览</a>
+    <a href="#plugins" data-page="plugins"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><rect x="14" y="14" width="6.5" height="6.5" rx="1"/></svg>插件管理<span id="nav-plugin-count" class="nav-count">—</span></a>
+    <a href="#groups" data-page="groups"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7.5" r="3"/><path d="M3.5 20v-3.5a5.5 5.5 0 0 1 11 0V20M16 4.5a3 3 0 0 1 0 6M17 13a5 5 0 0 1 3.5 4.8V20"/></svg>群聊与会话</a>
+    <a href="#models" data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>模型与语音</a>
+    <a href="#logs" data-page="logs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1"/></svg>运行日志</a>
+  </nav>
+  <div class="sidebar-bottom"><a href="https://prometheus-first.github.io/helper/" target="_blank" rel="noreferrer">使用文档<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M6 6h8v8"/></svg></a></div>
+</aside>
+<button class="nav-backdrop hidden" id="nav-backdrop" aria-label="关闭导航"></button>
+<main id="workspace" tabindex="-1">
+  <header class="topbar">
+    <div class="workspace-location"><button id="nav-toggle" class="icon-button" aria-label="展开导航" aria-expanded="false" aria-controls="primary-sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span id="page-label" class="sr-only">运行概览</span></div>
+    <div class="robot-toolbar"><label for="robot-select">当前账号</label><select id="robot-select" aria-label="当前账号"><option value="default">默认机器人</option></select><button id="theme-toggle" class="secondary theme-switch" type="button" aria-label="切换到暗色" title="切换到暗色"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13a8.8 8.8 0 0 1-9.5-9.5A8.8 8.8 0 1 0 20.5 13Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg><span>暗色</span></button></div>
+  </header>
+  <div id="service-banner" class="banner hidden" role="status"></div>
+  <section class="page" id="page-overview" aria-labelledby="overview-heading">
+    <div class="page-heading"><div><h1 id="overview-heading">运行概览</h1></div></div>
+    <section class="account-picker" aria-labelledby="accounts-heading">
+      <div class="section-heading"><h2 id="accounts-heading">已登录微信 <span id="account-total" class="count">—</span></h2><div class="account-controls"><span id="account-selection-count" class="count">已选 0</span><button id="refresh-accounts" class="secondary">刷新账号</button><button id="start-selected" class="primary" disabled>启动所选</button></div></div>
+      <div class="table-container"><table class="account-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">微信账号</th><th scope="col">进程</th><th scope="col">状态</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="account-list"><tr><td colspan="5" class="table-empty">正在识别账号…</td></tr></tbody></table></div>
+      <p id="account-error" class="account-error hidden" role="status"></p>
+      <div id="batch-result" class="batch-result hidden" role="status" aria-live="polite"></div>
+    </section>
+    <section class="section message-monitor" aria-labelledby="messages-heading">
+      <div class="section-heading"><h2 id="messages-heading">消息监控 <span id="message-count" class="count">0 条</span></h2><div class="message-actions"><button id="pause-messages" class="secondary small">暂停滚动</button><button id="clear-messages" class="text-button small">清空视图</button></div></div>
+      <label class="sr-only" for="message-search">搜索消息</label><input id="message-search" class="message-search" type="search" placeholder="搜索 ID、昵称或内容" autocomplete="off">
+      <p id="message-error" class="account-error hidden" role="status"></p>
+      <div id="message-scroll" class="table-container message-scroll" tabindex="0" aria-label="实时消息列表"><table class="message-table"><thead><tr><th scope="col">时间</th><th scope="col">会话 ID</th><th scope="col">发送者</th><th scope="col">消息内容</th></tr></thead><tbody id="message-list"><tr><td colspan="4" class="table-empty">正在读取消息…</td></tr></tbody></table></div>
+    </section>
+  </section>
+  <section class="page hidden" id="page-plugins" aria-labelledby="plugins-heading">
+    <div class="page-heading"><div><h1 id="plugins-heading">插件管理</h1></div><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="plugin-search" placeholder="搜索插件" aria-label="搜索插件"></label></div>
+    <div class="table-container"><table class="plugin-table"><thead><tr><th scope="col">插件</th><th scope="col">功能说明</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="plugin-list"><tr><td colspan="4" class="table-empty">正在读取插件列表…</td></tr></tbody></table></div>
+  </section>
+  <section class="page hidden" id="page-groups" aria-labelledby="groups-heading">
+    <div class="page-heading"><div><h1 id="groups-heading">群聊与会话</h1></div><button id="discover-chats" class="secondary">发现群聊</button></div>
+    <div class="settings-columns"><form id="groups-form" class="settings-section"><div class="section-heading"><div><h2>支持的群聊</h2></div></div><label for="group-ids">群 ID（每行一个）</label><textarea id="group-ids" name="groups" rows="7" placeholder="12345678@chatroom" spellcheck="false"></textarea><div class="check-row"><label><input type="checkbox" name="history_enabled">记录当天文字</label><label><input type="checkbox" name="daily_clear">每天零点清理旧记录</label></div><div class="form-footer"><span class="save-hint">停止后保存，下次启动生效</span><button class="primary" type="submit">保存群聊配置</button></div></form><section class="settings-section discovered-section"><h2>已发现的群</h2><div id="discovered-chats" class="empty">暂无已接收消息的群。</div></section></div>
+    <form id="scope-form" class="settings-section scope-section"><div class="section-heading"><div><h2>收发会话白名单</h2></div></div><label for="scope-ids">会话 ID（每行一个）</label><textarea id="scope-ids" name="chat_allowlist" rows="4" placeholder="留空允许全部会话" spellcheck="false"></textarea><details class="help-details"><summary>白名单与群配置的关系</summary><p>白名单非空时，支持群会自动加入。屏蔽群需从两处移除。</p></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存白名单</button></div></form>
+  </section>
+  <section class="page hidden" id="page-models" aria-labelledby="models-heading">
+    <div class="page-heading"><div><h1 id="models-heading">模型与语音</h1></div></div>
+    <div class="model-columns"><form id="llm-form" class="settings-section model-form"><h2>大模型</h2><label>接口地址<input name="base_url" type="url" required spellcheck="false"></label><label>模型名称<input name="model" required spellcheck="false"></label><label>API 密钥 <span class="key-state"></span><input name="api_key" type="password" autocomplete="new-password" placeholder="留空保留已有密钥"></label><details class="advanced-settings"><summary>高级选项</summary><div class="field-pair"><label>超时（秒）<input name="timeout_seconds" type="number" min="1" max="60" required></label><label>最大 tokens<input name="max_tokens" type="number" min="128" max="4096" required></label></div><label class="inline clear-key"><input name="clear_api_key" type="checkbox">清除已保存的密钥</label></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存大模型配置</button></div></form><form id="tts-form" class="settings-section model-form"><h2>Fish Audio 语音</h2><label>接口地址<input name="base_url" type="url" required spellcheck="false"></label><label>语音模型<input name="model" required spellcheck="false"></label><label>API 密钥 <span class="key-state"></span><input name="api_key" type="password" autocomplete="new-password" placeholder="留空保留已有密钥"></label><label>默认音色 ID<input name="default_voice" placeholder="可留空，在群中选择" spellcheck="false"></label><details class="advanced-settings"><summary>高级选项</summary><div class="field-pair"><label>超时（秒）<input name="timeout_seconds" type="number" min="1" max="120" required></label><label>每段字数<input name="max_chars_per_clip" type="number" min="20" max="180" required></label></div><label class="inline clear-key"><input name="clear_api_key" type="checkbox">清除已保存的密钥</label></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存语音配置</button></div></form></div>
+    <form id="delay-form" class="settings-section"><h2>文本发送节奏</h2><label class="inline"><input name="enabled" type="checkbox">启用随机等待</label><div class="field-pair three"><label>每组字符数<input name="characters_per_group" type="number" min="1" required></label><label>最短等待（秒）<input name="min_seconds" type="number" step="0.01" min="0" required></label><label>最长等待（秒）<input name="max_seconds" type="number" step="0.01" min="0" required></label></div><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存发送节奏</button></div></form>
+  </section>
+  <section class="page hidden" id="page-logs" aria-labelledby="logs-heading">
+    <div class="page-heading"><div><h1 id="logs-heading">运行日志</h1></div></div>
+    <div class="log-toolbar"><label for="log-level">日志级别</label><select id="log-level"><option value="ALL">全部级别</option><option value="WARNING">警告和错误</option><option value="ERROR">仅错误</option></select><span id="log-count">0 条</span><div class="log-actions"><button id="pause-logs" class="secondary">暂停滚动</button><button id="clear-logs" class="text-button">清空视图</button></div></div>
+    <div class="log-list" id="log-list" role="log" aria-label="实时日志" aria-live="off"><div class="log-empty">暂无日志。</div></div>
+  </section>
+
+</main>
+<div id="toast" class="toast hidden" role="status"></div>
+<dialog id="plugin-dialog" aria-labelledby="plugin-dialog-title"><form id="plugin-form"><div class="dialog-heading"><h2 id="plugin-dialog-title">插件配置</h2><button type="button" class="icon-button" id="close-plugin-dialog" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><label for="plugin-options">插件选项（JSON）</label><textarea id="plugin-options" name="options" rows="13" spellcheck="false"></textarea><p class="dialog-error hidden" role="alert"></p><div class="form-footer"><button type="submit" class="primary">保存插件配置</button></div></form></dialog>
+</body>
+</html>
