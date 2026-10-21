@@ -2,6 +2,7 @@
 // 单独生成 text_bridge.dll，不替换仍在运行的 selftest_bridge.dll。
 #define WXBOT_EXTENDED_RECEIVE
 #define WXBOT_MEDIA_RECEIVE
+#define WXBOT_LARGE_MEDIA_RECEIVE
 #define WXBOT_FRIEND_RECEIVE
 #include "selftest_bridge.cpp"
 
@@ -249,6 +250,20 @@ struct ReceiveStatistics {
 static ReceiveStatistics receive_statistics{};
 static_assert(sizeof(ReceiveStatistics) == 64, "Unexpected receive statistics ABI");
 
+static void copy_app_message(const unsigned char* message, const char* sender,
+                             const char* receiver, const char* source) {
+    char* content = static_cast<char*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 262144));
+    if (!content) return;
+    __try {
+        if (read_pb_string(message, 0x20, content, 262144)) {
+            enqueue_received(sender, receiver, "", source, 49, content);
+        } else {
+            // 仍提供一个可见事件，不将不完整 XML 交给解析器。
+            enqueue_received(sender, receiver, "", source, 49, nullptr, 1);
+        }
+    } __finally { HeapFree(GetProcessHeap(), 0, content); }
+}
+
 static void sample_all_text(const uintptr_t* batch, size_t stride) {
     __try {
         _InterlockedIncrement64(&receive_statistics.batches);
@@ -274,7 +289,9 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
                 char metadata[16384]{};
                 if (!read_pb_string(message, 0x20, metadata, sizeof(metadata))) metadata[0] = 0;
                 enqueue_received(sender, receiver, "", source, type, metadata);
-            } else if (type == 3 || type == 49 || type == 10000 || type == 10002) {
+            } else if (type == 49) {
+                copy_app_message(message, sender, receiver, source);
+            } else if (type == 3 || type == 10000 || type == 10002) {
                 char image_xml[16384]{};
                 if (read_pb_string(message, 0x20, image_xml, sizeof(image_xml))) {
                     enqueue_received(sender, receiver, "", source, type, image_xml);
@@ -348,6 +365,20 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollTextMessageV2(void* paramete
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV3(void* parameter) {
+    if (!parameter) return ERROR_INVALID_PARAMETER;
+    auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
+    if (!message) return ERROR_NOT_ENOUGH_MEMORY;
+    const DWORD code = poll_received(message.get());
+    if (std::strlen(message->image_xml) >= 16384) {
+        SecureZeroMemory(message->image_xml, 16384);
+        message->reserved |= 1;
+    }
+    std::memcpy(parameter, message.get(), 21792);
+    *static_cast<uint32_t*>(parameter) = 21792;
+    return code;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV4(void* parameter) {
     return poll_received(static_cast<ReceivedMessage*>(parameter));
 }
 

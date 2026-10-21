@@ -60,10 +60,16 @@ struct ReceivedMessage {
     char mention_source[4096];
 #endif
 #ifdef WXBOT_MEDIA_RECEIVE
+#ifdef WXBOT_LARGE_MEDIA_RECEIVE
+    char image_xml[262144];
+#else
     char image_xml[16384];
 #endif
+#endif
 };
-#ifdef WXBOT_MEDIA_RECEIVE
+#ifdef WXBOT_LARGE_MEDIA_RECEIVE
+static_assert(sizeof(ReceivedMessage) == 267552, "Unexpected media receive V4 ABI");
+#elif defined(WXBOT_MEDIA_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 21792, "Unexpected media receive V3 ABI");
 #elif defined(WXBOT_EXTENDED_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 5408, "Unexpected text receive V2 ABI");
@@ -76,11 +82,16 @@ static uint32_t receive_head = 0, receive_count = 0, receive_dropped = 0;
 static uint64_t receive_sequence = 0;
 
 static void enqueue_received(const char* sender, const char* receiver, const char* text,
-                             const char* source = nullptr, uint32_t type = 1, const char* image_xml = nullptr) {
-    ReceivedMessage message{};
+                             const char* source = nullptr, uint32_t type = 1, const char* image_xml = nullptr,
+                             uint32_t reserved = 0) {
+    // 大型转发内容留在堆上，避免消耗微信接收线程的栈。
+    auto storage = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
+    if (!storage) return;
+    auto& message = *storage;
     message.size = sizeof(message);
     message.present = 1;
     message.type = type;
+    message.reserved = reserved;
     message.thread_id = GetCurrentThreadId();
     std::memcpy(message.sender, sender, std::strlen(sender) + 1);
     std::memcpy(message.receiver, receiver, std::strlen(receiver) + 1);
@@ -545,13 +556,13 @@ static DWORD poll_received(ReceivedMessage* output) {
     AcquireSRWLockExclusive(&receive_lock);
     *output = {};
     output->size = sizeof(*output);
-    output->dropped = receive_dropped;
     if (receive_count) {
         *output = received_messages[receive_head];
         SecureZeroMemory(&received_messages[receive_head], sizeof(ReceivedMessage));
         receive_head = (receive_head + 1) % 64;
         --receive_count;
     }
+    output->dropped = receive_dropped;
     ReleaseSRWLockExclusive(&receive_lock);
     _InterlockedDecrement(&active_callbacks);
     return 0;

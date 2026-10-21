@@ -137,7 +137,13 @@ class BotApplication:
             logger.info("图片消息 | 会话ID=%s | 状态=%s | 文件=%s", message.chat_id,
                         message.data.get("image_status", "pending"), message.image_path or "")
         elif message.type == 49:
-            logger.info("文件消息 | 发送者微信ID=%s | 状态=%s | 文件名=%s | 大小=%s | 路径=%s",
+            if message.data.get('app_type') == 19:
+                logger.info('合并转发 | 发送者微信ID=%s | 记录数=%s | 状态=%s',
+                            message.sender_id or message.chat_id,
+                            len(message.data.get('forwarded_records', ())),
+                            message.data.get('forwarded_status', 'pending'))
+            else:
+                logger.info("文件消息 | 发送者微信ID=%s | 状态=%s | 文件名=%s | 大小=%s | 路径=%s",
                         message.sender_id or message.chat_id, message.data.get("file_status", "pending"),
                         json.dumps(message.data.get("file_name", ""), ensure_ascii=False),
                         message.data.get("file_size", 0), json.dumps(message.file_path, ensure_ascii=False))

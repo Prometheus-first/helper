@@ -11,6 +11,7 @@ CAPABILITIES = frozenset({"text.receive", "text.send"})
 TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.text.send",
                                            "group.text.receive", "group.text.send", "group.text.mention",
                                            "image.receive", "image.send",
+                                           "forwarded.receive",
                                            "file.receive", "file.send",
                                            "friend.file.receive", "friend.file.send",
                                            "group.file.receive", "group.file.send",

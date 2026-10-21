@@ -31,6 +31,7 @@ export default defineConfig({
         { text: '文本与真实艾特', link: '/messages/text' },
         { text: '图片收发', link: '/messages/images' },
         { text: '文件收发', link: '/messages/files' },
+        { text: '合并转发解析', link: '/messages/forwarded' },
         { text: '表情提取与发送', link: '/messages/emoticons' },
         { text: '语音合成与发送', link: '/messages/voice' }
       ] },

@@ -84,6 +84,7 @@ python web.py
 | 网页管理多个账号、实时查看消息 | [网页管理台](./guide/web-panel.md) |
 | 找到账号 ID、加入新的群 | [账号与群聊](./guide/account-and-groups.md) |
 | 发送文本、图片、文件、GIF 或语音 | [文本](./messages/text.md) · [图片](./messages/images.md) · [文件](./messages/files.md) · [表情](./messages/emoticons.md) · [语音](./messages/voice.md) |
+| 展开合并转发的文字、原作者和图片记录 | [合并转发解析](./messages/forwarded.md) |
 | 开启接龙和聊天总结 | [群聊功能](./guide/features.md) |
 | 艾特后用语音回复、查看和切换音色 | [Fish Audio 语音回复](./messages/voice.md#fish-audio-文字转语音) |
 | 自动通过好友申请、使用控制台群管理 | [好友申请与群管理](./guide/friends-and-groups.md) |

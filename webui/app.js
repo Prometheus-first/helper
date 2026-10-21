@@ -238,14 +238,14 @@ $('#discover-chats').onclick=()=>action(async()=>{
 $('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');toast('已填入，停止机器人后保存群聊配置');};
 function renderMessages() {
   const query=$('#message-search').value.trim().toLowerCase();
-  const rows=messages.filter(row=>!query||[row.chat_id,row.sender_id,row.sender_name,row.content].some(value=>String(value||'').toLowerCase().includes(query)));
+  const rows=messages.filter(row=>!query||[row.chat_id,row.sender_id,row.sender_name,row.content,row.forwarded_by,row.forwarded_by_id,row.source_time].some(value=>String(value||'').toLowerCase().includes(query)));
   $('#message-count').textContent=(query?rows.length+' / '+messages.length:messages.length)+' 条';
   $('#message-error').textContent=messageError;$('#message-error').classList.toggle('hidden',!messageError);
   const signature=JSON.stringify([robot,query,rows,rows.length?null:state?.state]);
   if(signature===messageSignature)return;
   messageSignature=signature;
   const scroll=$('#message-scroll'),previousTop=scroll.scrollTop;
-  $('#message-list').innerHTML=rows.map(row=>`<tr><td class="message-time" title="${escape(row.date+' '+row.time)}">${escape(row.time)}</td><td><span class="message-context">${row.is_group?'群聊':'私聊'}</span><span class="message-id">${escape(row.chat_id)}</span></td><td><span class="message-sender">${escape(row.sender_name||row.sender_id||'未知发送者')}</span>${row.sender_id?`<span class="message-id">${escape(row.sender_id)}</span>`:''}${row.direction==='outgoing'?'<span class="message-context">发出</span>':''}</td><td class="message-content">${escape(row.content)}</td></tr>`).join('')||`<tr><td colspan="4" class="table-empty">${query?'没有匹配的消息。':state&&activeStates.includes(state.state)?'等待新消息…':'暂无消息。'}</td></tr>`;
+  $('#message-list').innerHTML=rows.map(row=>`<tr><td class="message-time" title="${escape(row.date+' '+row.time)}">${escape(row.time)}</td><td><span class="message-context">${row.is_group?'群聊':'私聊'}</span><span class="message-id">${escape(row.chat_id)}</span></td><td><span class="message-sender">${escape(row.sender_name||row.sender_id||(row.forwarded?'原作者未提供':'未知发送者'))}</span>${row.sender_id?`<span class="message-id">${escape(row.sender_id)}</span>`:''}${row.forwarded?`<span class="message-context">由 ${escape(row.forwarded_by||'未知用户')} 转发</span>`:''}${row.direction==='outgoing'?'<span class="message-context">发出</span>':''}</td><td class="message-content">${row.forwarded?`<span class="message-context">转发记录 ${escape(row.forwarded_index)}${row.source_time?' · '+escape(row.source_time):''}</span>`:''}${escape(row.content)}</td></tr>`).join('')||`<tr><td colspan="4" class="table-empty">${query?'没有匹配的消息。':state&&activeStates.includes(state.state)?'等待新消息…':'暂无消息。'}</td></tr>`;
   scroll.scrollTop=messagePaused?previousTop:scroll.scrollHeight;
 }
 $('#message-search').oninput=renderMessages;
@@ -261,8 +261,9 @@ async function pollMessages(requested,generation) {
     }
     if((messageStream&&messageStream!==tail.stream_id)||tail.reset)messages=[];
     messageStream=tail.stream_id;messageCursor=tail.cursor;messageError='';
-    const existing=new Set(messages.map(row=>row.id));
-    messages=[...messages,...tail.rows.filter(row=>!existing.has(row.id))].slice(-1000);
+    const updated=new Map(tail.rows.map(row=>[row.id,row]));
+    messages=messages.map(row=>{const next=updated.get(row.id);updated.delete(row.id);return next||row;});
+    messages=[...messages,...updated.values()].slice(-1000);
     renderMessages();
   } catch(error) {
     if(requested!==robot||generation!==messageGeneration)return;

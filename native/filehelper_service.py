@@ -65,6 +65,13 @@ class ReceivedMediaMessage(ReceivedTextMessage):
 assert c.sizeof(ReceivedMediaMessage) == 21792
 
 
+class ReceivedMediaMessageV4(ReceivedTextMessage):
+    _fields_ = [("image_xml", c.c_char * 262144)]
+
+
+assert c.sizeof(ReceivedMediaMessageV4) == 267552
+
+
 class ReceiveChannel:
     def __init__(self, pid, *, dll=DLL, poll_export=b"WxPollFileHelperMessage", message_type=ReceivedMessage):
         self.message_type = message_type

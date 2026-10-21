@@ -8,7 +8,7 @@ import ctypes as c
 from collections import deque
 from pathlib import Path
 
-from filehelper_service import NativeFileHelperService, ReceivedMediaMessage
+from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV4
 from wxbot_framework.mentions import parse_at_members
 from run_selftest import TEXT_DLL, K, check, modules, wechat_candidates, run
 from wxbot_framework.text import TextRouter, validate_target, validate_mentions
@@ -67,8 +67,8 @@ def find_account_process(account=None):
 
 class NativeTextService(NativeFileHelperService):
     _dll = TEXT_DLL
-    _poll_export = b"WxPollMediaMessageV3"
-    _message_type = ReceivedMediaMessage
+    _poll_export = b"WxPollMediaMessageV4"
+    _message_type = ReceivedMediaMessageV4
     _run = staticmethod(run_text)
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
@@ -85,6 +85,7 @@ class NativeTextService(NativeFileHelperService):
         self.image_allowlist = frozenset(image_allowlist)
         self._image_receiver = None
         self._file_receiver = None
+        self._forwarded_receiver = None
         self.file_directory = Path(file_directory or
                                    Path(__file__).resolve().parent.parent / ".runtime/files")
         self.wechat_data_directory = Path(wechat_data_directory) if wechat_data_directory is not None else None
@@ -137,6 +138,20 @@ class NativeTextService(NativeFileHelperService):
         self._file_receiver = FileReceiver(FileStore(self.file_directory, account),
             self._download_file, self._deliver_file,
             lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
+        from wxbot_framework.forwarded_receiver import ForwardedReceiver
+        self._forwarded_receiver = ForwardedReceiver(ImageStore(self.media_directory, account),
+            self._download_image, self._deliver_forwarded,
+            lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account,
+            queue_size=8)
+
+    def _deliver_forwarded(self, data):
+        if self._stop.is_set():
+            return
+        for handler in list(self.msg_handlers):
+            try:
+                handler(self.pid, 11046, data, self)
+            except Exception:
+                logger.warning('合并转发消息处理器暂不可用')
 
     def _download_file(self, metadata, destination):
         from wxbot_framework.files import MAX_FILE_BYTES
@@ -201,6 +216,11 @@ class NativeTextService(NativeFileHelperService):
         if self._friend_requests is not None:
             self._friend_requests.close()
             self._friend_requests = None
+        if self._forwarded_receiver is not None:
+            self._forwarded_receiver.close(timeout=30)
+            if self._forwarded_receiver.is_alive:
+                raise RuntimeError('合并转发图片下载尚未结束，保留桥接等待清理重试')
+            self._forwarded_receiver = None
         if self._file_receiver is not None:
             self._file_receiver.close(timeout=30)
             if self._file_receiver.is_alive:
@@ -287,6 +307,24 @@ class NativeTextService(NativeFileHelperService):
             if message.type in (34, 43, 47, 62):
                 data['monitor_only'] = True
                 return data
+            forwarded = None
+            if message.type == 49:
+                from wxbot_framework.forwarded import ForwardedError, parse_forwarded
+                try:
+                    forwarded = parse_forwarded(body)
+                except ForwardedError as error:
+                    if error.forwarded or '<recorditem' in body:
+                        data.update(app_type=19, forwarded_status='failed')
+                if forwarded is not None:
+                    data.update(forwarded.public())
+                    data['forwarded_status'] = 'pending'
+                    if self.image_allowlist and data['chat_id'] not in self.image_allowlist:
+                        data['forwarded_status'] = 'metadata'
+                        for item in data['forwarded_records']:
+                            if item.get('image_status') == 'pending':
+                                item['image_status'] = 'skipped'
+                if getattr(message, 'reserved', 0) & 1:
+                    data['metadata_unavailable'] = True
             if message.type in (3, 49):
                 monitor = getattr(self, 'monitor_handler', None)
                 if monitor is not None:
@@ -296,6 +334,13 @@ class NativeTextService(NativeFileHelperService):
                     self._image_receiver.submit(data)
                 return None
             if message.type == 49:
+                if forwarded is not None:
+                    if self._forwarded_receiver is not None and (
+                            not self.image_allowlist or data['chat_id'] in self.image_allowlist):
+                        self._forwarded_receiver.submit(data, forwarded)
+                    return None
+                if data.get('app_type') == 19 or data.get('metadata_unavailable'):
+                    return None
                 if self._file_receiver is not None and (
                         not self.image_allowlist or data["chat_id"] in self.image_allowlist):
                     self._file_receiver.submit(data)

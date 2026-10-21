@@ -395,7 +395,7 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_runtime_rollover_runs_without_new_messages(self):
         # 禁用连接和所有插件，只验证主循环的定时清理调用。
-        config = json.loads((ROOT / "bot_config.json").read_text(encoding="utf-8"))
+        config = json.loads((ROOT / "bot_config.example.json").read_text(encoding="utf-8"))
         config["members_config_file"] = "members.json"
         config["wechat_account"] = ROBOT
         config["console"] = False

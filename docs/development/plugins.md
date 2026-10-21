@@ -78,6 +78,8 @@ class Plugin:
 
 ## 处理图片
 
+合并转发需要单独声明 `forwarded.receive` 并接收类型 `49`，通过 `message.data["forwarded_records"]` 访问文字和图片结果，见[合并转发解析](../messages/forwarded.md)。普通图片消息仍使用下述类型 `3`。
+
 把 `message_types` 改为 `[1, 3]`，并在 `requires` 中加入 `image.receive`。收到类型 `3` 后，查看 `message.image_path` 与 `message.data["image_status"]`。图片正文为空，不会自动作为文字交给模型。
 
 ## 处理文件附件

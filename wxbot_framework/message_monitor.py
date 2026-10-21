@@ -10,6 +10,7 @@ class MessageBuffer:
         self.rows = deque(maxlen=capacity)
         self.seen = deque(maxlen=capacity * 2)
         self.seen_keys = set()
+        self.forwarded_rows = {}
         self.sequence = 0
         self.stream_id = uuid.uuid4().hex
         self.lock = threading.Lock()
@@ -23,6 +24,7 @@ class MessageBuffer:
             self.rows.clear()
             self.seen.clear()
             self.seen_keys.clear()
+            self.forwarded_rows.clear()
             self.sequence = 0
             self.stream_id = uuid.uuid4().hex
 
@@ -37,7 +39,15 @@ class MessageBuffer:
             content = self._text(message.text)
         elif message.type == 49:
             name = self._text(data.get('file_name'), 256).replace('\\', '/').rsplit('/', 1)[-1]
-            content = '[文件] ' + name if name else '[文件/分享]'
+            if data.get('app_type') == 19:
+                content = '[合并转发] ' + self._text(data.get('forwarded_title'), 256)
+                content += '（无法解析）' if data.get('forwarded_status') == 'failed' else (
+                    f"（{len(data.get('forwarded_records', ()))} 条" +
+                    ('，已截取' if data.get('forwarded_truncated') else '') + '）')
+            elif data.get('metadata_unavailable'):
+                content = '[文件/分享：内容过长或不可读]'
+            else:
+                content = '[文件] ' + name if name else '[文件/分享]'
         else:
             content = {3: '[图片]', 34: '[语音]', 37: '[好友申请]', 43: '[视频]',
                        47: '[表情]', 62: '[视频]', 10000: '[系统消息]', 10002: '[系统消息]'}.get(
@@ -50,18 +60,60 @@ class MessageBuffer:
                'sender_name': '机器人' if data.get('monitor_outgoing') else self._text(sender_name, 128),
                'direction': 'outgoing' if data.get('monitor_outgoing') or message.is_self else 'incoming',
                'type': message.type, 'content': content}
+        projected = [row]
+        records = data.get('forwarded_records')
+        if data.get('app_type') == 19 and isinstance(records, (list, tuple)):
+            for index, item in enumerate(records[:200]):
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get('kind')
+                if kind == 'text':
+                    body = self._text(item.get('text'))
+                elif kind == 'image':
+                    body = '[图片]' + {'ready':' 已保存', 'pending':' 等待下载', 'failed':' 下载失败',
+                                      'unavailable':' 不可下载', 'skipped':' 未下载'}.get(item.get('image_status'), '')
+                else:
+                    body = {'voice':'[语音]', 'video':'[视频]', 'file':'[文件]', 'link':'[链接]',
+                            'forwarded':'[嵌套合并转发]'}.get(kind, '[其他消息]')
+                projected.append(dict(row, type=3 if kind == 'image' else 1 if kind == 'text' else 49,
+                    content=body, sender_id='', sender_name=self._text(item.get('sender_name'),128),
+                    forwarded=True, forwarded_index=index+1,
+                    source_time=self._text(item.get('source_time'),64),
+                    forwarded_by=self._text(sender_name or sender,128),
+                    forwarded_by_id=self._text(sender,128)))
         key = (message.session_id, message.sequence, message.type, message.chat_id, message.is_self)
         deduplicate = bool(message.session_id and message.sequence)
         with self.lock:
             if deduplicate:
                 if key in self.seen_keys:
+                    previous = self.forwarded_rows.get(key)
+                    if previous is not None and len(previous) == len(projected):
+                        positions = {item['id']: i for i, item in enumerate(self.rows)}
+                        for identifier, updated in zip(previous, projected):
+                            position = positions.get(identifier)
+                            if position is None:
+                                continue
+                            old = self.rows[position]
+                            # 到达时间保持不变；revision 驱动增量刷新，id 保持稳定。
+                            comparable = dict(updated, timestamp=old['timestamp'], time=old['time'], date=old['date'])
+                            if comparable == {k:v for k,v in old.items() if k not in ('id','revision')}:
+                                continue
+                            self.sequence += 1
+                            self.rows[position] = dict(comparable, id=identifier, revision=self.sequence)
                     return
                 if len(self.seen) == self.seen.maxlen:
-                    self.seen_keys.discard(self.seen[0])
+                    oldest = self.seen[0]
+                    self.seen_keys.discard(oldest)
+                    self.forwarded_rows.pop(oldest, None)
                 self.seen.append(key)
                 self.seen_keys.add(key)
-            self.sequence += 1
-            self.rows.append(dict(row, id=self.sequence))
+            identifiers = []
+            for projected_row in projected:
+                self.sequence += 1
+                self.rows.append(dict(projected_row, id=self.sequence, revision=self.sequence))
+                identifiers.append(self.sequence)
+            if deduplicate and records is not None:
+                self.forwarded_rows[key] = identifiers
 
     def tail(self, after=0):
         if type(after) is not int or after < 0:
@@ -70,8 +122,10 @@ class MessageBuffer:
             reset = after > self.sequence
             available = list(self.rows)
             # 新页面先显示最近 200 条；已有页面按顺序补齐，不跳过未读批次。
-            rows = available[-200:] if not after or reset else [row for row in available if row['id'] > after][:200]
-            cursor = rows[-1]['id'] if rows else self.sequence
+            initial = not after or reset
+            rows = available[-200:] if initial else sorted(
+                (row for row in available if row['revision'] > after), key=lambda row:row['revision'])[:200]
+            cursor = self.sequence if initial or not rows else rows[-1]['revision']
             return {'rows': [dict(row) for row in rows], 'cursor': cursor, 'latest': self.sequence,
                     'stream_id': self.stream_id, 'reset': reset,
                     'dropped': bool(after and available and after < available[0]['id'] - 1)}
