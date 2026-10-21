@@ -103,6 +103,7 @@ group.file.receive / group.file.send
 friend.request.receive / friend.request.accept
 group.member.invite / group.create
 group.members.read / group.events
+message.recall
 emoticon.extract / emoticon.send
 voice.send / friend.voice.send / group.voice.send
 ```
@@ -112,6 +113,8 @@ voice.send / friend.voice.send / group.voice.send
 好友申请插件订阅 `message_types: [37]`，通过 `message.data["friend_request"]` 取得公开申请 ID、昵称、验证文字及状态，不会取得验证票据或原始 XML。使用 `ctx.accept_friend(request_id, expected_session=message.session_id)` 通过申请。群管理仅提供程序控制台入口。
 
 需要明确启用的插件可在 `plugin.json` 设置 `"default_enabled": false`。当旧配置尚无该插件条目时，框架也会保持关闭；控制台 `enable 插件名` 才会启用并保存设置。
+
+`message.recall` 表示后端可提供微信原始消息编号和撤回通知。框架把撤回事件及媒体监控元数据定向交给内置 `anti_recall` 插件，不广播为普通文本；参考该插件的精确编号匹配、会话缓存和 `ctx.reply` 连接检查。补发插件默认开启，网页监控标记独立保留。
 
 ## 群成员与昵称
 

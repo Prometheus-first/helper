@@ -262,11 +262,11 @@ class PluginManager:
                 self.load_errors[target] = str(error)
                 logger.exception("插件 %s 加载失败，其他插件继续运行", target)
 
-    def dispatch(self, message):
+    def dispatch(self, message, *, only=None):
         with self._lock:
             records = tuple(self.records.values())
         for record in records:
-            if message.type in record.spec.message_types:
+            if (only is None or record.spec.name == only) and message.type in record.spec.message_types:
                 record.enqueue(message)
 
     def status(self):

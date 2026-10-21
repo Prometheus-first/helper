@@ -9,6 +9,7 @@ from .sdk import Message
 
 CAPABILITIES = frozenset({"text.receive", "text.send"})
 TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.text.send",
+                                           "message.recall",
                                            "group.text.receive", "group.text.send", "group.text.mention",
                                            "image.receive", "image.send",
                                            "forwarded.receive",

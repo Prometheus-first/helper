@@ -137,6 +137,10 @@
 
 修改模型配置后重载对应插件或重启。聊天总结、艾特对话会将对应文本交给你配置的模型服务；记录范围见[群聊功能](./features.md)。
 
+## 防撤回补发
+
+`anti_recall` 默认开启，旧配置缺少条目时也会启用。可在网页插件管理关闭，或在 `plugins.anti_recall` 设置 `"enabled": false`。会话白名单非空时只在其中的会话补发；不需要模型配置。详细内容和缓存边界见[防撤回与自动补发](../messages/recall.md)。
+
 ## 语音合成配置
 
 `voice_reply` 的配置和按群音色切换见[语音回复](../messages/voice.md#fish-audio-文字转语音)。模板默认关闭，`tts_config.json` 的密钥与默认音色为空；填好后再启用。`tts_config_file` 默认指向本地 `tts_config.json`。

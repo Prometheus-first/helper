@@ -32,6 +32,28 @@ int main() {
     assert(std::string(current->image_xml) == large);
     assert(WxPollMediaMessageV4(current.get()) == 0 && current->present == 0);
 
+    enqueue_received(sender, receiver, "original", nullptr, 1, nullptr, 0, 18446744073709551600ULL);
+    std::vector<unsigned char> v4(267552 + 128, 0xa5);
+    assert(WxPollMediaMessageV4(v4.data()) == 0);
+    for (size_t i = 267552; i < v4.size(); ++i) assert(v4[i] == 0xa5);
+    enqueue_received(sender, receiver, "original", nullptr, 1, nullptr, 0, 18446744073709551600ULL);
+    assert(WxPollMediaMessageV5(current.get()) == 0);
+    assert(current->size == 267560 && current->native_message_id == 18446744073709551600ULL);
+
+    std::string notice = "<sysmsg type=\"revokemsg\"><revokemsg><session>123@chatroom</session>"
+                         "<newmsgid>1234567890123456789</newmsgid></revokemsg></sysmsg>";
+    SmallString system{};
+    const char* notice_bytes = notice.c_str();
+    std::memcpy(system.data, &notice_bytes, sizeof(notice_bytes));
+    system.length = system.capacity = notice.size();
+    copy_recall_source(&system);
+    assert(WxPollMediaMessageV5(current.get()) == 0 && current->present);
+    assert(current->type == 10002 && current->reserved == 2);
+    assert(std::string(current->image_xml) == notice);
+    system.length = system.capacity = 16384;
+    copy_recall_source(&system);
+    assert(WxPollMediaMessageV5(current.get()) == 0 && !current->present);
+
     // Exercise the actual copy helper at and above the V4 byte boundary.
     unsigned char raw[0x78]{};
     struct Wrapper { void* reserved; SmallString* string; } wrapper{};

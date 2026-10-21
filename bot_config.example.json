@@ -21,6 +21,9 @@
     "max_seconds": 0.3
   },
   "plugins": {
+    "anti_recall": {
+      "enabled": true
+    },
     "picture_idiom": {
       "enabled": false,
       "source": "ffapi",

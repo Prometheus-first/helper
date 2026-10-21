@@ -86,8 +86,16 @@ class BotApplication:
 
     def _emit(self, message):
         self._observe_message(message)
-        if message.data.get('monitor_only'):
+        allowed = self.config.get('chat_allowlist', [])
+        recall = message.type in (10000, 10002) and isinstance(message.data.get('recall'), dict)
+        if recall or message.data.get('monitor_only'):
+            # 防撤回插件需要原始媒体类型和撤回通知；不把监控事件交给普通玩法。
+            if not allowed or message.chat_id in allowed:
+                self.plugins.dispatch(message, only='anti_recall')
             return
+        if message.is_self and message.data.get('native_message_id') and not message.data.get('dispatch_to_plugins', True) and (
+                not allowed or message.chat_id in allowed):
+            self.plugins.dispatch(message, only='anti_recall')
         if message.type in (10000, 10002):
             logger.info("群系统事件 | 群ID=%s", message.chat_id)
             allowed = self.config.get("chat_allowlist", [])

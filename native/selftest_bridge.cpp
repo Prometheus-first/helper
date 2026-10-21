@@ -45,6 +45,9 @@ static DWORD factory_tls = TLS_OUT_OF_INDEXES;
 using ReceiveFunction = uintptr_t (__fastcall*)(void*, const uintptr_t*, uint8_t, uint8_t);
 static ReceiveFunction original_receive = nullptr;
 static bool receive_hook_created = false;
+#ifdef WXBOT_RECALL_RECEIVE
+static bool recall_receive_hook_created = false;
+#endif
 #ifdef WXBOT_FRIEND_RECEIVE
 static bool friend_receive_hook_created = false;
 #endif
@@ -66,8 +69,13 @@ struct ReceivedMessage {
     char image_xml[16384];
 #endif
 #endif
+#ifdef WXBOT_MESSAGE_ID_RECEIVE
+    uint64_t native_message_id;
+#endif
 };
-#ifdef WXBOT_LARGE_MEDIA_RECEIVE
+#ifdef WXBOT_MESSAGE_ID_RECEIVE
+static_assert(sizeof(ReceivedMessage) == 267560, "Unexpected media receive V5 ABI");
+#elif defined(WXBOT_LARGE_MEDIA_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 267552, "Unexpected media receive V4 ABI");
 #elif defined(WXBOT_MEDIA_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 21792, "Unexpected media receive V3 ABI");
@@ -83,7 +91,7 @@ static uint64_t receive_sequence = 0;
 
 static void enqueue_received(const char* sender, const char* receiver, const char* text,
                              const char* source = nullptr, uint32_t type = 1, const char* image_xml = nullptr,
-                             uint32_t reserved = 0) {
+                             uint32_t reserved = 0, uint64_t native_message_id = 0) {
     // 大型转发内容留在堆上，避免消耗微信接收线程的栈。
     auto storage = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!storage) return;
@@ -93,6 +101,11 @@ static void enqueue_received(const char* sender, const char* receiver, const cha
     message.type = type;
     message.reserved = reserved;
     message.thread_id = GetCurrentThreadId();
+#ifdef WXBOT_MESSAGE_ID_RECEIVE
+    message.native_message_id = native_message_id;
+#else
+    (void)native_message_id;
+#endif
     std::memcpy(message.sender, sender, std::strlen(sender) + 1);
     std::memcpy(message.receiver, receiver, std::strlen(receiver) + 1);
     std::memcpy(message.text, text, std::strlen(text) + 1);
@@ -595,6 +608,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_DisableHook(receive_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
+#ifdef WXBOT_RECALL_RECEIVE
+    void* recall_receive_target = reinterpret_cast<void*>(core_base + 0x229e790);
+    if (recall_receive_hook_created) {
+        status = MH_DisableHook(recall_receive_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+#endif
 #ifdef WXBOT_FRIEND_RECEIVE
     void* friend_receive_target = reinterpret_cast<void*>(core_base + 0x3866510);
     if (friend_receive_hook_created) {
@@ -616,6 +636,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
     if (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
     bool hooks_present = hook_created || receive_hook_created || factory_hook_created ||
         image_download_factory_hook_created;
+#ifdef WXBOT_RECALL_RECEIVE
+    hooks_present = hooks_present || recall_receive_hook_created;
+#endif
 #ifdef WXBOT_FRIEND_RECEIVE
     hooks_present = hooks_present || friend_receive_hook_created;
 #endif
@@ -628,6 +651,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_RemoveHook(receive_target);
         if (status != MH_OK) return 600 + status;
     }
+#ifdef WXBOT_RECALL_RECEIVE
+    if (recall_receive_hook_created) {
+        status = MH_RemoveHook(recall_receive_target);
+        if (status != MH_OK) return 600 + status;
+    }
+#endif
 #ifdef WXBOT_FRIEND_RECEIVE
     if (friend_receive_hook_created) {
         status = MH_RemoveHook(friend_receive_target);
@@ -646,6 +675,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
     if (status == MH_OK) {
         hook_created = false; receive_hook_created = false; factory_hook_created = false;
         image_download_factory_hook_created = false;
+#ifdef WXBOT_RECALL_RECEIVE
+        recall_receive_hook_created = false;
+#endif
 #ifdef WXBOT_FRIEND_RECEIVE
         friend_receive_hook_created = false;
 #endif

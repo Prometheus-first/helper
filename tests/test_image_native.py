@@ -37,7 +37,7 @@ class NativeImageABITests(unittest.TestCase):
             self.assertEqual(bridge.WxWaitForTasks(None), 0)
             for name, size in (("WxPollFileHelperMessage", 1312), ("WxPollTextMessage", 1312),
                                ("WxPollTextMessageV2", 5408), ("WxPollMediaMessageV3", 21792),
-                               ("WxPollMediaMessageV4", 267552)):
+                               ("WxPollMediaMessageV4", 267552), ("WxPollMediaMessageV5", 267560)):
                 with self.subTest(export=name):
                     function = getattr(bridge, name)
                     function.argtypes = [c.c_void_p]
@@ -54,7 +54,7 @@ class NativeImageABITests(unittest.TestCase):
     def test_python_structures_match_the_versioned_native_boundaries(self):
         sys.path.insert(0, str(ROOT / "native"))
         from filehelper_service import ReceivedMessage, ReceivedTextMessage, ReceivedMediaMessage
-        from filehelper_service import ReceivedMediaMessageV4
+        from filehelper_service import ReceivedMediaMessageV4, ReceivedMediaMessageV5
         from run_selftest import ImageDownloadConfig
         self.assertEqual(c.sizeof(ReceivedMessage), 1312)
         self.assertEqual(c.sizeof(ReceivedTextMessage), 5408)
@@ -63,6 +63,8 @@ class NativeImageABITests(unittest.TestCase):
         self.assertEqual(c.sizeof(ImageDownloadConfig), 2656)
         self.assertEqual((ReceivedMediaMessageV4.image_xml.offset, c.sizeof(ReceivedMediaMessageV4)),
                          (5408, 267552))
+        self.assertEqual((ReceivedMediaMessageV5.native_message_id.offset, c.sizeof(ReceivedMediaMessageV5)),
+                         (267552, 267560))
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows 原生服务适配")

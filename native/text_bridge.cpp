@@ -3,10 +3,49 @@
 #define WXBOT_EXTENDED_RECEIVE
 #define WXBOT_MEDIA_RECEIVE
 #define WXBOT_LARGE_MEDIA_RECEIVE
+#define WXBOT_MESSAGE_ID_RECEIVE
+#define WXBOT_RECALL_RECEIVE
 #define WXBOT_FRIEND_RECEIVE
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();
+
+using SystemParseFunction = uintptr_t (__fastcall*)(void*, const SmallString*, void*);
+static SystemParseFunction original_system_parse = nullptr;
+
+static void copy_recall_source(const SmallString* source) {
+    __try {
+        if (!source || source->length == 0 || source->length >= 16384 ||
+                source->length > source->capacity) return;
+        const char* content = source->capacity > 15 ?
+            *reinterpret_cast<const char* const*>(source->data) : source->data;
+        char snapshot[16384]{};
+        std::memcpy(snapshot, content, source->length);
+        if (!std::strstr(snapshot, "revokemsg") || !std::strstr(snapshot, "newmsgid")) return;
+        // 2 = 已绑定进程内的系统 XML 入口。会话和编号由 Python 严格解析，不猜成员。
+        enqueue_received("weixin", "weixin", "", nullptr, 10002, snapshot, 2);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}
+
+static uintptr_t __fastcall system_parse(void* object, const SmallString* source, void* context) {
+    _InterlockedIncrement(&active_callbacks);
+    uintptr_t result = 0;
+    __try {
+        copy_recall_source(source);
+        result = original_system_parse(object, source, context);
+    } __finally { _InterlockedDecrement(&active_callbacks); }
+    return result;
+}
+
+static DWORD recall_receive_start() {
+    void* target = reinterpret_cast<void*>(core_base + 0x229e790);
+    MH_STATUS status = MH_CreateHook(target, reinterpret_cast<void*>(&system_parse),
+                                    reinterpret_cast<void**>(&original_system_parse));
+    if (status != MH_OK) return 600 + status;
+    recall_receive_hook_created = true;
+    status = MH_EnableHook(target);
+    return status == MH_OK ? 0 : 600 + status;
+}
 
 struct TextConfig {
     TestConfig base;
@@ -256,10 +295,12 @@ static void copy_app_message(const unsigned char* message, const char* sender,
     if (!content) return;
     __try {
         if (read_pb_string(message, 0x20, content, 262144)) {
-            enqueue_received(sender, receiver, "", source, 49, content);
+            enqueue_received(sender, receiver, "", source, 49, content, 0,
+                             *reinterpret_cast<const uint64_t*>(message + 0x50));
         } else {
             // 仍提供一个可见事件，不将不完整 XML 交给解析器。
-            enqueue_received(sender, receiver, "", source, 49, nullptr, 1);
+            enqueue_received(sender, receiver, "", source, 49, nullptr, 1,
+                             *reinterpret_cast<const uint64_t*>(message + 0x50));
         }
     } __finally { HeapFree(GetProcessHeap(), 0, content); }
 }
@@ -284,23 +325,25 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
             // 接收瞬间复制元数据，不持有任何微信消息对象或字符串指针。
             char source[4096]{};
             if (!try_read_source(message, 0x38, source, sizeof(source))) source[0] = 0;
+            // Sync AddMsg +0x50 -> 消息对象 +0x148；保留 64 位服务器编号，不能用队列序号代替。
+            const uint64_t message_id = *reinterpret_cast<const uint64_t*>(message + 0x50);
             if (monitor_only) {
                 // 只复制已有消息布局的元数据；不下载或解析语音、视频和表情媒体。
                 char metadata[16384]{};
                 if (!read_pb_string(message, 0x20, metadata, sizeof(metadata))) metadata[0] = 0;
-                enqueue_received(sender, receiver, "", source, type, metadata);
+                enqueue_received(sender, receiver, "", source, type, metadata, 0, message_id);
             } else if (type == 49) {
                 copy_app_message(message, sender, receiver, source);
             } else if (type == 3 || type == 10000 || type == 10002) {
                 char image_xml[16384]{};
                 if (read_pb_string(message, 0x20, image_xml, sizeof(image_xml))) {
-                    enqueue_received(sender, receiver, "", source, type, image_xml);
+                    enqueue_received(sender, receiver, "", source, type, image_xml, 0, message_id);
                     if (type == 3) _InterlockedIncrement64(&receive_statistics.queued_images);
                 } else {
                     if (type == 3) _InterlockedIncrement64(&receive_statistics.invalid_images);
                 }
             } else if (read_pb_string(message, 0x20, text, sizeof(text))) {
-                enqueue_received(sender, receiver, text, source);
+                enqueue_received(sender, receiver, text, source, 1, nullptr, 0, message_id);
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -342,7 +385,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
     receive_hook_created = true;
     const DWORD friend_status = friend_receive_start();
     if (friend_status != ERROR_SUCCESS) return friend_status;
-    return 0;
+    return recall_receive_start();
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollTextMessage(void* parameter) {
@@ -379,6 +422,16 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV3(void* paramet
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV4(void* parameter) {
+    if (!parameter) return ERROR_INVALID_PARAMETER;
+    auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
+    if (!message) return ERROR_NOT_ENOUGH_MEMORY;
+    const DWORD code = poll_received(message.get());
+    std::memcpy(parameter, message.get(), 267552);
+    *static_cast<uint32_t*>(parameter) = 267552;
+    return code;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV5(void* parameter) {
     return poll_received(static_cast<ReceivedMessage*>(parameter));
 }
 

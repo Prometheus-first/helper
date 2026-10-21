@@ -8,7 +8,7 @@ import ctypes as c
 from collections import deque
 from pathlib import Path
 
-from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV4
+from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV5
 from wxbot_framework.mentions import parse_at_members
 from run_selftest import TEXT_DLL, K, check, modules, wechat_candidates, run
 from wxbot_framework.text import TextRouter, validate_target, validate_mentions
@@ -67,8 +67,8 @@ def find_account_process(account=None):
 
 class NativeTextService(NativeFileHelperService):
     _dll = TEXT_DLL
-    _poll_export = b"WxPollMediaMessageV4"
-    _message_type = ReceivedMediaMessageV4
+    _poll_export = b"WxPollMediaMessageV5"
+    _message_type = ReceivedMediaMessageV5
     _run = staticmethod(run_text)
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
@@ -286,6 +286,7 @@ class NativeTextService(NativeFileHelperService):
         if self.self_wxid and not previous:
             logger.info("当前账号已识别；好友和群聊文本已就绪")
         if data:
+            data['native_message_id'] = str(getattr(message, 'native_message_id', 0) or '')
             name = self._sender_wechat_name(data["sender_id"]) if data["sender_id"] else None
             if name:
                 data["sender_wechat_name"] = name
@@ -355,15 +356,36 @@ class NativeTextService(NativeFileHelperService):
         # 系统事件不作为聊天正文，不进入模型或普通文本插件。
         sender = message.sender.decode("utf-8")
         receiver = message.receiver.decode("utf-8")
-        if not sender.endswith("@chatroom") or receiver != self.self_wxid:
+        if getattr(message, 'reserved', 0) & 2:
+            # 独立系统解析入口发生在已核对的当前微信进程；这里没有 AddMsg 收发双方。
+            from wxbot_framework.recall import parse_recall
+            recall = parse_recall(message.image_xml.decode('utf-8', errors='replace'))
+            if recall is None or sender != 'weixin' or receiver != 'weixin' or not self.self_wxid:
+                return None
+            chat = recall['chat_id']
+            return {'msg':'', 'content':'', 'wx_type':10002, 'chat_id':chat,
+                    'room_wxid':chat if chat.endswith('@chatroom') else '', 'sender_id':'',
+                    'native_receiver':self.self_wxid, 'self_wxid':self.self_wxid,
+                    'is_self':False, 'sequence':message.sequence, 'recall':recall, 'monitor_only':True}
+        if receiver != self.self_wxid and sender != self.self_wxid:
             return None
-        validate_target(sender)
-        content = message.image_xml.decode("utf-8")
-        self.chats[sender] = {"chat_id": sender, "is_group": True}
-        return {"msg": "", "content": "", "system_content": content, "wx_type": message.type,
-                "chat_id": sender, "room_wxid": sender, "sender_id": "",
+        chat = receiver if sender == self.self_wxid else sender
+        validate_target(chat)
+        content = message.image_xml.decode("utf-8", errors="replace")
+        from wxbot_framework.recall import parse_recall
+        recall = parse_recall(content, chat_id=chat)
+        group = chat.endswith('@chatroom')
+        if not group and recall is None:
+            return None
+        self.chats[chat] = {"chat_id": chat, "is_group": group}
+        data = {"msg": "", "content": "", "system_content": content, "wx_type": message.type,
+                "chat_id": chat, "room_wxid": chat if group else "", "sender_id": "",
                 "native_sender": sender, "native_receiver": receiver,
-                "self_wxid": self.self_wxid, "is_self": False, "sequence": message.sequence}
+                "self_wxid": self.self_wxid, "is_self": False, "sequence": message.sequence,
+                "native_message_id": str(getattr(message, 'native_message_id', 0) or '')}
+        if recall is not None:
+            data.update(recall=recall, monitor_only=True)
+        return data
 
     def _map_friend_request(self, message):
         from wxbot_framework.friend_requests import FriendRequestError, parse_friend_request
