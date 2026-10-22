@@ -21,7 +21,8 @@ export default defineConfig({
         { text: '项目介绍', link: '/' },
         { text: '安装与启动', link: '/guide/quick-start' },
         { text: '配置参考', link: '/guide/configuration' },
-        { text: '账号与群聊', link: '/guide/account-and-groups' }
+        { text: '账号与群聊', link: '/guide/account-and-groups' },
+        { text: '使用许可', link: '/guide/license' }
       ] },
       { text: '使用框架', items: [
         { text: '网页管理台', link: '/guide/web-panel' },

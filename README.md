@@ -2,6 +2,8 @@
 
 📚 [在线文档](https://prometheus-first.github.io/helper/) · [安装与启动](https://prometheus-first.github.io/helper/guide/quick-start.html) · [插件开发](https://prometheus-first.github.io/helper/development/plugins.html)
 
+**使用许可：允许个人自用，禁止商业使用。** 允许个人学习研究及非商业修改、免费分享，分享时须保留协议和版权声明。完整条款见 [LICENSE](LICENSE)，第三方组件继续适用各自的许可证。
+
 项目已在linux.do公开声明[https://linux.do/](https://linux.do/t/topic/3029497/51)
 
 交流群
@@ -26,7 +28,7 @@
 面向 Windows x64、微信 4.1.15.13 的 Python 插件框架。支持 `web.py` 网页管理和 `main.py` 控制台入口；原生桥接负责文本、图片、文件附件收发和表情、语音发送，功能以插件加载。
 
 
-# 本项目仅供学习，请勿用于违法行为
+# 本项目仅供个人非商业使用，请勿用于违法行为
 
 ## 功能
 

@@ -1,6 +1,7 @@
 {
   "name": "helper-docs",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev docs",
