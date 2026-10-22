@@ -39,7 +39,7 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["messages"][1]["content"], "中文")
         self.assertEqual(payload["response_format"], {"type": "json_object"})
-        self.assertNotIn("thinking", payload)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(call.call_args.kwargs["timeout"], 20)
 
     def test_compatible_gateway_preserves_version_path_without_vendor_parameters(self):
@@ -90,6 +90,65 @@ class LLMTests(unittest.TestCase):
         body = json.loads(call.call_args.args[0].data)
         self.assertEqual(body["thinking"], {"type": "disabled"})
         self.assertEqual(body["temperature"], 0.5)
+
+    def test_explicit_reasoning_options_override_official_defaults(self):
+        for extra in ({"thinking":{"type":"enabled"}}, {"reasoning_effort":"low"}):
+            with self.subTest(extra=extra):
+                client = LLMClient({**self.options, "extra_body":extra})
+                with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:
+                    client.complete_json("JSON", "测试")
+                body = json.loads(call.call_args.args[0].data)
+                for key, value in extra.items():
+                    self.assertEqual(body[key], value)
+                if "thinking" not in extra:
+                    self.assertNotIn("thinking", body)
+
+    def test_legacy_reasoner_and_similar_host_do_not_receive_non_thinking_default(self):
+        for change in ({"model":"deepseek-reasoner"}, {"base_url":"https://api.deepseek.com.example.test/v1"}):
+            with self.subTest(change=change):
+                client = LLMClient({**self.options, **change})
+                with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:
+                    client.complete_json("JSON", "测试")
+                self.assertNotIn("thinking", json.loads(call.call_args.args[0].data))
+
+    def test_official_empty_json_response_retries_once_in_prompt_mode(self):
+        with patch("wxbot_framework.llm.urlopen", side_effect=[self.response(''),self.response('```json\n{"reply":"成功"}\n```')]) as call:
+            self.assertEqual(self.client.complete_json("原功能规则 JSON", "原输入"), {"reply":"成功"})
+        self.assertEqual(call.call_count, 2)
+        first, second = [json.loads(args.args[0].data) for args in call.call_args_list]
+        self.assertIn("response_format", first)
+        self.assertNotIn("response_format", second)
+        self.assertIn("原功能规则", second["messages"][0]["content"])
+        self.assertEqual(first["messages"][1], second["messages"][1])
+        self.assertEqual(first["thinking"], second["thinking"])
+        self.assertTrue(self.client.json_mode)
+
+    def test_gateway_empty_response_retry_keeps_configured_protocol(self):
+        client = LLMClient({**self.options,"base_url":"https://gateway.example.test/v1"})
+        with patch("wxbot_framework.llm.urlopen", side_effect=[self.response(None),self.response('{"reply":"成功"}')]) as call:
+            self.assertEqual(client.complete_json("JSON", "测试"), {"reply":"成功"})
+        requests = [json.loads(args.args[0].data) for args in call.call_args_list]
+        self.assertEqual(requests[0], requests[1])
+        self.assertNotIn("thinking", requests[0])
+
+    def test_reasoning_only_responses_never_become_the_reply_and_retry_is_bounded(self):
+        raw = {"choices":[{"finish_reason":"stop","message":{"content":"", "reasoning_content":"private-reasoning-text"}}]}
+        with patch("wxbot_framework.llm.urlopen", side_effect=[io.BytesIO(json.dumps(raw).encode()),io.BytesIO(json.dumps(raw).encode())]) as call:
+            with self.assertRaisesRegex(LLMError,"未取得最终答案") as caught:
+                self.client.complete_json("JSON", "测试")
+        self.assertEqual(call.call_count, 2)
+        self.assertNotIn("private-reasoning-text", str(caught.exception))
+
+    def test_refusal_filter_tool_call_and_truncation_do_not_retry(self):
+        cases = [("content_filter",{}), ("stop",{"refusal":"private-provider-detail"}),
+                 ("tool_calls",{}), ("stop",{"tool_calls":[{"id":"test"}]}), ("length",{})]
+        for finish, fields in cases:
+            raw = {"choices":[{"finish_reason":finish,"message":{"content":"",**fields}}]}
+            with self.subTest(finish=finish,fields=fields), patch("wxbot_framework.llm.urlopen",return_value=io.BytesIO(json.dumps(raw).encode())) as call:
+                with self.assertRaises(LLMError) as caught:
+                    self.client.complete_json("JSON", "测试")
+                self.assertEqual(call.call_count, 1)
+                self.assertNotIn("private-provider-detail", str(caught.exception))
 
     def test_extension_cannot_override_protocol_or_authentication_fields(self):
         for key in ("model", "messages", "stream", "response_format", "max_tokens", "max_completion_tokens", "api_key", "Authorization"):

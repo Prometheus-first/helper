@@ -158,11 +158,15 @@
 | `json_mode` | `true` | 发送 `response_format: {"type":"json_object"}`；接口不支持时改为 `false` |
 | `token_limit_parameter` | `max_tokens` | 可改为 `max_completion_tokens`，请求只发送选中的一种令牌参数 |
 | `max_tokens` | `512` | 上述令牌参数的数值，支持 128–4096 |
-| `extra_body` | `{}` | 可选扩展请求参数；默认不发送 DeepSeek 的 `thinking` 等专属字段 |
+| `extra_body` | `{}` | 可选扩展请求参数；其他兼容服务默认不发送 DeepSeek 的 `thinking` 等专属字段 |
 
-关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结和对话仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。不会因 HTTP 错误自动换参数重试。网页中的这三项设置位于“大模型 → 高级选项”。
+关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结和对话仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。网页中的这三项设置位于“大模型 → 高级选项”。
 
-如要显式关闭 DeepSeek 思考，可在 `extra_body` 填写 `{"thinking":{"type":"disabled"}}`。其他扩展参数按当前服务的文档填写；切换服务时请一并检查或清空。扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
+官方 `https://api.deepseek.com` 的 `deepseek-flash`、`deepseek-v4-pro` 和 `deepseek-chat` 默认关闭思考，保留旧版的快速回复行为；旧的 `deepseek-reasoner` 不强制关闭。可在 `extra_body` 中显式设置 `thinking` 或 `reasoning_effort` 覆盖默认行为，例如 `{"thinking":{"type":"enabled"}}`。使用其他域名的兼容网关时不会自动添加这些字段；如有需要，按服务商文档填写。切换服务时请检查或清空扩展参数。
+
+若接口正常结束却返回空正文，最多重试一次。官方 DeepSeek 的 JSON 模式可能[偶发空正文](https://api-docs.deepseek.com/guides/json_mode/)，重试时改用提示词 JSON 输出，结果仍须通过严格 JSON 校验；不会把思考过程当成回复。HTTP 错误、超时、内容过滤、拒绝、工具调用或令牌截断不会自动重试。若持续出现空正文，可在网页高级选项中关闭 JSON 模式。
+
+扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
 
 远程接口使用 HTTPS；本机服务也支持 `http://localhost:端口/v1`、`http://127.0.0.1:端口/v1` 和 IPv6 回环地址。本地服务不校验密钥时，可在 `api_key` 填非空占位值。不同模型支持的参数以服务商文档为准；OpenAI 的参数定义可参阅 [Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 
