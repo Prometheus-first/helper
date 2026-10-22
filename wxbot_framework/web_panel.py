@@ -291,7 +291,11 @@ class PanelController:
             value = deepcopy(read_json(path))
             if name in ('llm', 'tts'):
                 result[name] = {key: value[key] for key in
-                    ('base_url', 'model', 'timeout_seconds', 'max_tokens', 'default_voice', 'max_chars_per_clip') if key in value}
+                    ('base_url', 'model', 'timeout_seconds', 'max_tokens', 'json_mode',
+                     'token_limit_parameter', 'extra_body', 'default_voice', 'max_chars_per_clip') if key in value}
+                if name == 'llm':
+                    for key, default in (('json_mode', True), ('token_limit_parameter', 'max_tokens'), ('extra_body', {})):
+                        result[name].setdefault(key, default)
                 result[name]['api_key_configured'] = bool(value.get('api_key'))
             else:
                 result['groups'] = list(value.get('groups', {}))
@@ -339,7 +343,7 @@ class PanelController:
                 if name not in paths or not isinstance(data[name], dict):
                     raise PanelError('模型配置格式不正确')
                 value = read_json(paths[name])
-                fields = {'base_url', 'model', 'timeout_seconds'} | ({'max_tokens'} if name == 'llm'
+                fields = {'base_url', 'model', 'timeout_seconds'} | ({'max_tokens', 'json_mode', 'token_limit_parameter', 'extra_body'} if name == 'llm'
                             else {'default_voice', 'max_chars_per_clip'})
                 for key in fields:
                     if key in data[name]:

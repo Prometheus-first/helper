@@ -1,7 +1,7 @@
 {
   "name": "chat_summary",
   "api": "v1",
-  "description": "DeepSeek 总结当前群成员或全群当天聊天",
+  "description": "使用配置的大模型总结当前群成员或全群当天聊天",
   "entry": "__init__.py",
   "requires": ["group.text.receive", "group.text.send"]
 }

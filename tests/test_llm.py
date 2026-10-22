@@ -39,8 +39,87 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["messages"][1]["content"], "中文")
         self.assertEqual(payload["response_format"], {"type": "json_object"})
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("thinking", payload)
         self.assertEqual(call.call_args.kwargs["timeout"], 20)
+
+    def test_compatible_gateway_preserves_version_path_without_vendor_parameters(self):
+        self.client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1/", "model": "custom-model"})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"你好"}')) as call:
+            self.assertEqual(self.client.complete_json("返回 JSON", "你好"), {"reply": "你好"})
+        request = call.call_args.args[0]
+        self.assertEqual(request.full_url, "https://gateway.example.test/v1/chat/completions")
+        self.assertEqual(set(json.loads(request.data)), {"model", "messages", "response_format", "max_tokens", "stream"})
+
+    def test_full_endpoint_is_not_appended_twice(self):
+        client = LLMClient({**self.options, "base_url": "https://gateway.example.test/v1/chat/completions/"})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:
+            client.complete_json("JSON", "测试")
+        self.assertEqual(call.call_args.args[0].full_url, "https://gateway.example.test/v1/chat/completions")
+
+    def test_completion_token_parameter_sends_only_selected_limit(self):
+        client = LLMClient({**self.options, "token_limit_parameter": "max_completion_tokens", "max_tokens": 2048})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:
+            client.complete_json("JSON", "测试")
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(body["max_completion_tokens"], 2048)
+        self.assertNotIn("max_tokens", body)
+
+    def test_prompt_json_mode_omits_response_format_and_accepts_fenced_json(self):
+        client = LLMClient({**self.options, "json_mode": False})
+        for content in ('{"reply":"你好"}', '```json\n{"reply":"你好"}\n```', '```\n{"reply":"你好"}\n```'):
+            with self.subTest(content=content), patch("wxbot_framework.llm.urlopen", return_value=self.response(content)) as call:
+                self.assertEqual(client.complete_json("原功能规则", "测试"), {"reply": "你好"})
+                body = json.loads(call.call_args.args[0].data)
+                self.assertNotIn("response_format", body)
+                self.assertIn("原功能规则", body["messages"][0]["content"])
+                self.assertIn("JSON 对象", body["messages"][0]["content"])
+
+    def test_prompt_mode_still_requires_a_single_json_object(self):
+        client = LLMClient({**self.options, "json_mode": False})
+        for content in ('这是普通回答', '[]', '前言\n```json\n{}\n```', '```json\n{}\n```\n后记', '{} {}'):
+            with self.subTest(content=content), patch("wxbot_framework.llm.urlopen", return_value=self.response(content)):
+                with self.assertRaises(LLMError):
+                    client.complete_json("JSON", "测试")
+
+    def test_vendor_parameters_are_opt_in_and_copied(self):
+        extra = {"thinking": {"type": "disabled"}, "temperature": 0.5}
+        client = LLMClient({**self.options, "extra_body": extra})
+        extra["thinking"]["type"] = "enabled"
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:
+            client.complete_json("JSON", "测试")
+        body = json.loads(call.call_args.args[0].data)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertEqual(body["temperature"], 0.5)
+
+    def test_extension_cannot_override_protocol_or_authentication_fields(self):
+        for key in ("model", "messages", "stream", "response_format", "max_tokens", "max_completion_tokens", "api_key", "Authorization"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "不能覆盖"):
+                LLMClient({**self.options, "extra_body": {key: "forbidden"}})
+
+    def test_invalid_extensions_and_compatibility_options(self):
+        for change in ({"json_mode": "false"}, {"token_limit_parameter": "max_output_tokens"},
+                       {"extra_body": []}, {"extra_body": None}, {"extra_body": {1: True}},
+                       {"extra_body": {"temperature": float("nan")}},
+                       {"extra_body": {"value": object()}}, {"extra_body": {"value": "a" * 16384}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                LLMClient({**self.options, **change})
+
+    def test_local_http_is_allowed_only_for_loopback_hosts(self):
+        for url in ("http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://[::1]:8080/v1"):
+            with self.subTest(url=url):
+                self.assertEqual(LLMClient({**self.options, "base_url": url}).endpoint, url + "/chat/completions")
+        for url in ("http://192.168.1.2:8000/v1", "http://localhost.example.test/v1", "https://host:bad/v1",
+                    "https://host:0/v1", "https://host/v1?token=private", "https://host/v1#fragment", "https://host/\n/v1"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                LLMClient({**self.options, "base_url": url})
+
+    def test_http_errors_are_not_retried_or_returned_with_private_payloads(self):
+        error = HTTPError("https://example.test", 400, "private prompt or credential", {}, None)
+        with patch("wxbot_framework.llm.urlopen", side_effect=error) as call:
+            with self.assertRaises(LLMError) as caught:
+                self.client.complete_json("private prompt", "private content")
+        self.assertEqual(call.call_count, 1)
+        self.assertNotIn("private", str(caught.exception))
 
     def test_config_from_utf8_bom_file(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -179,7 +179,7 @@ function fill(form, values) {
   for (const input of form.elements) {
     if (!(input.name in values)) continue;
     if (input.type === 'checkbox') input.checked = values[input.name] === true;
-    else input.value = values[input.name] ?? '';
+    else input.value = input.name === 'extra_body' ? JSON.stringify(values[input.name] ?? {}, null, 2) : values[input.name] ?? '';
   }
 }
 async function loadConfig() {
@@ -189,7 +189,8 @@ async function loadConfig() {
   fill($('#groups-form'), {...config, groups:config.groups?.join('\n')||''});
   fill($('#scope-form'), {chat_allowlist:config.chat_allowlist.join('\n')});
   for (const name of ['llm','tts']) {
-    const form = $('#'+name+'-form'); fill(form, config[name]);
+    const form = $('#'+name+'-form');
+    fill(form, {...(name === 'llm' ? {json_mode:true, token_limit_parameter:'max_tokens', extra_body:{}} : {}), ...config[name]});
     form.elements.api_key.value = ''; form.elements.clear_api_key.checked = false;
     $('.key-state',form).textContent = config[name]?.api_key_configured ? '已配置' : '尚未配置';
   }
@@ -227,8 +228,17 @@ $('#plugin-form').onsubmit=e=>{e.preventDefault();action(async()=>{let options;t
 $('#groups-form').onsubmit=e=>{e.preventDefault();action(()=>save({groups:lines(e.target.elements.groups.value),history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked}));};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
 for (const name of ['llm','tts']) $('#'+name+'-form').onsubmit=e=>{
-  e.preventDefault();const values={};for(const input of e.target.elements){if(!input.name)continue;values[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
-  action(()=>save({[name]:values}));
+  e.preventDefault();
+  action(()=>{
+    const values={};
+    for(const input of e.target.elements){if(!input.name)continue;values[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
+    if(name === 'llm') {
+      try { values.extra_body=JSON.parse(values.extra_body.trim() || '{}'); }
+      catch { throw new Error('扩展参数的 JSON 格式有误，请检查逗号和引号'); }
+      if(values.extra_body === null || Array.isArray(values.extra_body) || typeof values.extra_body !== 'object')throw new Error('扩展参数应为 JSON 对象，例如 {}');
+    }
+    return save({[name]:values});
+  });
 };
 $('#delay-form').onsubmit=e=>{e.preventDefault();const f=e.target.elements;action(()=>save({text_send_delay:{enabled:f.enabled.checked,characters_per_group:Number(f.characters_per_group.value),min_seconds:Number(f.min_seconds.value),max_seconds:Number(f.max_seconds.value)}}));};
 $('#discover-chats').onclick=()=>action(async()=>{

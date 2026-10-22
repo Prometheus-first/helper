@@ -178,6 +178,41 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['groups']['123@chatroom'], data['groups']['123@chatroom'])
         self.assertEqual(self.controller.store.load()['chat_allowlist'], ['filehelper','123@chatroom','456@chatroom'])
 
+    def test_compatible_llm_options_round_trip_without_changing_saved_key(self):
+        path = self.root/'llm_config.json'
+        original = read_json(path)
+        original['api_key'] = 'private-model-key'
+        path.write_text(json.dumps(original), encoding='utf-8')
+        settings = {'base_url':'https://gateway.example.test/v1', 'model':'custom-model',
+                    'json_mode':False, 'token_limit_parameter':'max_completion_tokens',
+                    'extra_body':{'reasoning_effort':'low'}}
+        self.controller.save_configuration({'llm':settings})
+        saved = read_json(path)
+        for key, value in settings.items():
+            self.assertEqual(saved[key], value)
+            self.assertEqual(self.controller.configuration()['llm'][key], value)
+        self.assertEqual(saved['api_key'], 'private-model-key')
+        self.assertNotIn('private-model-key', json.dumps(self.controller.configuration()))
+        self.controller.save_configuration({'llm':{'extra_body':{}}})
+        self.assertEqual(read_json(path)['extra_body'], {})
+
+    def test_legacy_llm_config_has_compatible_defaults_and_invalid_edits_are_atomic(self):
+        path = self.root/'llm_config.json'
+        value = read_json(path)
+        for key in ('json_mode', 'token_limit_parameter', 'extra_body'):
+            value.pop(key, None)
+        path.write_text(json.dumps(value), encoding='utf-8')
+        settings = self.controller.configuration()['llm']
+        self.assertTrue(settings['json_mode'])
+        self.assertEqual(settings['token_limit_parameter'], 'max_tokens')
+        self.assertEqual(settings['extra_body'], {})
+        original = path.read_bytes()
+        for edit in ({'json_mode':'false'}, {'token_limit_parameter':'invalid'}, {'extra_body':[]},
+                     {'extra_body':{'stream':True}}):
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.controller.save_configuration({'llm':edit})
+            self.assertEqual(path.read_bytes(), original)
+
     def test_invalid_model_or_group_does_not_partially_save(self):
         original = {p:p.read_bytes() for p in self.root.glob('*_config.json')}
         for data in ({'llm':{'model':'changed'},'groups':['not-a-room']},

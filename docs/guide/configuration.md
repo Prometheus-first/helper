@@ -127,11 +127,46 @@
   "api_key": "YOUR_API_KEY",
   "model": "deepseek-flash",
   "timeout_seconds": 20,
-  "max_tokens": 512
+  "max_tokens": 512,
+  "json_mode": true,
+  "token_limit_parameter": "max_tokens",
+  "extra_body": {}
 }
 ```
 
-以上是项目模板的接口和模型配置。密钥填写自己的值，模型名称以服务商实际提供的模型为准。配置读取入口由 `bot_config.json` 的 `llm_config_file` 指定。
+支持 DeepSeek 和其他提供 OpenAI 兼容 **Chat Completions** 接口的服务。以上保留项目的 DeepSeek 默认地址和模型；密钥与模型名称填写服务商实际提供的值。配置读取入口由 `bot_config.json` 的 `llm_config_file` 指定，也可以在网页“模型与语音”中修改。
+
+### 换用其他兼容服务
+
+```json
+{
+  "base_url": "https://gateway.example.com/v1",
+  "api_key": "YOUR_API_KEY",
+  "model": "YOUR_MODEL_NAME",
+  "timeout_seconds": 30,
+  "max_tokens": 2048,
+  "json_mode": true,
+  "token_limit_parameter": "max_tokens",
+  "extra_body": {}
+}
+```
+
+`gateway.example.com` 是占位地址，需要替换。`base_url` 保留服务商要求的路径前缀，例如 `/v1`；程序在后面追加 `/chat/completions`。也可以直接填写完整的 `/chat/completions` 地址，不会重复追加。仅提供 Responses 或其他原生协议的服务不能直接使用。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `json_mode` | `true` | 发送 `response_format: {"type":"json_object"}`；接口不支持时改为 `false` |
+| `token_limit_parameter` | `max_tokens` | 可改为 `max_completion_tokens`，请求只发送选中的一种令牌参数 |
+| `max_tokens` | `512` | 上述令牌参数的数值，支持 128–4096 |
+| `extra_body` | `{}` | 可选扩展请求参数；默认不发送 DeepSeek 的 `thinking` 等专属字段 |
+
+关闭 JSON 模式后，程序会通过提示词要求模型返回 JSON，并允许完整包在代码围栏中的 JSON 对象；成语接龙、总结和对话仍需要模型正确输出 JSON，普通文字不能作为结构化结果使用。不会因 HTTP 错误自动换参数重试。网页中的这三项设置位于“大模型 → 高级选项”。
+
+如要显式关闭 DeepSeek 思考，可在 `extra_body` 填写 `{"thinking":{"type":"disabled"}}`。其他扩展参数按当前服务的文档填写；切换服务时请一并检查或清空。扩展对象最多 16 KiB，不能覆盖 `model`、`messages`、`stream`、`response_format`、令牌上限或认证字段，密钥只填 `api_key`。
+
+远程接口使用 HTTPS；本机服务也支持 `http://localhost:端口/v1`、`http://127.0.0.1:端口/v1` 和 IPv6 回环地址。本地服务不校验密钥时，可在 `api_key` 填非空占位值。不同模型支持的参数以服务商文档为准；OpenAI 的参数定义可参阅 [Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
+
+旧配置无需补齐新增字段，缺省值与上表一致。
 
 模板默认关闭 `idiom_chain`、`chat_summary`、`mention_chat`。填写有效模型配置后，开启需要的插件，再执行 `--check`。
 

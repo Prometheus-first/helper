@@ -78,7 +78,7 @@ python tools/init_config.py
 }
 ```
 
-3. `llm_config.json`：填写自己的 `api_key`、`base_url` 和 `model`。模板保留 DeepSeek 接口格式，密钥为空。
+3. `llm_config.json`：填写自己的 `api_key`、`base_url` 和 `model`。支持 DeepSeek 及 OpenAI 兼容 Chat Completions 接口；模板密钥为空，兼容选项见[大模型配置](docs/guide/configuration.md#大模型配置)。
 4. 模板默认关闭需要模型的 `idiom_chain`、`chat_summary`、`mention_chat` 插件。填写模型配置后，把它们的 `enabled` 改为 `true`。
 5. 需要艾特后的语音回复时，安装 `requirements-voice.txt`，填写自己的 `tts_config.json`，再启用 `voice_reply` 和 `mention_chat`。语音配置模板的密钥、默认音色均为空，使用 `/查看音色` 和 `/音色 名称` 选择自己的音色，详见[语音回复](docs/messages/voice.md#fish-audio-文字转语音)。
 

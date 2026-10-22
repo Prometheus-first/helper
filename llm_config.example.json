@@ -3,5 +3,8 @@
   "api_key": "",
   "model": "deepseek-flash",
   "timeout_seconds": 20,
-  "max_tokens": 512
+  "max_tokens": 512,
+  "json_mode": true,
+  "token_limit_parameter": "max_tokens",
+  "extra_body": {}
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -19,11 +20,25 @@ class LLMClient:
             raise ValueError("大模型配置必须是 JSON 对象")
         base_url = options.get("base_url", "https://api.deepseek.com")
         if not isinstance(base_url, str):
-            raise ValueError("大模型 base_url 必须是 HTTPS 地址字符串")
+            raise ValueError("大模型 base_url 必须是接口地址字符串")
         self.base_url = base_url.rstrip("/")
-        parsed = urlsplit(self.base_url)
-        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("大模型 base_url 应为不含认证信息的 HTTPS 地址")
+        try:
+            parsed = urlsplit(self.base_url)
+            local = parsed.hostname == "localhost"
+            if not local and parsed.hostname:
+                try:
+                    local = ip_address(parsed.hostname).is_loopback
+                except ValueError:
+                    pass
+            valid = (parsed.scheme == "https" or (parsed.scheme == "http" and local))
+            valid = valid and parsed.hostname and parsed.port != 0
+            valid = valid and not (parsed.username or parsed.password or parsed.query or parsed.fragment)
+        except ValueError:
+            valid = False
+        if not valid or any(ch.isspace() or ord(ch) < 32 for ch in base_url):
+            raise ValueError("大模型 base_url 应为不含认证信息的 HTTPS 地址；本机回环地址可使用 HTTP")
+        self.endpoint = (self.base_url if self.base_url.endswith("/chat/completions")
+                         else self.base_url + "/chat/completions")
         self.model = options.get("model", "deepseek-flash")
         self._api_key = options.get("api_key", "")
         if not isinstance(self.model, str) or not self.model.strip():
@@ -36,17 +51,41 @@ class LLMClient:
             raise ValueError("timeout_seconds 应为 1–60 秒")
         if type(self.max_tokens) is not int or not 128 <= self.max_tokens <= 4096:
             raise ValueError("max_tokens 应为 128–4096 的整数")
+        self.json_mode = options.get("json_mode", True)
+        if type(self.json_mode) is not bool:
+            raise ValueError("json_mode 应为布尔值")
+        self.token_limit_parameter = options.get("token_limit_parameter", "max_tokens")
+        if self.token_limit_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ValueError("token_limit_parameter 应为 max_tokens 或 max_completion_tokens")
+        extra = options.get("extra_body", {})
+        if not isinstance(extra, dict) or not all(isinstance(key, str) for key in extra):
+            raise ValueError("extra_body 应为 JSON 对象")
+        reserved = {"model", "messages", "stream", "response_format", "max_tokens", "max_completion_tokens",
+                    "api_key", "authorization", "Authorization"}
+        if reserved.intersection(extra):
+            raise ValueError("extra_body 不能覆盖模型、消息、输出格式、令牌上限或认证字段")
+        try:
+            encoded = json.dumps(extra, ensure_ascii=False, allow_nan=False)
+            if len(encoded.encode("utf-8")) > 16384:
+                raise ValueError
+            # 隔离调用方后续修改，扩展参数只在显式配置时发送。
+            self.extra_body = json.loads(encoded)
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("extra_body 必须是有效 JSON，且不能超过 16 KiB") from None
 
     @classmethod
     def from_file(cls, path):
         return cls(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
     def complete_json(self, system, user):
+        if not self.json_mode:
+            system += "\n\n请只返回一个有效的 JSON 对象，不要使用 Markdown 代码围栏或附加说明。"
         payload = {"model": self.model, "messages": [{"role": "system", "content": system},
                                                        {"role": "user", "content": user}],
-                   "response_format": {"type": "json_object"}, "max_tokens": self.max_tokens,
-                   "thinking": {"type": "disabled"}, "stream": False}
-        request = Request(self.base_url + "/chat/completions",
+                   self.token_limit_parameter: self.max_tokens, "stream": False, **self.extra_body}
+        if self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        request = Request(self.endpoint,
                           data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                           headers={"Authorization": "Bearer " + self._api_key,
                                    "Content-Type": "application/json"}, method="POST")
@@ -62,6 +101,11 @@ class LLMClient:
             content = choice["message"]["content"]
             if not isinstance(content, str) or not content.strip():
                 raise LLMError("大模型返回了空结果")
+            content = content.strip()
+            if not self.json_mode and content.startswith("```") and content.endswith("```"):
+                opening, separator, body = content.partition("\n")
+                if separator and opening.strip().lower() in ("```", "```json"):
+                    content = body[:-3].strip()
             data = json.loads(content)
             if not isinstance(data, dict):
                 raise LLMError("大模型结果应为 JSON 对象")
