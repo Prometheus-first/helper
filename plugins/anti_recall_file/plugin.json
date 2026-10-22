@@ -1,0 +1,7 @@
+{
+  "api": "v1",
+  "default_enabled": true,
+  "description": "文件被撤回后按原文件名重新发送已下载的附件，独立开关",
+  "message_types": [49, 10000, 10002],
+  "requires": ["file.receive", "file.send", "message.recall"]
+}

@@ -91,11 +91,11 @@ class BotApplication:
         if recall or message.data.get('monitor_only'):
             # 防撤回插件需要原始媒体类型和撤回通知；不把监控事件交给普通玩法。
             if not allowed or message.chat_id in allowed:
-                self.plugins.dispatch(message, only='anti_recall')
+                self._dispatch_recall_plugins(message)
             return
         if message.is_self and message.data.get('native_message_id') and not message.data.get('dispatch_to_plugins', True) and (
                 not allowed or message.chat_id in allowed):
-            self.plugins.dispatch(message, only='anti_recall')
+            self._dispatch_recall_plugins(message)
         if message.type in (10000, 10002):
             logger.info("群系统事件 | 群ID=%s", message.chat_id)
             allowed = self.config.get("chat_allowlist", [])
@@ -136,6 +136,10 @@ class BotApplication:
                 self.plugins.dispatch(message)
             return
         self._emit_chat(message)
+
+    def _dispatch_recall_plugins(self, message):
+        for name in ('anti_recall', 'anti_recall_image', 'anti_recall_file'):
+            self.plugins.dispatch(message, only=name)
 
     def _emit_chat(self, message):
         # 先显示会话 ID，未加入白名单的新群也能被发现；群正文不进入消息日志。

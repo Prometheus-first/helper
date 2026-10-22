@@ -2,6 +2,7 @@
 from collections import OrderedDict
 
 from wxbot_framework.recall import message_id
+from wxbot_framework.media_recall import is_file_attachment
 from wxbot_framework.summary import split_text
 
 
@@ -17,11 +18,14 @@ class Plugin:
         if len(cache) > 1000:
             cache.popitem(last=False)
 
-    def _reply(self, key, content, message, ctx):
-        if not content or self.recalled.get(key) is not False:
+    def _reply(self, key, entry, message, ctx):
+        if not entry or self.recalled.get(key) is not False:
             return
+        content, delegate = entry
         # 在发送前消费通知；重复系统回调或媒体下载完成不会再次补发。
         self.recalled[key] = True
+        if delegate and ctx.plugin_is_active(delegate):
+            return
         for part in split_text('撤回的消息是：' + content, byte_limit=1023):
             if ctx.reply(message, part) is False:
                 break
@@ -56,8 +60,11 @@ class Plugin:
         if not isinstance(content, str) or not content or '\0' in content:
             return
         key = (message.session_id, message.chat_id, identifier)
-        self._put(self.originals, key, content[:2000])
-        self._reply(key, content[:2000], message, ctx)
+        delegate = ('anti_recall_image' if message.type == 3 else
+                    'anti_recall_file' if is_file_attachment(message) else '')
+        entry = content[:2000], delegate
+        self._put(self.originals, key, entry)
+        self._reply(key, entry, message, ctx)
 
     def on_unload(self, ctx):
         self.originals.clear()

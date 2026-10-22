@@ -178,7 +178,7 @@
 
 ## 防撤回补发
 
-`anti_recall` 默认开启，旧配置缺少条目时也会启用。可在网页插件管理关闭，或在 `plugins.anti_recall` 设置 `"enabled": false`。会话白名单非空时只在其中的会话补发；不需要模型配置。详细内容和缓存边界见[防撤回与自动补发](../messages/recall.md)。
+`anti_recall`（文字）、`anti_recall_image`（图片）、`anti_recall_file`（文件）默认开启，旧配置缺少条目时也会启用。可在网页插件管理分别关闭，或在对应 `plugins.<插件名>` 设置 `"enabled": false`。三个插件独立工作；会话白名单非空时只在其中的会话补发，不需要模型配置。附件必须已下载成功，详细限制和缓存边界见[防撤回与自动补发](../messages/recall.md)。
 
 ## 语音合成配置
 

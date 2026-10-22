@@ -24,6 +24,12 @@
     "anti_recall": {
       "enabled": true
     },
+    "anti_recall_image": {
+      "enabled": true
+    },
+    "anti_recall_file": {
+      "enabled": true
+    },
     "picture_idiom": {
       "enabled": false,
       "source": "ffapi",
