@@ -53,6 +53,54 @@ class GroupMemory(ContactMemory):
 
 
 class GroupMemberTests(unittest.TestCase):
+    def test_owner_and_regular_member_are_read_from_this_room(self):
+        ram = GroupMemory()
+        ram.s(RECORD + 0x28, SELF, STRINGS + 1800)
+        rows = {row['wxid']: row for row in ram.snapshot()}
+        self.assertEqual(rows[SELF]['role'], 'owner')
+        self.assertTrue(rows[SELF]['is_owner'])
+        self.assertFalse(rows[SELF]['is_admin'])
+        self.assertEqual(rows[PEER]['role'], 'member')
+        self.assertEqual(rows[PEER]['role_source'], 'wechat_cache')
+
+    def test_admin_list_uses_int32_capacity_and_not_member_flags(self):
+        ram = GroupMemory()
+        ram.s(RECORD + 0x28, SELF, STRINGS + 1800)
+        ram.write(RECORD + 0x90, struct.pack('<QiiiI', STRINGS+1900, 1, 1, 1, 0x12345678))
+        ram.q(STRINGS+1900, STRINGS+1950)
+        ram.s(STRINGS+1950, PEER, STRINGS+2020)
+        rows = {row['wxid']: row for row in ram.snapshot()}
+        self.assertEqual(rows[PEER]['role'], 'admin')
+        self.assertTrue(rows[PEER]['is_admin'])
+        self.assertFalse(rows[PEER]['is_owner'])
+
+    def test_missing_or_invalid_role_data_preserves_members_as_unknown(self):
+        for owner, admins in (('', []), ('wxid_absent', []), (SELF, [SELF]),
+                              (SELF, ['wxid_absent']), (SELF, [PEER, PEER])):
+            with self.subTest(owner=owner, admins=admins):
+                ram = GroupMemory()
+                ram.s(RECORD+0x28, owner, STRINGS+1800)
+                ram.write(RECORD+0x90, struct.pack('<Qiii', STRINGS+1900,len(admins),len(admins),len(admins)))
+                for i, wxid in enumerate(admins):
+                    ram.q(STRINGS+1900+i*8,STRINGS+2000+i*100)
+                    ram.s(STRINGS+2000+i*100,wxid,STRINGS+2400+i*100)
+                rows = ram.snapshot()
+                self.assertEqual(len(rows),2)
+                self.assertTrue(all(row['role']=='unknown' and row['is_owner'] is None and row['is_admin'] is None for row in rows))
+
+    def test_changing_owner_or_admin_list_cannot_publish_a_mixed_snapshot(self):
+        ram = GroupMemory()
+        ram.s(RECORD+0x28,SELF,STRINGS+1800)
+        mutated = False
+        def changing(address,length):
+            nonlocal mutated
+            data=ram.read(address,length)
+            if address == RECORD+0x90 and not mutated:
+                mutated=True
+                ram.s(RECORD+0x28,PEER,STRINGS+1800)
+            return data
+        self.assertIsNone(ram.snapshot(changing))
+
     def test_complete_snapshot_prefers_real_group_name_to_wechat_name(self):
         ram = GroupMemory()
         rows = {row["wxid"]: row for row in ram.snapshot()}

@@ -435,6 +435,23 @@ dialog .form-footer { justify-content: flex-end; }
 .message-sender { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
 .message-content { white-space: pre-wrap; line-height: 1.8; overflow-wrap: anywhere; }
 .message-recalled { display: block; width: fit-content; margin-bottom: 4px; padding: 1px 6px; border: 1px solid var(--rule); border-radius: 4px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.manual-send { margin-bottom: var(--space-8); }
+.manual-send h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.member-heading { margin-top: var(--space-5); }
+.member-scroll { max-height: 280px; overflow: auto; margin: var(--space-3) 0 var(--space-5); }
+.member-table th:first-child { width: 48px; }
+.member-table th:last-child { width: 130px; }
+.member-table td, .member-table th { padding: 10px 16px; }
+.member-table th { position: sticky; top: 0; background: var(--table-heading); z-index: 1; }
+.member-choice { display: grid; place-items: center; margin: 0; min-height: 36px; }
+.member-role { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.send-status { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.send-status.error { color: var(--danger); }
+@media (max-width: 600px) {
+  .member-table td, .member-table th { padding: 8px; }
+  .member-table th:last-child { width: 90px; }
+  .member-heading { gap: var(--space-2); }
+}
 @media (max-width: 800px) {
   .message-table th:first-child { width: 88px; }
   .message-table td, .message-table th { padding-inline: 12px; }

@@ -34,6 +34,7 @@ let robot = sessionStorage.getItem('helper-robot') || 'default', robotRows = [],
 let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
+let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
 const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
@@ -99,7 +100,8 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  renderSendState();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
   renderPlugins();
@@ -246,16 +248,110 @@ $('#discover-chats').onclick=()=>action(async()=>{
   $('#discovered-chats').className=rooms.length?'':'empty';$('#discovered-chats').innerHTML=rooms.map(c=>`<div class="chat-row"><div>${escape(c.name||c.chat_id)}<small>${escape(c.chat_id)}</small></div><button class="secondary small" data-room="${escape(c.chat_id)}">填入列表</button></div>`).join('')||'暂无已接收消息的群。';
 });
 $('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');toast('已填入，停止机器人后保存群聊配置');};
+
+const roleLabels = {owner:'群主', admin:'群管理员', member:'普通群友', unknown:'身份未知'};
+function sendFeedback(text, error=false) {
+  $('#send-status').textContent=text;$('#send-status').classList.toggle('error',error);
+}
+function renderSendState() {
+  const ready=serviceAvailable&&!!state?.connected&&!busy;
+  $('#refresh-send-chats').disabled=!ready||sendLoading||!!pendingSend;
+  $('#refresh-send-members').disabled=!ready||sendLoading||!!pendingSend||!$('#send-chat').value.endsWith('@chatroom');
+  $('#send-chat').disabled=!ready||sendLoading||!!pendingSend;
+  $('#send-content').disabled=!ready||!!pendingSend;
+  $('#send-text').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#send-chat').value||!$('#send-content').value.trim();
+  $('#send-text').textContent=pendingSend?'发送中…':'发送';
+  $('#mention-count').textContent=`已选 ${mentionSelection.size} / 8`;
+  $('#send-members').querySelectorAll('input').forEach(node=>node.disabled=!ready||!!pendingSend);
+}
+function renderSendMembers() {
+  const query=$('#member-search').value.trim().toLowerCase();
+  const rows=sendMembers.filter(row=>[row.nickname,row.wxid,roleLabels[row.role]||roleLabels.unknown].some(value=>String(value||'').toLowerCase().includes(query)));
+  $('#send-members').innerHTML=rows.map(row=>`<tr><td><label class="member-choice"><input type="checkbox" data-mention="${escape(row.wxid)}" ${mentionSelection.has(row.wxid)?'checked':''} aria-label="艾特 ${escape(row.nickname||row.wxid)}"></label></td><td><span class="message-sender">${escape(row.nickname||row.wxid)}</span><span class="message-id">${escape(row.wxid)}</span></td><td class="member-role">${escape(roleLabels[row.role]||roleLabels.unknown)}</td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">'+(query?'没有匹配的成员。':'暂无可用的成员，请在微信打开该群后刷新。')+'</td></tr>';
+  renderSendState();
+}
+function resetComposer() {
+  sendGeneration++;sendMembers=[];mentionSelection.clear();sendSession='';sendLoading=false;pendingSend=null;
+  $('#send-chat').innerHTML='<option value="">选择会话</option>';$('#send-content').value='';$('#member-search').value='';
+  $('#send-group').classList.add('hidden');sendFeedback('');renderSendMembers();
+}
+async function loadSendChats() {
+  const requested=robot,generation=++sendGeneration;
+  sendLoading=true;sendSession='';sendFeedback('正在读取会话…');renderSendState();
+  try {
+    const [{chats},connection]=await Promise.all([api('chats',undefined,requested),api('send-connection',undefined,requested)]);
+    if(requested!==robot||generation!==sendGeneration)return;
+    const previous=$('#send-chat').value, rows=[...chats];
+    if(!rows.some(row=>row.chat_id==='filehelper'))rows.unshift({chat_id:'filehelper',name:'文件传输助手'});
+    $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>`<option value="${escape(row.chat_id)}">${escape(row.name||row.chat_id)}${row.name?' · '+escape(row.chat_id):''}</option>`).join('');
+    if(rows.some(row=>row.chat_id===previous))$('#send-chat').value=previous;
+    sendSession=connection.session_id;sendFeedback('');
+  } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
+  finally {if(requested===robot&&generation===sendGeneration){sendLoading=false;renderSendState();}}
+  if(requested===robot&&generation===sendGeneration)await selectSendChat();
+}
+async function selectSendChat() {
+  const room=$('#send-chat').value,requested=robot,generation=++sendGeneration;
+  sendMembers=[];mentionSelection.clear();$('#member-search').value='';
+  $('#send-group').classList.toggle('hidden',!room.endsWith('@chatroom'));renderSendMembers();
+  if(!room){renderSendState();return;}
+  sendSession='';sendLoading=true;sendFeedback('正在读取…');renderSendState();
+  try {
+    const data=await api(room.endsWith('@chatroom')?'group-members?room='+encodeURIComponent(room):'send-connection',undefined,requested);
+    if(requested!==robot||generation!==sendGeneration)return;
+    sendSession=data.session_id;sendMembers=data.members||[];sendFeedback('');renderSendMembers();
+  } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
+  finally {if(requested===robot&&generation===sendGeneration){sendLoading=false;renderSendState();}}
+}
+$('#refresh-send-chats').onclick=loadSendChats;
+$('#send-chat').onchange=selectSendChat;$('#refresh-send-members').onclick=selectSendChat;
+$('#member-search').oninput=renderSendMembers;$('#send-content').oninput=renderSendState;
+$('#send-members').onchange=event=>{
+  const node=event.target;if(!node.matches('[data-mention]'))return;
+  if(node.checked&&mentionSelection.size>=8){node.checked=false;sendFeedback('每条消息最多艾特 8 人',true);return;}
+  if(node.checked)mentionSelection.add(node.dataset.mention);else mentionSelection.delete(node.dataset.mention);
+  sendFeedback('');renderSendState();
+};
+async function pollSendStatus() {
+  const job=pendingSend;if(!job||sendPolling)return;
+  sendPolling=true;
+  try {
+    const result=await api('send-status?id='+encodeURIComponent(job.id),undefined,job.robot);
+    if(pendingSend!==job||job.robot!==robot)return;
+    if(result.status==='sending')return;
+    pendingSend=null;
+    if(result.status==='sent'){$('#send-content').value='';sendFeedback('已发送');}
+    else sendFeedback(result.error||'发送未完成，请核对微信后再重发',true);
+    renderSendState();
+  } catch(error) {if(pendingSend===job)sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);}
+  finally {sendPolling=false;}
+}
+$('#send-form').onsubmit=async event=>{
+  event.preventDefault();if($('#send-text').disabled||pendingSend)return;
+  const requested=robot,job={id:crypto.randomUUID(),robot:requested};pendingSend=job;
+  const body={request_id:job.id,session_id:sendSession,chat_id:$('#send-chat').value,content:$('#send-content').value,at_list:[...mentionSelection]};
+  sendFeedback('正在发送…');renderSendState();
+  try {
+    await api('send-text',body,requested);
+    if(pendingSend===job)await pollSendStatus();
+  } catch(error) {
+    if(pendingSend!==job)return;
+    if(error.status){pendingSend=null;sendFeedback(error.message,true);}
+    else sendFeedback('发送结果暂不确定，请先核对微信。不会自动重发。',true);
+    renderSendState();
+  }
+};
+setInterval(pollSendStatus,1500);
 function renderMessages() {
   const query=$('#message-search').value.trim().toLowerCase();
-  const rows=messages.filter(row=>!query||[row.chat_id,row.sender_id,row.sender_name,row.content,row.forwarded_by,row.forwarded_by_id,row.source_time,row.message_id,row.recalled?'已撤回':''].some(value=>String(value||'').toLowerCase().includes(query)));
+  const rows=messages.filter(row=>!query||[row.chat_id,row.sender_id,row.sender_name,row.content,row.forwarded_by,row.forwarded_by_id,row.source_time,row.message_id,roleLabels[row.sender_role],row.recalled?'已撤回':''].some(value=>String(value||'').toLowerCase().includes(query)));
   $('#message-count').textContent=(query?rows.length+' / '+messages.length:messages.length)+' 条';
   $('#message-error').textContent=messageError;$('#message-error').classList.toggle('hidden',!messageError);
   const signature=JSON.stringify([robot,query,rows,rows.length?null:state?.state]);
   if(signature===messageSignature)return;
   messageSignature=signature;
   const scroll=$('#message-scroll'),previousTop=scroll.scrollTop;
-  $('#message-list').innerHTML=rows.map(row=>`<tr><td class="message-time" title="${escape(row.date+' '+row.time)}">${escape(row.time)}</td><td><span class="message-context">${row.is_group?'群聊':'私聊'}</span><span class="message-id">${escape(row.chat_id)}</span></td><td><span class="message-sender">${escape(row.sender_name||row.sender_id||(row.forwarded?'原作者未提供':'未知发送者'))}</span>${row.sender_id?`<span class="message-id">${escape(row.sender_id)}</span>`:''}${row.forwarded?`<span class="message-context">由 ${escape(row.forwarded_by||'未知用户')} 转发</span>`:''}${row.direction==='outgoing'?'<span class="message-context">发出</span>':''}</td><td class="message-content">${row.forwarded?`<span class="message-context">转发记录 ${escape(row.forwarded_index)}${row.source_time?' · '+escape(row.source_time):''}</span>`:''}${row.recalled?`<span class="message-recalled" title="${escape(row.recall_notice||'')}">已撤回</span>`:''}${escape(row.content)}</td></tr>`).join('')||`<tr><td colspan="4" class="table-empty">${query?'没有匹配的消息。':state&&activeStates.includes(state.state)?'等待新消息…':'暂无消息。'}</td></tr>`;
+  $('#message-list').innerHTML=rows.map(row=>`<tr><td class="message-time" title="${escape(row.date+' '+row.time)}">${escape(row.time)}</td><td><span class="message-context">${row.is_group?'群聊':'私聊'}</span><span class="message-id">${escape(row.chat_id)}</span></td><td><span class="message-sender">${escape(row.sender_name||row.sender_id||(row.forwarded?'原作者未提供':'未知发送者'))}</span>${row.sender_id?`<span class="message-id">${escape(row.sender_id)}</span>`:''}${row.is_group&&!row.forwarded&&row.sender_role&&row.sender_role!=='unknown'?`<span class="message-context">${escape(roleLabels[row.sender_role]||'')}</span>`:''}${row.forwarded?`<span class="message-context">由 ${escape(row.forwarded_by||'未知用户')} 转发</span>`:''}${row.direction==='outgoing'?'<span class="message-context">发出</span>':''}</td><td class="message-content">${row.forwarded?`<span class="message-context">转发记录 ${escape(row.forwarded_index)}${row.source_time?' · '+escape(row.source_time):''}</span>`:''}${row.recalled?`<span class="message-recalled" title="${escape(row.recall_notice||'')}">已撤回</span>`:''}${escape(row.content)}</td></tr>`).join('')||`<tr><td colspan="4" class="table-empty">${query?'没有匹配的消息。':state&&activeStates.includes(state.state)?'等待新消息…':'暂无消息。'}</td></tr>`;
   scroll.scrollTop=messagePaused?previousTop:scroll.scrollHeight;
 }
 $('#message-search').oninput=renderMessages;
@@ -319,6 +415,7 @@ async function loadRobots(){
   renderState();
 }
 async function switchRobot(identifier){
+  resetComposer();
   messageGeneration++;messages=[];messageCursor=0;messageStream='';messageError='';$('#message-search').value='';messageSignature='';renderMessages();
   robot=identifier;sessionStorage.setItem('helper-robot',robot);
   $('#robot-select').value=robot;

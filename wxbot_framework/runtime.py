@@ -9,7 +9,8 @@ import sys
 import threading
 import time
 from concurrent.futures import Future
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from types import MappingProxyType
 
 from .backend import CAPABILITIES, TEXT_CAPABILITIES, NativeFileHelperBackend, NativeTextBackend
 from .plugins import PluginManager
@@ -47,6 +48,7 @@ class BotApplication:
         self._group_tracker = None
         self._next_group_poll = 0
         self._group_poll_failures = set()
+        self._group_roles = {}
 
     def _log_connection_error(self, error):
         text = f"{type(error).__name__}: {error}"
@@ -77,6 +79,7 @@ class BotApplication:
             self._disconnect()
 
     def _observe_message(self, message):
+        message = self._with_group_role(message)
         observer = getattr(self, 'message_observer', None)
         if observer is not None:
             try:
@@ -85,6 +88,7 @@ class BotApplication:
                 logger.warning('消息监控暂不可用，消息继续处理')
 
     def _emit(self, message):
+        message = self._with_group_role(message)
         self._observe_message(message)
         allowed = self.config.get('chat_allowlist', [])
         recall = message.type in (10000, 10002) and isinstance(message.data.get('recall'), dict)
@@ -184,6 +188,9 @@ class BotApplication:
                 data={"group_event": asdict(event)}))
 
     def _remember_group_members(self, room, rows):
+        if self.backend is not None:
+            self._group_roles[room] = (self.backend.session_id, time.monotonic(),
+                {row['wxid']: row.get('role', 'unknown') for row in rows})
         if self.members is None:
             return
         for row in rows:
@@ -191,6 +198,16 @@ class BotApplication:
                 self.members.remember_wechat_name(row["wxid"], row["wechat_name"])
             nickname = row.get("group_nickname", row.get("nickname", ""))
             self.members.remember_group_nickname(row["wxid"], room, nickname[:64])
+
+    def _with_group_role(self, message):
+        if not message.is_group:
+            return message
+        cached = getattr(self, '_group_roles', {}).get(message.chat_id)
+        sender = message.sender_id or (self.config.get('wechat_account') if message.is_self else '')
+        role = 'unknown'
+        if cached and cached[0] == message.session_id and time.monotonic() - cached[1] <= 30:
+            role = cached[2].get(sender, 'unknown')
+        return replace(message, data=MappingProxyType(dict(message.data, sender_role=role)))
 
     def _poll_group_members(self):
         if not self._connection_ready or self._group_tracker is None or self.backend is None:
@@ -224,8 +241,11 @@ class BotApplication:
                 elif room not in self._group_poll_failures:
                     logger.info("群成员缓存尚未就绪，等待完整名单：群ID=%s", room)
                     self._group_poll_failures.add(room)
+                if rows is None:
+                    self._group_roles.pop(room, None)
                 self._publish_group_events(events, session_id)
             except Exception:
+                self._group_roles.pop(room, None)
                 # 缓存变化和查询失败不等同于退群，更不能影响文本收发。
                 try:
                     tracker.update(room, None, session_id=session_id)
@@ -237,6 +257,7 @@ class BotApplication:
 
     def _disconnect(self):
         self._connection_ready = False
+        self._group_roles.clear()
         if self._group_tracker is not None:
             self._group_tracker.close()
             self._group_tracker = None

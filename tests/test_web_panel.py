@@ -304,6 +304,32 @@ class HTTPTests(PanelFixture):
         self.assertEqual(self.request('/api/config',{'groups':[]})[0],409)
         self.assertEqual(self.request('/api/stop',{})[0],200)
 
+    def test_member_and_send_routes_validate_token_and_preserve_connection(self):
+        from wxbot_framework.sdk import ServiceFacade
+        self.assertEqual(self.request('/api/send-connection')[0],409)
+        self.controller.start()
+        calls=[]
+        backend=SimpleNamespace(session_id='http-test-session',pid=1234,stop=lambda: {},
+            group_members=lambda room: ({'wxid':'wxid_test_member','nickname':'测试群友','role':'admin'},),
+            send_at_text=lambda *args: calls.append(args) or True)
+        service=ServiceFacade(text_delay={'enabled':False});service.bind(backend)
+        self.addCleanup(service.close)
+        self.controller.app.backend=backend;self.controller.app.service=service
+        data=json.loads(self.request('/api/group-members?room=123%40chatroom')[2])
+        self.assertEqual(data['members'][0]['role'],'admin')
+        self.assertEqual(data['session_id'],'http-test-session')
+        body={'request_id':'http-synthetic-request-001','session_id':data['session_id'],
+              'chat_id':'123@chatroom','content':'你好','at_list':['wxid_test_member']}
+        self.assertEqual(self.request('/api/send-text',body,token=False)[0],403)
+        self.assertFalse(calls)
+        self.assertEqual(self.request('/api/send-text',body)[0],200)
+        for _ in range(100):
+            result=json.loads(self.request('/api/send-status?id='+body['request_id'])[2])
+            if result['status']!='sending':break
+            time.sleep(.005)
+        self.assertEqual(result['status'],'sent')
+        self.assertEqual(calls,[('123@chatroom','@测试群友\u2005\n你好',('wxid_test_member',))])
+
     def test_invalid_json_oversized_body_and_unknown_routes(self):
         self.assertEqual(self.request('/api/config',raw=b'{broken')[0],400)
         self.assertEqual(self.request('/api/config',raw=b'x'*65537)[0],413)

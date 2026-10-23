@@ -115,6 +115,14 @@ class RobotProxy:
     def configuration(self): return self.request('config')
     def accounts(self): return self.request('accounts')['accounts']
     def chats(self): return self.request('chats')['chats']
+    def group_members(self, room):
+        from urllib.parse import urlencode
+        return self.request('group-members?' + urlencode({'room': room}))
+    def send_text(self, data): return self.request('send-text', data)
+    def send_connection(self): return self.request('send-connection')
+    def send_status(self, identifier):
+        from urllib.parse import urlencode
+        return self.request('send-status?' + urlencode({'id': identifier}))
     def tail(self, after=0): return self.request(f'logs?after={after}')
     def message_tail(self, after=0): return self.request(f'messages?after={after}')
     def start(self): return self.request('start', {})

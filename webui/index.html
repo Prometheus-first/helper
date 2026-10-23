@@ -51,6 +51,19 @@
   </section>
   <section class="page hidden" id="page-groups" aria-labelledby="groups-heading">
     <div class="page-heading"><div><h1 id="groups-heading">群聊与会话</h1></div><button id="discover-chats" class="secondary">发现群聊</button></div>
+    <section class="settings-section manual-send" aria-labelledby="send-heading">
+      <div class="section-heading"><h2 id="send-heading">发送消息</h2><button id="refresh-send-chats" class="secondary small" type="button">刷新会话</button></div>
+      <form id="send-form">
+        <label for="send-chat">会话</label><select id="send-chat" required><option value="">选择会话</option></select>
+        <div id="send-group" class="hidden">
+          <div class="section-heading member-heading"><h3>艾特成员 <span id="mention-count" class="count">已选 0 / 8</span></h3><button id="refresh-send-members" class="text-button small" type="button">刷新成员</button></div>
+          <label class="sr-only" for="member-search">搜索群成员</label><input id="member-search" type="search" placeholder="搜索昵称、微信 ID 或身份" autocomplete="off">
+          <div class="table-container member-scroll"><table class="member-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">群成员</th><th scope="col">身份</th></tr></thead><tbody id="send-members"><tr><td colspan="3" class="table-empty">请先选择群聊。</td></tr></tbody></table></div>
+        </div>
+        <label for="send-content">正文</label><textarea id="send-content" rows="3" required placeholder="输入文字" spellcheck="false"></textarea>
+        <div class="form-footer"><p id="send-status" class="send-status" role="status" aria-live="polite"></p><button id="send-text" class="primary" type="submit" disabled>发送</button></div>
+      </form>
+    </section>
     <div class="settings-columns"><form id="groups-form" class="settings-section"><div class="section-heading"><div><h2>支持的群聊</h2></div></div><label for="group-ids">群 ID（每行一个）</label><textarea id="group-ids" name="groups" rows="7" placeholder="12345678@chatroom" spellcheck="false"></textarea><div class="check-row"><label><input type="checkbox" name="history_enabled">记录当天文字</label><label><input type="checkbox" name="daily_clear">每天零点清理旧记录</label></div><div class="form-footer"><span class="save-hint">停止后保存，下次启动生效</span><button class="primary" type="submit">保存群聊配置</button></div></form><section class="settings-section discovered-section"><h2>已发现的群</h2><div id="discovered-chats" class="empty">暂无已接收消息的群。</div></section></div>
     <form id="scope-form" class="settings-section scope-section"><div class="section-heading"><div><h2>收发会话白名单</h2></div></div><label for="scope-ids">会话 ID（每行一个）</label><textarea id="scope-ids" name="chat_allowlist" rows="4" placeholder="留空允许全部会话" spellcheck="false"></textarea><details class="help-details"><summary>白名单与群配置的关系</summary><p>白名单非空时，支持群会自动加入。屏蔽群需从两处移除。</p></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存白名单</button></div></form>
   </section>

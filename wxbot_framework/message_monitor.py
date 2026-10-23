@@ -68,6 +68,9 @@ class MessageBuffer:
                'direction': 'outgoing' if data.get('monitor_outgoing') or message.is_self else 'incoming',
                'type': message.type, 'content': content,
                'message_id': message_id(data.get('native_message_id'))}
+        if group:
+            role = data.get('sender_role', 'unknown')
+            row['sender_role'] = role if role in ('owner', 'admin', 'member') else 'unknown'
         projected = [row]
         records = data.get('forwarded_records')
         if data.get('app_type') == 19 and isinstance(records, (list, tuple)):
@@ -85,6 +88,7 @@ class MessageBuffer:
                             'forwarded':'[嵌套合并转发]'}.get(kind, '[其他消息]')
                 projected.append(dict(row, type=3 if kind == 'image' else 1 if kind == 'text' else 49,
                     content=body, sender_id='', sender_name=self._text(item.get('sender_name'),128),
+                    sender_role='unknown',
                     forwarded=True, forwarded_index=index+1,
                     source_time=self._text(item.get('source_time'),64),
                     forwarded_by=self._text(sender_name or sender,128),

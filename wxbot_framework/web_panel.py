@@ -23,7 +23,7 @@ from .locking import InstanceLock
 from .message_monitor import MessageBuffer
 from .runtime import BotApplication
 from .startup import scan_logged_accounts
-from .text import validate_target
+from .text import validate_target, validate_mentions
 
 SECRET = re.compile(r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})')
 
@@ -104,6 +104,7 @@ class PanelController:
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         self.logs = LogBuffer()
         self.messages = MessageBuffer(sanitize=redact)
+        self.send_jobs = {}
         logging.getLogger().addHandler(self.logs)
 
     def _paths(self, config):
@@ -417,6 +418,95 @@ class PanelController:
     def chats(self):
         return self._call(lambda app: app.backend.chats() if app.backend and hasattr(app.backend, 'chats') else [])
 
+    def group_members(self, room):
+        from .group_management import validate_group_id
+        room = validate_group_id(room)
+        def query(app):
+            if not app._connection_ready or app.backend is None:
+                raise PanelError('微信尚未连接', 409)
+            session = app.backend.session_id
+            rows = app.service.group_members(room, expected_session=session)
+            if rows is None:
+                raise PanelError('群成员缓存尚未就绪，请在微信打开该群后重试', 409)
+            return {'room': room, 'session_id': session, 'members': list(rows)}
+        return self._call(query)
+
+    def send_status(self, identifier):
+        with self.lock:
+            job = self.send_jobs.get(identifier)
+            if job is None:
+                raise PanelError('发送记录已失效，请查看消息监控确认结果', 404)
+            return {key: job[key] for key in ('request_id', 'status', 'error')}
+
+    def send_text(self, data):
+        """立即返回发送单号，等待节奏和原生回调在独立线程完成，HTTP 不重试发送。"""
+        target = validate_target(data.get('chat_id'))
+        content, mentions = data.get('content'), data.get('at_list', [])
+        identifier, session = data.get('request_id'), data.get('session_id')
+        if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
+            raise PanelError('发送请求编号无效')
+        if not isinstance(session, str) or not session or len(session) > 80:
+            raise PanelError('请先选择会话并刷新连接', 409)
+        if not isinstance(content, str) or not content.strip() or '\0' in content or len(content.encode('utf-8')) > 1023:
+            raise PanelError('正文应为 1–1023 个 UTF-8 字节，不能包含 NUL')
+        if not isinstance(mentions, list):
+            raise PanelError('艾特成员必须为列表')
+        mentions = validate_mentions(target, mentions) if mentions else ()
+        payload = (target, content, mentions, session)
+        with self.lock:
+            previous = self.send_jobs.get(identifier)
+            if previous is not None:
+                if previous['payload'] != payload:
+                    raise PanelError('发送编号已使用，请重新提交', 409)
+                return self.send_status(identifier)
+            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
+                raise PanelError('上一条消息仍在发送，请等待结果', 409)
+            app = self.app
+            if app is None or not app._connection_ready or self.state == 'stopping':
+                raise PanelError('请先启动并连接机器人', 409)
+            if not app.service.session_is_current(session):
+                raise PanelError('微信连接已变化，请重新选择会话', 409)
+            allowed = app.config.get('chat_allowlist', [])
+            if allowed and target not in allowed:
+                raise PanelError('该会话不在收发白名单中')
+            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload,
+                                          'status': 'sending', 'error': ''}
+            while len(self.send_jobs) > 64:
+                del self.send_jobs[next(iter(self.send_jobs))]
+
+        def deliver():
+            try:
+                if mentions:
+                    rows = app.service.group_members(target, expected_session=session)
+                    if rows is None:
+                        raise ValueError('群成员缓存尚未就绪，请刷新成员后重试')
+                    directory = {row['wxid']: row for row in rows}
+                    if any(member not in directory for member in mentions):
+                        raise ValueError('所选成员已不在群里，请刷新成员后重试')
+                    names = [directory[member].get('nickname') or member for member in mentions]
+                    result = app.service.send_at_text(target, content, mentions,
+                        expected_session=session, display_names=names)
+                else:
+                    result = app.service.send_text(target, content, expected_session=session)
+                if result is False:
+                    raise RuntimeError('微信未确认发送')
+            except Exception:
+                # 不回显异常中的原生路径或请求内容，也不自动重发不确定的结果。
+                with self.lock:
+                    self.send_jobs[identifier].update(status='failed', error='发送未完成，请核对微信和消息监控后再决定是否重发')
+            else:
+                with self.lock:
+                    self.send_jobs[identifier].update(status='sent')
+        threading.Thread(target=deliver, name='PanelTextSend', daemon=True).start()
+        return self.send_status(identifier)
+
+    def send_connection(self):
+        def query(app):
+            if not app._connection_ready or app.backend is None:
+                raise PanelError('微信尚未连接', 409)
+            return {'session_id': app.backend.session_id}
+        return self._call(query)
+
 
 class PanelServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -498,6 +588,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.prepare_account(data))
                 if path == '/api/accounts/start' and hub is not None:
                     return self.send(200, hub.start_selected(data))
+                if path == '/api/send-text':
+                    return self.send(200, controller.send_text(data))
                 actions = {'/api/start': lambda: controller.start(), '/api/stop': lambda: controller.stop(),
                     '/api/restart': lambda: controller.restart(),
                     '/api/account': lambda: controller.bind_account(data),
@@ -515,6 +607,12 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, hub.logged_accounts() if hub is not None else {'accounts': controller.accounts()})
             if path == '/api/chats':
                 return self.send(200, {'chats': controller.chats()})
+            if path == '/api/group-members':
+                return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
+            if path == '/api/send-connection':
+                return self.send(200, controller.send_connection())
+            if path == '/api/send-status':
+                return self.send(200, controller.send_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/logs':
                 after = int(parse_qs(parsed.query).get('after', ['0'])[0])
                 return self.send(200, controller.logs.tail(max(0, after)))

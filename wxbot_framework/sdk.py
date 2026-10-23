@@ -298,6 +298,17 @@ class ServiceFacade:
                 return row.get("nickname") or row.get("wechat_name") or None
         return None
 
+    def group_member_role(self, room, wxid, *, expected_session=None):
+        """返回 owner/admin/member/unknown；未知身份不具有任何管理权限含义。"""
+        from .account import validate_account
+        validate_account(wxid)
+        rows = self.group_members(room, expected_session=expected_session)
+        for row in rows or ():
+            if row['wxid'] == wxid:
+                role = row.get('role', 'unknown')
+                return role if role in ('owner', 'admin', 'member') else 'unknown'
+        return 'unknown'
+
     def send_at_text(self, room_wxid, content, at_list, *, expected_session=None, display_names=None, delivery_guard=None):
         members = validate_mentions(room_wxid, at_list)
         if not isinstance(content, str) or not content:
@@ -421,6 +432,13 @@ class PluginContext:
 
     def group_member_name(self, room, wxid, *, expected_session=None):
         return self._service.group_member_name(room, wxid, expected_session=expected_session)
+
+    def group_member_role(self, room, wxid, *, expected_session=None):
+        return self._service.group_member_role(room, wxid, expected_session=expected_session)
+
+    def send_at_text(self, room, text, members, *, expected_session=None, display_names=None):
+        return self._service.send_at_text(room, text, members, expected_session=expected_session,
+                                         display_names=display_names)
 
     def send_voice(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_voice(chat_id, path, expected_session=expected_session,

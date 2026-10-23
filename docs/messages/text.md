@@ -24,6 +24,22 @@ if message.is_group:
 
 真实艾特的通知目标使用成员 ID，可见标签优先使用成员在本群的 `/绑定` 称呼，其次使用微信联系人缓存的名字。不能通过只在普通文本里拼接 `@昵称` 获得真实通知。
 
+主动发送时可指定一位或多位群成员；显示昵称和真实通知目标分别传入：
+
+```python
+if message.is_group:
+    rows = ctx.group_members(message.chat_id, expected_session=message.session_id)
+    member = next((row for row in rows or () if row["wxid"] == message.sender_id), None)
+    if member is not None:
+        ctx.send_at_text(message.chat_id, "请查看这条消息", [member["wxid"]],
+                         expected_session=message.session_id,
+                         display_names=[member["nickname"] or member["wxid"]])
+```
+
+`members` 与 `display_names` 按顺序对应，一次支持 1–8 位成员；昵称每个最多 64 字符。正文与生成的标签合计不超过 1023 个 UTF-8 字节，使用消息的 `session_id` 可防止重连后发送旧任务。未提供 `display_names` 时以 wxid 作为可见标签。
+
+网页也支持真实艾特：进入“群聊与会话 → 发送消息”，刷新会话、选择群并勾选成员，再填写正文发送。网页会在发送前重新核对成员名单并使用当前群昵称；普通好友会话不提供艾特选项。完整流程见[网页管理台](../guide/web-panel.md#发送文字和艾特成员)。
+
 需要的能力声明：
 
 ```json
@@ -47,8 +63,11 @@ if message.is_group:
 | `message.is_self` | 是否是当前账号同步来的消息 |
 | `message.session_id` | 消息所属框架连接 |
 | `message.data` | 消息附加字段快照 |
+| `message.data["sender_role"]` | 实时群消息作者身份：`owner`、`admin`、`member` 或 `unknown` |
 
 插件默认只收到文本消息。框架只处理实际收到的实时消息，不补拉停机时的旧消息。
+
+群内身份取自当前连接最近 30 秒内读取的群缓存，约每 15 秒检查；无法确认、缓存过期或连接变化时为 `unknown`。主动查询可使用 `ctx.group_member_role(room, wxid, expected_session=message.session_id)`。这只是身份信息，不自动赋予插件管理权限，详见[群成员与身份](../guide/friends-and-groups.md#群内身份和真实艾特)。
 
 ## 已有示例插件
 

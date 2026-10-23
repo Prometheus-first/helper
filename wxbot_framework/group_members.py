@@ -15,6 +15,8 @@ CHATROOM_CACHE_VTABLE_RVA = 0x8F9C228
 MEMBER_DATA_VTABLE_RVA = 0x8FA3CB8
 MEMBER_VTABLE_RVA = 0x8FA3C28
 MAX_GROUP_MEMBERS = 2000  # 读取预算，不表示微信产品人数上限。
+GROUP_OWNER_OFFSET = 0x28
+GROUP_ADMINS_OFFSET = 0x90
 
 
 class _StableReader:
@@ -111,10 +113,37 @@ def _group_name(reader, address):
         return ""
 
 
+def _group_roles(reader, record, member_ids):
+    """群主独立字符串；ExtData 的字段 5 为管理员 RepeatedPtrField<string>。
+
+    4.1.15.13 的 1730f10 拷贝 owner(+0x28) 及 ExtData(+0x60)，
+    f443e0 解析 ExtData 字段 5 到 +0x30。身份缺失不影响成员差分。
+    不通过成员顺序、昵称或 member flag 猜测权限。
+    """
+    try:
+        owner = validate_account(reader.string(record + GROUP_OWNER_OFFSET, 127, encoding="ascii"))
+        if owner not in member_ids:
+            return None
+        data = reader.read(record + GROUP_ADMINS_OFFSET, 0x18)
+        array, count, allocated, capacity = struct.unpack_from("<Qiii", data)
+        if not 0 <= count <= allocated <= capacity <= MAX_GROUP_MEMBERS:
+            return None
+        pointers = struct.unpack("<" + "Q" * count, reader.read(_pointer(array), count * 8)) if count else ()
+        admins = [validate_account(reader.string(_pointer(pointer), 127, encoding="ascii")) for pointer in pointers]
+        if len(set(admins)) != len(admins) or not set(admins).issubset(member_ids) or owner in admins:
+            return None
+        return {wxid: "owner" if wxid == owner else "admin" if wxid in admins else "member"
+                for wxid in member_ids}
+    except (OSError, ValueError, struct.error):
+        return None
+
+
 def read_group_members(read_memory, core_base, room, *, expected_account):
     """返回完整成员 tuple[dict]，未知或不稳定返回 None。
 
-    每项含 wxid、nickname、group_nickname、wechat_name。nickname 优先实际群昵称，
+    每项含 wxid、nickname、group_nickname、wechat_name、role、is_owner、is_admin。
+    role 为 owner/admin/member/unknown；身份未知时两个布尔字段为 None。
+    nickname 优先实际群昵称，
     再用微信名；两者都不可读时为空。名字从不跨群推断，也不读取好友备注。
     一份完整缓存仍可能滞后于服务器，调用方应连续确认后再产生退出事件。
     """
@@ -184,6 +213,12 @@ def read_group_members(read_memory, core_base, room, *, expected_account):
             result.append({"wxid": wxid, "group_nickname": nickname})
         if account not in seen:
             return None
+        roles = _group_roles(reader, record, seen)
+        for row in result:
+            role = roles[row["wxid"]] if roles is not None else "unknown"
+            row.update(role=role, is_owner=None if role == "unknown" else role == "owner",
+                       is_admin=None if role == "unknown" else role == "admin",
+                       role_source="wechat_cache" if roles is not None else "")
         reader.verify()
         # 联系人名字是可选补充；缺少某个微信名不丢弃完整的成员 ID 集合。
         for row in result:
