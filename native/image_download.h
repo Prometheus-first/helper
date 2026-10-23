@@ -69,7 +69,7 @@ static void* __fastcall image_cdn_factory(void* task, void* output) {
         const auto object = static_cast<const unsigned char*>(task);
         const auto id = reinterpret_cast<const SmallString*>(object + 0x238);
         static const char prefix[] = "confirm_img_wxbot_";
-        if (result && *reinterpret_cast<const uintptr_t*>(object) == core_base + 0x97ca198 &&
+        if (result && *reinterpret_cast<const uintptr_t*>(object) == core_address(core_base, 0x97ca198) &&
             id->length >= sizeof(prefix) - 1 && id->length < 1024 && id->capacity >= id->length) {
             const char* bytes = id->capacity > 15 ? *reinterpret_cast<const char* const*>(id->data) : id->data;
             if (std::memcmp(bytes, prefix, sizeof(prefix) - 1) == 0) {
@@ -88,7 +88,7 @@ static DWORD image_download_ensure_factory() {
     MH_STATUS code = MH_Initialize();
     const bool initialized_here = code == MH_OK;
     if (code != MH_OK && code != MH_ERROR_ALREADY_INITIALIZED) return 600 + code;
-    void* address = reinterpret_cast<void*>(core_base + 0x5240720);
+    void* address = reinterpret_cast<void*>(core_address(core_base, 0x5240720));
     code = MH_CreateHook(address, reinterpret_cast<void*>(&image_cdn_factory),
                          reinterpret_cast<void**>(&original_image_cdn_factory));
     if (code == MH_OK) {
@@ -169,7 +169,7 @@ static bool image_download_set_wide_string(ImageDownloadWideString* output, cons
     }
     // At most 2048 bytes: below the native allocator's 4096-byte alignment branch.
     using Allocate = void* (__fastcall*)(size_t);
-    void* allocation = reinterpret_cast<Allocate>(core_base + 0x74ab89c)((length + 1) * sizeof(wchar_t));
+    void* allocation = reinterpret_cast<Allocate>(core_address(core_base, 0x74ab89c))((length + 1) * sizeof(wchar_t));
     if (!allocation) return false;
     std::memcpy(allocation, path, (length + 1) * sizeof(wchar_t));
     std::memcpy(output->data, &allocation, sizeof(allocation));
@@ -188,7 +188,7 @@ static void image_download_release_shared(SharedMessage* value, TestResult* repo
 static void image_download_destroy_request(ImageDownloadRequest* request, TestResult* report) {
     __try {
         using Destroy = void (__fastcall*)(ImageDownloadRequest*);
-        reinterpret_cast<Destroy>(core_base + 0x2ba7940)(request);
+        reinterpret_cast<Destroy>(core_address(core_base, 0x2ba7940))(request);
     } __except (record_exception(GetExceptionInformation(), report)) {
     }
 }
@@ -217,7 +217,7 @@ static DWORD image_download_staging_path(wchar_t (&path)[1024], TestResult* repo
     DWORD status = ERROR_INVALID_DATA;
     __try {
         using GetRoot = ImageDownloadWideString* (__fastcall*)(ImageDownloadWideString*, uint32_t);
-        reinterpret_cast<GetRoot>(core_base + 0x8edb0)(&root, 2);
+        reinterpret_cast<GetRoot>(core_address(core_base, 0x8edb0))(&root, 2);
         if (!root.length || root.length > 900 || root.capacity < root.length) return status;
         const wchar_t* characters = root.capacity < 8 ? root.data :
             *reinterpret_cast<wchar_t* const*>(root.data);
@@ -239,7 +239,7 @@ static DWORD image_download_staging_path(wchar_t (&path)[1024], TestResult* repo
     } __finally {
         __try {
             using DestroyWide = void (__fastcall*)(ImageDownloadWideString*);
-            reinterpret_cast<DestroyWide>(core_base + 0x7a60)(&root);
+            reinterpret_cast<DestroyWide>(core_address(core_base, 0x7a60))(&root);
         } __except (record_exception(GetExceptionInformation(), report)) {
         }
     }
@@ -285,20 +285,20 @@ static DWORD image_download_on_native_task(const ImageDownloadConfig* config,
         using GetApp = SharedMessage* (__fastcall*)(SharedMessage*);
         using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
         using GetDispatcher = void* (__fastcall*)(void*);
-        reinterpret_cast<GetApp>(core_base + 0x47220)(&app);
+        reinterpret_cast<GetApp>(core_address(core_base, 0x47220))(&app);
         if (!app.object || !app.control) return ERROR_NOT_READY;
-        reinterpret_cast<GetService>(core_base + 0x36c740)(app.object, &context);
+        reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(app.object, &context);
         if (!context.object || !context.control) return ERROR_NOT_READY;
-        reinterpret_cast<GetService>(core_base + 0x356dd0)(context.object, &service);
+        reinterpret_cast<GetService>(core_address(core_base, 0x356dd0))(context.object, &service);
         if (!service.object || !service.control) return ERROR_NOT_READY;
-        void* dispatcher = reinterpret_cast<GetDispatcher>(core_base + 0x10e390)(service.object);
+        void* dispatcher = reinterpret_cast<GetDispatcher>(core_address(core_base, 0x10e390))(service.object);
         if (!dispatcher) return ERROR_NOT_READY;
 
         report->stage = 32;
         using MakeTask = SharedMessage* (__fastcall*)(SharedMessage*, const ImageDownloadRequest*, const int*);
-        reinterpret_cast<MakeTask>(core_base + 0x2ba5330)(&image_task, &request, &task_argument);
+        reinterpret_cast<MakeTask>(core_address(core_base, 0x2ba5330))(&image_task, &request, &task_argument);
         if (!image_task.object || !image_task.control) return ERROR_NOT_READY;
-        if (*static_cast<const uintptr_t*>(image_task.object) != core_base + 0x97ca198)
+        if (*static_cast<const uintptr_t*>(image_task.object) != core_address(core_base, 0x97ca198))
             return ERROR_INVALID_DATA;
 
         report->stage = 33;
@@ -306,10 +306,10 @@ static DWORD image_download_on_native_task(const ImageDownloadConfig* config,
         // This path has no recipient and never calls a message-send builder.
         using Dispatch = ImageDownloadNativeStatus* (__fastcall*)(
             void*, ImageDownloadNativeStatus*, const int*, const SharedMessage*);
-        reinterpret_cast<Dispatch>(core_base + 0xe5c720)(dispatcher, &native_status, &category, &image_task);
+        reinterpret_cast<Dispatch>(core_address(core_base, 0xe5c720))(dispatcher, &native_status, &category, &image_task);
         report->native_status = static_cast<uint32_t>(native_status.code);
         report->stage = 34;
-        if (native_status.vtable != core_base + 0x8dfb4b8) return ERROR_INVALID_DATA;
+        if (native_status.vtable != core_address(core_base, 0x8dfb4b8)) return ERROR_INVALID_DATA;
         if (native_status.code != 0) return ERROR_GEN_FAILURE;
         if (!CopyFileW(staging, path, TRUE)) return GetLastError();
         return image_download_check_file(path, byte_count);

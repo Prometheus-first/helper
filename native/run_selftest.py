@@ -190,6 +190,17 @@ def find_wechat():
     return candidates[0]
 
 
+def compatible_core(path, baseline):
+    """Match an exact whitelisted build; never infer offsets from its version label."""
+    entries = baseline.get('profiles', [baseline])
+    if not isinstance(entries, list) or not entries or any(not isinstance(item, dict) for item in entries):
+        return None
+    data = Path(path).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    return next((entry for entry in entries if entry.get('sha256') == digest and
+                 type(entry.get('size')) is int and entry['size'] > 0 and entry['size'] == len(data)), None)
+
+
 def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_report=True,
         bridge_path=None, target="filehelper", mentions=None, image_path=None, image_probe=False,
         download_image=None, emoticon_path=None, emoticon_probe=False, account=None,
@@ -374,13 +385,18 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         client = Path(path.value)
         if client.name.lower() != "weixin.exe": raise RuntimeError("目标不是微信")
         version = pefile.PE(str(client)).VS_FIXEDFILEINFO[0]
-        if (version.FileVersionMS, version.FileVersionLS) != (0x40001, 0xf000d):
+        from wxbot_framework.native_profiles import CORE_PROFILES
+        supported_versions = set()
+        for profile in CORE_PROFILES:
+            major, minor, build, patch = map(int, profile.version.split('.'))
+            supported_versions.add(((major << 16) | minor, (build << 16) | patch))
+        if (version.FileVersionMS, version.FileVersionLS) not in supported_versions:
             raise RuntimeError("客户端版本已改变")
         loaded_modules = modules(pid)
         core = loaded_modules.get("weixin.dll")
         if not core: raise RuntimeError("微信核心模块尚未加载")
         baseline = json.loads((ROOT / "native/compatibility.json").read_text(encoding="utf-8"))
-        if hashlib.sha256(Path(core[1]).read_bytes()).hexdigest() != baseline["sha256"]:
+        if compatible_core(core[1], baseline) is None:
             raise RuntimeError("微信核心 DLL 指纹不匹配，拒绝加载")
         if mode == "--remove" and dll.name.lower() not in loaded_modules:
             return {"mode": mode, "pid": pid, "code": 0, "dll_unloaded": True, "already_unloaded": True}
@@ -568,6 +584,9 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
 
 
 if __name__ == "__main__":
+    # 直接从 native 目录启动时，也要能导入共享的构建配置。
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     parser = argparse.ArgumentParser(description="通过微信原生任务队列给文件传输助手发送文本")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--arm", action="store_true")

@@ -33,11 +33,11 @@ static_assert(offsetof(EmoticonFileProbe, width) == 0x18, "Unexpected emoticon d
 static volatile LONG emoticon_admission = 0;
 
 static bool emoticon_account_matches(const SharedMessage& context, const char* account) {
-    const auto root = *reinterpret_cast<const uintptr_t*>(core_base + 0xb912690);
-    if (!root || *reinterpret_cast<const uintptr_t*>(root) != core_base + 0x8d804e8 ||
+    const auto root = *reinterpret_cast<const uintptr_t*>(core_address(core_base, 0xb912690));
+    if (!root || *reinterpret_cast<const uintptr_t*>(root) != core_address(core_base, 0x8d804e8) ||
         !context.object || !context.control ||
         *reinterpret_cast<void* const*>(root + 0x68) != context.object ||
-        *static_cast<const uintptr_t*>(context.object) != core_base + 0x8dfe2f8)
+        *static_cast<const uintptr_t*>(context.object) != core_address(core_base, 0x8dfe2f8))
         return false;
     const auto identity = reinterpret_cast<const SmallString*>(
         static_cast<const unsigned char*>(context.object) + 0x48);
@@ -48,7 +48,7 @@ static bool emoticon_account_matches(const SharedMessage& context, const char* a
     const char* bytes = identity->capacity > 15 ?
         *reinterpret_cast<const char* const*>(identity->data) : identity->data;
     return bytes && std::memcmp(bytes, account, length) == 0 &&
-        *reinterpret_cast<const uintptr_t*>(core_base + 0xb912690) == root &&
+        *reinterpret_cast<const uintptr_t*>(core_address(core_base, 0xb912690)) == root &&
         *reinterpret_cast<void* const*>(root + 0x68) == context.object;
 }
 
@@ -81,7 +81,7 @@ static void emoticon_probe_release(EmoticonFileProbe* probe, TestResult* report)
     __try {
         // This image uses one intrusive reference count, not shared_ptr's two.
         using Release = void (__fastcall*)(void*);
-        reinterpret_cast<Release>(core_base + 0x4e6360)(probe->image);
+        reinterpret_cast<Release>(core_address(core_base, 0x4e6360))(probe->image);
     } __except (record_exception(GetExceptionInformation(), report)) {
     }
 }
@@ -134,7 +134,7 @@ static void emoticon_on_task(const EmoticonConfig& config) {
             EmoticonBorrowedWide path{utf16.characters, 0, static_cast<uint64_t>(utf16.length), 1023};
             using GetContext = SharedMessage* (__fastcall*)(SharedMessage*);
             using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-            reinterpret_cast<GetContext>(core_base + 0x47220)(&context);
+            reinterpret_cast<GetContext>(core_address(core_base, 0x47220))(&context);
             if (!emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY;
                 __leave;
@@ -142,14 +142,14 @@ static void emoticon_on_task(const EmoticonConfig& config) {
 
             report.stage = 41;
             using Validate = int (__fastcall*)(const EmoticonBorrowedWide*);
-            validation = reinterpret_cast<Validate>(core_base + 0xe7a8e0)(&path);
+            validation = reinterpret_cast<Validate>(core_address(core_base, 0xe7a8e0))(&path);
             if (validation != 2) {
                 status = ERROR_NOT_SUPPORTED;
                 __leave;
             }
             using Probe = EmoticonFileProbe* (__fastcall*)(EmoticonFileProbe*, const EmoticonBorrowedWide*);
             probe_initialized = true;
-            reinterpret_cast<Probe>(core_base + 0x5309c0)(&probe, &path);
+            reinterpret_cast<Probe>(core_address(core_base, 0x5309c0))(&probe, &path);
             if (!probe.valid || !probe.width || !probe.height ||
                 probe.width > 1024 || probe.height > 1024) {
                 status = ERROR_INVALID_DATA;
@@ -158,9 +158,9 @@ static void emoticon_on_task(const EmoticonConfig& config) {
 
             report.stage = 42;
             using Factory = SharedMessage* (__fastcall*)(SharedMessage*);
-            reinterpret_cast<Factory>(core_base + 0x1bfb1c0)(&message);
+            reinterpret_cast<Factory>(core_address(core_base, 0x1bfb1c0))(&message);
             if (!message.object || !message.control ||
-                *static_cast<const uintptr_t*>(message.object) != core_base + 0x90daff8) {
+                *static_cast<const uintptr_t*>(message.object) != core_address(core_base, 0x90daff8)) {
                 status = ERROR_INVALID_DATA;
                 __leave;
             }
@@ -169,7 +169,7 @@ static void emoticon_on_task(const EmoticonConfig& config) {
             *reinterpret_cast<uint64_t*>(object + 0x778) =
                 static_cast<uint64_t>(probe.width) | (static_cast<uint64_t>(probe.height) << 32);
             using CopyWide = void* (__fastcall*)(void*, const EmoticonBorrowedWide*);
-            reinterpret_cast<CopyWide>(core_base + 0x9b5d0)(object + 0x120, &path);
+            reinterpret_cast<CopyWide>(core_address(core_base, 0x9b5d0))(object + 0x120, &path);
             if (!set_native_string(reinterpret_cast<SmallString*>(object + 0xb0), config.base.target)) {
                 status = ERROR_NOT_ENOUGH_MEMORY;
                 __leave;
@@ -187,12 +187,12 @@ static void emoticon_on_task(const EmoticonConfig& config) {
             }
 
             report.stage = 44;
-            reinterpret_cast<GetService>(core_base + 0x36c740)(context.object, &provider);
+            reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(context.object, &provider);
             if (!provider.object || !provider.control) {
                 status = ERROR_NOT_READY;
                 __leave;
             }
-            reinterpret_cast<GetService>(core_base + 0x6f4d90)(provider.object, &manager);
+            reinterpret_cast<GetService>(core_address(core_base, 0x6f4d90))(provider.object, &manager);
             if (!manager.object || !manager.control ||
                 !emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY;
@@ -201,7 +201,7 @@ static void emoticon_on_task(const EmoticonConfig& config) {
             SharedMessage transferred = message;
             _InterlockedIncrement(reinterpret_cast<volatile LONG*>(
                 static_cast<unsigned char*>(message.control) + 8));
-            reinterpret_cast<SendFunction>(core_base + 0x178f100)(manager.object, result, &transferred, 1);
+            reinterpret_cast<SendFunction>(core_address(core_base, 0x178f100))(manager.object, result, &transferred, 1);
             // The callee consumes this copy; keep and release our factory reference.
             transferred = {};
             report.native_status = *reinterpret_cast<const uint32_t*>(result);

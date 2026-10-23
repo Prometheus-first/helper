@@ -80,7 +80,7 @@ static const wchar_t* file_wide_data(const FileWideString& value) {
 static void file_release_wide(FileWideString* value, TestResult* report) {
     __try {
         using Destroy = void (__fastcall*)(void*);
-        reinterpret_cast<Destroy>(core_base + 0x7a60)(value);
+        reinterpret_cast<Destroy>(core_address(core_base, 0x7a60))(value);
     } __except (record_exception(GetExceptionInformation(), report)) {}
 }
 
@@ -131,7 +131,7 @@ static void file_send_on_task(const FileTaskLease& lease) {
             report.stage = 70;
             using GetContext = SharedMessage* (__fastcall*)(SharedMessage*);
             using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-            reinterpret_cast<GetContext>(core_base + 0x47220)(&context);
+            reinterpret_cast<GetContext>(core_address(core_base, 0x47220))(&context);
             if (!emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY; __leave;
             }
@@ -141,19 +141,19 @@ static void file_send_on_task(const FileTaskLease& lease) {
             using EnsureDirectory = uint32_t (__fastcall*)(const FileWideString*);
             using MakeToken = SmallString* (__fastcall*)(SmallString*);
             using Join = FileWideString* (__fastcall*)(const FileWideString*, FileWideString*, const void*);
-            reinterpret_cast<GetDirectory>(core_base + 0x22d8390)(&directory);
+            reinterpret_cast<GetDirectory>(core_address(core_base, 0x22d8390))(&directory);
             if (!file_wide_data(directory) ||
-                !reinterpret_cast<EnsureDirectory>(core_base + 0x389830)(&directory)) {
+                !reinterpret_cast<EnsureDirectory>(core_address(core_base, 0x389830))(&directory)) {
                 status = ERROR_PATH_NOT_FOUND; __leave;
             }
-            reinterpret_cast<MakeToken>(core_base + 0x57fe90)(&token);
+            reinterpret_cast<MakeToken>(core_address(core_base, 0x57fe90))(&token);
             if (!token.length || token.length >= 128 || token.capacity < token.length) {
                 status = ERROR_INVALID_DATA; __leave;
             }
             const char* token_data = token.capacity > 15 ?
                 *reinterpret_cast<const char* const*>(token.data) : token.data;
             struct StringView { const char* data; uint64_t length; } token_view{token_data, token.length};
-            reinterpret_cast<Join>(core_base + 0x9f4b0)(&directory, &prepared, &token_view);
+            reinterpret_cast<Join>(core_address(core_base, 0x9f4b0))(&directory, &prepared, &token_view);
             const wchar_t* path = file_wide_data(prepared);
             const wchar_t* root = file_wide_data(directory);
             if (!path || !root || prepared.length <= directory.length ||
@@ -168,15 +168,15 @@ static void file_send_on_task(const FileTaskLease& lease) {
             }
             report.stage = 71;
             using Factory = SharedMessage* (__fastcall*)(SharedMessage*);
-            reinterpret_cast<Factory>(core_base + 0x2bab360)(&message);
+            reinterpret_cast<Factory>(core_address(core_base, 0x2bab360))(&message);
             if (!message.object || !message.control ||
-                *static_cast<const uintptr_t*>(message.object) != core_base + 0x8e53718) {
+                *static_cast<const uintptr_t*>(message.object) != core_address(core_base, 0x8e53718)) {
                 status = ERROR_INVALID_DATA; __leave;
             }
             auto object = static_cast<unsigned char*>(message.object);
             *reinterpret_cast<uint64_t*>(object + 0x118) = 0x600000031ull;
             using CopyWide = void* (__fastcall*)(void*, const FileWideString*);
-            reinterpret_cast<CopyWide>(core_base + 0x9b5d0)(object + 0x120, &prepared);
+            reinterpret_cast<CopyWide>(core_address(core_base, 0x9b5d0))(object + 0x120, &prepared);
             *reinterpret_cast<uint64_t*>(object + 0x1c8) = lease.bytes.size();
             if (!set_native_string(reinterpret_cast<SmallString*>(object + 0x1a8), lease.name) ||
                 !set_native_string(reinterpret_cast<SmallString*>(object + 0xb0), config.base.target)) {
@@ -203,9 +203,9 @@ static void file_send_on_task(const FileTaskLease& lease) {
                 status = ERROR_SUCCESS; __leave;
             }
             report.stage = 74;
-            reinterpret_cast<GetService>(core_base + 0x36c740)(context.object, &provider);
+            reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(context.object, &provider);
             if (!provider.object || !provider.control) { status = ERROR_NOT_READY; __leave; }
-            reinterpret_cast<GetService>(core_base + 0x6f4d90)(provider.object, &manager);
+            reinterpret_cast<GetService>(core_address(core_base, 0x6f4d90))(provider.object, &manager);
             if (!manager.object || !manager.control || !emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY; __leave;
             }
@@ -213,7 +213,7 @@ static void file_send_on_task(const FileTaskLease& lease) {
             _InterlockedIncrement(reinterpret_cast<volatile LONG*>(
                 static_cast<unsigned char*>(message.control) + 8));
             handed_to_manager = true; // The uploader may retain InputTemp after this call returns.
-            reinterpret_cast<SendFunction>(core_base + 0x178f100)(manager.object, result, &transferred, 1);
+            reinterpret_cast<SendFunction>(core_address(core_base, 0x178f100))(manager.object, result, &transferred, 1);
             transferred = {};
             report.native_status = *reinterpret_cast<const uint32_t*>(result);
             report.native_status_high = *reinterpret_cast<const uint32_t*>(result + 4);

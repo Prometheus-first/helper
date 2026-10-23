@@ -92,7 +92,7 @@ class EmoticonNativeRoutingTests(unittest.TestCase):
         core.write_bytes(b"synthetic compatible core fixture")
         (self.root / "native").mkdir(exist_ok=True)
         (self.root / "native/compatibility.json").write_text(
-            json.dumps({"sha256": hashlib.sha256(core.read_bytes()).hexdigest()}), encoding="utf-8")
+            json.dumps({"size": core.stat().st_size, "sha256": hashlib.sha256(core.read_bytes()).hexdigest()}), encoding="utf-8")
         loaded = keep_loaded
         allocations = {}
         calls = []

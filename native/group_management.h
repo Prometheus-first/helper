@@ -128,20 +128,20 @@ static void group_management_on_task(const GroupManagementLease& lease) {
             report.stage = 90;
             using GetContext = SharedMessage* (__fastcall*)(SharedMessage*);
             using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-            reinterpret_cast<GetContext>(core_base + 0x47220)(&context);
+            reinterpret_cast<GetContext>(core_address(core_base, 0x47220))(&context);
             if (!emoticon_account_matches(context, lease.config.account)) {
                 status = ERROR_NOT_READY;
                 __leave;
             }
-            reinterpret_cast<GetService>(core_base + 0x36c740)(context.object, &provider);
+            reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(context.object, &provider);
             if (!provider.object || !provider.control) { status = ERROR_NOT_READY; __leave; }
-            reinterpret_cast<GetService>(core_base + 0x6db150)(provider.object, &manager);
+            reinterpret_cast<GetService>(core_address(core_base, 0x6db150))(provider.object, &manager);
             if (!manager.object || !manager.control) { status = ERROR_NOT_READY; __leave; }
             report.stage = 91;
             using SceneConstructor = void (__fastcall*)(void*);
-            reinterpret_cast<SceneConstructor>(core_base + 0x1984610)(scene);
+            reinterpret_cast<SceneConstructor>(core_address(core_base, 0x1984610))(scene);
             scene_initialized = true;
-            if (*reinterpret_cast<uintptr_t*>(scene) != core_base + 0x910b378 ||
+            if (*reinterpret_cast<uintptr_t*>(scene) != core_address(core_base, 0x910b378) ||
                 !emoticon_account_matches(context, lease.config.account)) {
                 status = ERROR_INVALID_DATA;
                 __leave;
@@ -156,12 +156,12 @@ static void group_management_on_task(const GroupManagementLease& lease) {
             if (lease.config.operation == 1) {
                 // A successful invitation does not imply the invitees have joined.
                 using Invite = bool (__fastcall*)(void*, GroupMemberVector*, SmallString*, void*);
-                success = reinterpret_cast<Invite>(core_base + 0x16f3390)(
+                success = reinterpret_cast<Invite>(core_address(core_base, 0x16f3390))(
                     manager.object, &members, &target, scene);
             } else {
                 using Create = SmallString* (__fastcall*)(void*, SmallString*,
                                                           GroupMemberVector*, SmallString*);
-                reinterpret_cast<Create>(core_base + 0x16da4f0)(
+                reinterpret_cast<Create>(core_address(core_base, 0x16da4f0))(
                     manager.object, &created, &members, &extra);
                 // Only return the group ID supplied by the successful server response.
                 // Empty/invalid output is failure; never guess a room from recent chats.
@@ -194,7 +194,7 @@ static void group_management_on_task(const GroupManagementLease& lease) {
         if (scene_initialized) {
             __try {
                 using SceneDestructor = void (__fastcall*)(void*);
-                reinterpret_cast<SceneDestructor>(core_base + 0x198e2e0)(scene);
+                reinterpret_cast<SceneDestructor>(core_address(core_base, 0x198e2e0))(scene);
             } __except (record_exception(GetExceptionInformation(), &report)) {
                 status = ERROR_GEN_FAILURE;
                 success = false;

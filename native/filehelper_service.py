@@ -1,4 +1,4 @@
-"""微信 4.1.15.13 原生文本服务；测试范围仅为文件传输助手。"""
+"""受支持微信构建的原生消息通道与桥接生命周期管理。"""
 from __future__ import annotations
 
 import ctypes as c

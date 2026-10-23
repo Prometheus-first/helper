@@ -68,7 +68,7 @@ features:
 
 ## 先了解运行条件
 
-helper 目前适配 **Windows x64、微信 4.1.15.13**，使用 Python 作为插件入口、原生桥接负责消息能力。版本和核心 DLL 指纹均有检查，其他微信版本需要重新适配。
+helper 目前适配 **Windows x64、微信 4.1.15.13 / 4.1.15.56**，使用 Python 作为插件入口、原生桥接负责消息能力。版本和核心 DLL 指纹均有检查，按构建选择对应地址；其他微信版本需要重新适配。
 
 ```powershell
 python -m pip install -r requirements.txt

@@ -126,7 +126,7 @@ static void voice_on_task(const VoiceTaskLease& lease) {
             report.stage = 60;
             using GetContext = SharedMessage* (__fastcall*)(SharedMessage*);
             using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-            reinterpret_cast<GetContext>(core_base + 0x47220)(&context);
+            reinterpret_cast<GetContext>(core_address(core_base, 0x47220))(&context);
             if (!emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY;
                 __leave;
@@ -134,9 +134,9 @@ static void voice_on_task(const VoiceTaskLease& lease) {
             report.stage = 61;
             using Factory = SharedMessage* (__fastcall*)(SharedMessage*, const SmallString*,
                                                         const SmallString*, const uint32_t*, const void*);
-            reinterpret_cast<Factory>(core_base + 0x6be0020)(&message, &target, &payload, &duration, options);
+            reinterpret_cast<Factory>(core_address(core_base, 0x6be0020))(&message, &target, &payload, &duration, options);
             if (!message.object || !message.control ||
-                *static_cast<const uintptr_t*>(message.object) != core_base + 0x9af9078) {
+                *static_cast<const uintptr_t*>(message.object) != core_address(core_base, 0x9af9078)) {
                 status = ERROR_INVALID_DATA;
                 __leave;
             }
@@ -156,16 +156,16 @@ static void voice_on_task(const VoiceTaskLease& lease) {
                 __leave;
             }
             report.stage = 63;
-            reinterpret_cast<GetService>(core_base + 0x36c740)(context.object, &provider);
+            reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(context.object, &provider);
             if (!provider.object || !provider.control) { status = ERROR_NOT_READY; __leave; }
-            reinterpret_cast<GetService>(core_base + 0x6f4d90)(provider.object, &manager);
+            reinterpret_cast<GetService>(core_address(core_base, 0x6f4d90))(provider.object, &manager);
             if (!manager.object || !manager.control || !emoticon_account_matches(context, config.account)) {
                 status = ERROR_NOT_READY;
                 __leave;
             }
             SharedMessage transferred = message;
             _InterlockedIncrement(reinterpret_cast<volatile LONG*>(static_cast<unsigned char*>(message.control) + 8));
-            reinterpret_cast<SendFunction>(core_base + 0x178f100)(manager.object, result, &transferred, 1);
+            reinterpret_cast<SendFunction>(core_address(core_base, 0x178f100))(manager.object, result, &transferred, 1);
             transferred = {}; // SendFunction consumes the retained reference.
             report.native_status = *reinterpret_cast<const uint32_t*>(result);
             report.native_status_high = *reinterpret_cast<const uint32_t*>(result + 4);

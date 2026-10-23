@@ -129,29 +129,29 @@ static DWORD file_download_on_native_task(const FileDownloadConfig* config,
         using GetApp = SharedMessage* (__fastcall*)(SharedMessage*);
         using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
         using GetDispatcher = void* (__fastcall*)(void*);
-        reinterpret_cast<GetApp>(core_base + 0x47220)(&app);
+        reinterpret_cast<GetApp>(core_address(core_base, 0x47220))(&app);
         if (!emoticon_account_matches(app, config->account)) return ERROR_NOT_READY;
-        reinterpret_cast<GetService>(core_base + 0x36c740)(app.object, &context);
+        reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(app.object, &context);
         if (!context.object || !context.control) return ERROR_NOT_READY;
-        reinterpret_cast<GetService>(core_base + 0x356dd0)(context.object, &service);
+        reinterpret_cast<GetService>(core_address(core_base, 0x356dd0))(context.object, &service);
         if (!service.object || !service.control) return ERROR_NOT_READY;
-        void* dispatcher = reinterpret_cast<GetDispatcher>(core_base + 0x10e390)(service.object);
+        void* dispatcher = reinterpret_cast<GetDispatcher>(core_address(core_base, 0x10e390))(service.object);
         if (!dispatcher || !emoticon_account_matches(app, config->account)) return ERROR_NOT_READY;
 
         report->stage = 82;
         using MakeTask = SharedMessage* (__fastcall*)(SharedMessage*, const ImageDownloadRequest*, const int*);
-        reinterpret_cast<MakeTask>(core_base + 0x2ba5330)(&file_task, &request, &task_argument);
+        reinterpret_cast<MakeTask>(core_address(core_base, 0x2ba5330))(&file_task, &request, &task_argument);
         if (!file_task.object || !file_task.control ||
-            *static_cast<const uintptr_t*>(file_task.object) != core_base + 0x97ca198)
+            *static_cast<const uintptr_t*>(file_task.object) != core_address(core_base, 0x97ca198))
             return ERROR_INVALID_DATA;
         if (!emoticon_account_matches(app, config->account)) return ERROR_NOT_READY;
         report->stage = 83;
         using Dispatch = ImageDownloadNativeStatus* (__fastcall*)(
             void*, ImageDownloadNativeStatus*, const int*, const SharedMessage*);
-        reinterpret_cast<Dispatch>(core_base + 0xe5c720)(dispatcher, &native_status, &category, &file_task);
+        reinterpret_cast<Dispatch>(core_address(core_base, 0xe5c720))(dispatcher, &native_status, &category, &file_task);
         report->native_status = static_cast<uint32_t>(native_status.code);
         report->stage = 84;
-        if (native_status.vtable != core_base + 0x8dfb4b8) return ERROR_INVALID_DATA;
+        if (native_status.vtable != core_address(core_base, 0x8dfb4b8)) return ERROR_INVALID_DATA;
         if (native_status.code != 0) return ERROR_GEN_FAILURE;
         if (!emoticon_account_matches(app, config->account)) return ERROR_NOT_READY;
         status = file_download_check_file(staging, config->expected_size, byte_count);

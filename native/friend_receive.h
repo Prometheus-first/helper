@@ -29,7 +29,7 @@ static void sample_friend_request(const unsigned char* message, uint8_t history)
         // Historical initialization must not turn old pending records into
         // automatic acceptance attempts. A newly received live event is needed.
         if (history || !message ||
-            *reinterpret_cast<const uintptr_t*>(message) != core_base + 0x8d9f958 ||
+            *reinterpret_cast<const uintptr_t*>(message) != core_address(core_base, 0x8d9f958) ||
             *reinterpret_cast<const uint32_t*>(message + 0xc) != 37) return;
         char sender[128]{}, receiver[128]{};
         if (!friend_receive_copy_string(message, 0x18, sender, sizeof(sender)) ||
@@ -39,15 +39,15 @@ static void sample_friend_request(const unsigned char* message, uint8_t history)
             !friend_receive_copy_string(message, 0x180, xml, sizeof(xml)) ||
             !std::strstr(xml, "<msg") || !std::strstr(xml, "encryptusername=") ||
             !std::strstr(xml, "ticket=")) return;
-        const uintptr_t root = *reinterpret_cast<const uintptr_t*>(core_base + 0xb912690);
-        if (!root || *reinterpret_cast<const uintptr_t*>(root) != core_base + 0x8d804e8) return;
+        const uintptr_t root = *reinterpret_cast<const uintptr_t*>(core_address(core_base, 0xb912690));
+        if (!root || *reinterpret_cast<const uintptr_t*>(root) != core_address(core_base, 0x8d804e8)) return;
         const void* context = *reinterpret_cast<void* const*>(root + 0x68);
-        if (!context || *static_cast<const uintptr_t*>(context) != core_base + 0x8dfe2f8) return;
+        if (!context || *static_cast<const uintptr_t*>(context) != core_address(core_base, 0x8dfe2f8)) return;
         char account[128]{};
         if (!friend_receive_copy_string(static_cast<const unsigned char*>(context), 0x48,
                                         account, sizeof(account)) ||
             std::strcmp(receiver, account) ||
-            *reinterpret_cast<const uintptr_t*>(core_base + 0xb912690) != root ||
+            *reinterpret_cast<const uintptr_t*>(core_address(core_base, 0xb912690)) != root ||
             *reinterpret_cast<void* const*>(root + 0x68) != context) return;
         // This separate friend-verification channel does not necessarily enter
         // ordinary AddMsg. Normalize it to the existing V3 type-37 queue only;
@@ -74,7 +74,7 @@ static uintptr_t __fastcall friend_receive(void* manager, const unsigned char* m
 
 static DWORD friend_receive_start() {
     if (friend_receive_hook_created) return ERROR_SUCCESS;
-    void* target = reinterpret_cast<void*>(core_base + 0x3866510);
+    void* target = reinterpret_cast<void*>(core_address(core_base, 0x3866510));
     MH_STATUS status = MH_CreateHook(target, reinterpret_cast<void*>(&friend_receive),
                                      reinterpret_cast<void**>(&original_friend_receive));
     if (status != MH_OK) return 600 + status;

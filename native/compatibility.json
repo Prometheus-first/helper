@@ -2,5 +2,19 @@
   "wechat_version": "4.1.15.13",
   "architecture": "x64",
   "size": 201552944,
-  "sha256": "10f8e995453e2da46d4f2b5080cd6da1f13cc5147746adc119ceae38cb039de5"
+  "sha256": "10f8e995453e2da46d4f2b5080cd6da1f13cc5147746adc119ceae38cb039de5",
+  "profiles": [
+    {
+      "wechat_version": "4.1.15.13",
+      "architecture": "x64",
+      "size": 201552944,
+      "sha256": "10f8e995453e2da46d4f2b5080cd6da1f13cc5147746adc119ceae38cb039de5"
+    },
+    {
+      "wechat_version": "4.1.15.56",
+      "architecture": "x64",
+      "size": 204305968,
+      "sha256": "e0428a7b691853de496532523c2c09aa095f90941c37c9f4cfb3f137f3c66556"
+    }
+  ]
 }

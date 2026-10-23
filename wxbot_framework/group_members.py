@@ -1,4 +1,4 @@
-"""微信 4.1.15.13 群缓存的只读完整快照；调用方须先核对核心 DLL 指纹。
+"""已核对微信版本群缓存的只读完整快照；调用方须先核对核心 DLL 指纹。
 
 不调用微信函数或触发网络同步。未缓存、成员读取中变化、账号不符时返回 None；
 这与“群内无人”不同。可用于差分的快照必须含自己、无重复 ID，且成员索引数匹配。
@@ -10,6 +10,7 @@ import struct
 from .account import APP_GLOBAL_RVA, _pointer, read_current_account, read_current_profile, validate_account
 from .contacts import (CACHE_PROVIDER_GETTER_RVA, CACHE_PROVIDER_VTABLE_RVA, read_contact_name)
 from .group_management import validate_group_id
+from .native_profiles import select_memory_profile
 
 CHATROOM_CACHE_VTABLE_RVA = 0x8F9C228
 MEMBER_DATA_VTABLE_RVA = 0x8FA3CB8
@@ -154,15 +155,19 @@ def read_group_members(read_memory, core_base, room, *, expected_account):
         return None
     reader = _StableReader(read_memory)
     try:
-        app = _pointer(reader.ptr(core_base + APP_GLOBAL_RVA))
+        profile = select_memory_profile(reader.read, core_base)
+        if profile is None:
+            return None
+        rva = profile.rva
+        app = _pointer(reader.ptr(core_base + rva(APP_GLOBAL_RVA)))
         context = _pointer(reader.ptr(app + 0x68))
         table = _pointer(reader.ptr(context))
-        if reader.ptr(table + 0x38) != core_base + CACHE_PROVIDER_GETTER_RVA:
+        if reader.ptr(table + 0x38) != core_base + rva(CACHE_PROVIDER_GETTER_RVA):
             return None
-        if reader.read(core_base + CACHE_PROVIDER_GETTER_RVA + 28, 8) != bytes.fromhex("48 83 b9 60 04 00 00 00"):
+        if reader.read(core_base + rva(CACHE_PROVIDER_GETTER_RVA) + 28, 8) != bytes.fromhex("48 83 b9 60 04 00 00 00"):
             return None
         provider = _pointer(reader.ptr(context + 0x460))
-        if reader.ptr(provider) != core_base + CACHE_PROVIDER_VTABLE_RVA:
+        if reader.ptr(provider) != core_base + rva(CACHE_PROVIDER_VTABLE_RVA):
             return None
         head, size = struct.unpack("<QQ", reader.read(provider + 0x90, 16))
         if not 1 <= size <= 512:
@@ -173,7 +178,7 @@ def read_group_members(read_memory, core_base, room, *, expected_account):
                 break
             visited.add(node)
             value = reader.ptr(node + 0x30)
-            if value and reader.ptr(value) == core_base + CHATROOM_CACHE_VTABLE_RVA:
+            if value and reader.ptr(value) == core_base + rva(CHATROOM_CACHE_VTABLE_RVA):
                 if reader.string(node + 0x10, 64, encoding="ascii") != "ChatroomCache":
                     return None
                 cache = value
@@ -188,7 +193,7 @@ def read_group_members(read_memory, core_base, room, *, expected_account):
         # RepeatedPtrField 的 capacity 是 int32；其后 4 字节为 padding，
         # 实机里可含未初始化高位，不能按 uint64 当成容量。
         vtable, array, count, allocated, capacity = struct.unpack_from("<QQiii", data)
-        if (vtable != core_base + MEMBER_DATA_VTABLE_RVA or
+        if (vtable != core_base + rva(MEMBER_DATA_VTABLE_RVA) or
                 not 1 <= count <= MAX_GROUP_MEMBERS or not count <= allocated <= capacity <= MAX_GROUP_MEMBERS):
             return None
         # 1730f10 拷贝整个 protobuf，随后为全部成员重建 +0xd0 索引。
@@ -203,7 +208,7 @@ def read_group_members(read_memory, core_base, room, *, expected_account):
         for pointer in pointers:
             member = reader.read(_pointer(pointer), 0x20)
             member_vtable, wxid_address, nickname_address = struct.unpack_from("<QQQ", member)
-            if member_vtable != core_base + MEMBER_VTABLE_RVA:
+            if member_vtable != core_base + rva(MEMBER_VTABLE_RVA):
                 return None
             wxid = validate_account(reader.string(_pointer(wxid_address), 127, encoding="ascii"))
             if wxid in seen or wxid in (".", ".."):

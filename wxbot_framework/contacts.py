@@ -1,9 +1,10 @@
-"""微信 4.1.15.13 联系人缓存的只读名字快照；调用方必须先核对核心 DLL 指纹。"""
+"""已核对微信版本联系人缓存的只读名字快照；调用方必须先核对核心 DLL 指纹。"""
 from __future__ import annotations
 
 import struct
 
 from .account import APP_GLOBAL_RVA, _pointer, read_current_account, validate_account
+from .native_profiles import select_memory_profile
 
 CACHE_PROVIDER_GETTER_RVA = 0x36C7B0
 CACHE_PROVIDER_VTABLE_RVA = 0x8F9BF98
@@ -20,6 +21,10 @@ def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
     if not account or (expected_account is not None and account != expected_account):
         return None
     try:
+        profile = select_memory_profile(read_memory, core_base)
+        if profile is None:
+            return None
+        rva = profile.rva
         def read(address, length):
             value = read_memory(_pointer(address), length)
             if len(value) != length:
@@ -40,15 +45,15 @@ def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
                 raise ValueError("联系人字符串发生变化")
             return body.decode("utf-8")
 
-        app = ptr(core_base + APP_GLOBAL_RVA)
+        app = ptr(core_base + rva(APP_GLOBAL_RVA))
         context = ptr(app + 0x68)
         table = ptr(context)
-        if ptr(table + 0x38) != core_base + CACHE_PROVIDER_GETTER_RVA:
+        if ptr(table + 0x38) != core_base + rva(CACHE_PROVIDER_GETTER_RVA):
             return None
-        if read(core_base + CACHE_PROVIDER_GETTER_RVA + 28, 8) != bytes.fromhex("48 83 b9 60 04 00 00 00"):
+        if read(core_base + rva(CACHE_PROVIDER_GETTER_RVA) + 28, 8) != bytes.fromhex("48 83 b9 60 04 00 00 00"):
             return None
         provider = _pointer(ptr(context + 0x460))
-        if ptr(provider) != core_base + CACHE_PROVIDER_VTABLE_RVA:
+        if ptr(provider) != core_base + rva(CACHE_PROVIDER_VTABLE_RVA):
             return None
         registry = read(provider + 0x90, 16)
         head, size = struct.unpack("<QQ", registry)
@@ -61,7 +66,7 @@ def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
                 break
             visited.add(node)
             value = ptr(node + 0x30)
-            if value and ptr(value) == core_base + CONTACT_CACHE_VTABLE_RVA:
+            if value and ptr(value) == core_base + rva(CONTACT_CACHE_VTABLE_RVA):
                 cache = value
                 break
             node = ptr(node)

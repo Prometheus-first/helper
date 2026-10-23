@@ -91,14 +91,14 @@ static void friend_request_on_task(const FriendRequestLease& lease) {
             report.stage = 110;
             using GetContext = SharedMessage* (__fastcall*)(SharedMessage*);
             using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-            reinterpret_cast<GetContext>(core_base + 0x47220)(&context);
+            reinterpret_cast<GetContext>(core_address(core_base, 0x47220))(&context);
             if (!emoticon_account_matches(context, lease.config.account)) {
                 status = ERROR_NOT_READY;
                 __leave;
             }
-            reinterpret_cast<GetService>(core_base + 0x36c740)(context.object, &provider);
+            reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(context.object, &provider);
             if (!provider.object || !provider.control) { status = ERROR_NOT_READY; __leave; }
-            reinterpret_cast<GetService>(core_base + 0x754330)(provider.object, &manager);
+            reinterpret_cast<GetService>(core_address(core_base, 0x754330))(provider.object, &manager);
             if (!manager.object || !manager.control) { status = ERROR_NOT_READY; __leave; }
             report.stage = 111;
             if (!emoticon_account_matches(context, lease.config.account)) {
@@ -116,7 +116,7 @@ static void friend_request_on_task(const FriendRequestLease& lease) {
             using AcceptFriend = void* (__fastcall*)(void*, void*, const SmallString*,
                 uint32_t, uint32_t, const SmallString*, const SmallString*, const SmallString*);
             result_used = true;
-            reinterpret_cast<AcceptFriend>(core_base + 0x1a26440)(manager.object, result,
+            reinterpret_cast<AcceptFriend>(core_address(core_base, 0x1a26440))(manager.object, result,
                 &v3, lease.config.scene, 0, &ticket, &empty, &empty);
             report.stage = 114;
             // The native result's error starts at -1 and may stay there even on
@@ -137,7 +137,7 @@ static void friend_request_on_task(const FriendRequestLease& lease) {
         if (result_used) {
             __try {
                 using DestroyResult = void (__fastcall*)(void*);
-                reinterpret_cast<DestroyResult>(core_base + 0x7544b0)(result);
+                reinterpret_cast<DestroyResult>(core_address(core_base, 0x7544b0))(result);
             } __except (record_exception(GetExceptionInformation(), &report)) {
                 status = ERROR_GEN_FAILURE;
                 success = false;

@@ -62,7 +62,7 @@ static void image_free_string(SmallString* text, TestResult* report) {
                 size += 39;
             }
             using Free = void (__fastcall*)(void*, size_t);
-            reinterpret_cast<Free>(core_base + 0x74ab8e0)(allocation, size);
+            reinterpret_cast<Free>(core_address(core_base, 0x74ab8e0))(allocation, size);
         }
     } __except (record_exception(GetExceptionInformation(), report)) {
     }
@@ -84,7 +84,7 @@ static DWORD send_image_on_task(const TextConfig& config, bool probe) {
         } else {
             QtStaticUtf16* qstring = &utf16;
             using ToUtf8 = SmallString* (__fastcall*)(void*, SmallString*);
-            reinterpret_cast<ToUtf8>(core_base + 0x857a0)(&qstring, &roundtrip);
+            reinterpret_cast<ToUtf8>(core_address(core_base, 0x857a0))(&qstring, &roundtrip);
             const char* bytes = roundtrip.capacity > 15 ?
                 *reinterpret_cast<const char* const*>(roundtrip.data) : roundtrip.data;
             if (roundtrip.length != std::strlen(config.base.text) ||
@@ -96,14 +96,14 @@ static DWORD send_image_on_task(const TextConfig& config, bool probe) {
             } else {
                 using GetApp = SharedMessage* (__fastcall*)(SharedMessage*);
                 using GetShared = SharedMessage* (__fastcall*)(void*, SharedMessage*);
-                reinterpret_cast<GetApp>(core_base + 0x47220)(&app);
+                reinterpret_cast<GetApp>(core_address(core_base, 0x47220))(&app);
                 if (!app.object) RaiseException(ERROR_NOT_READY, 0, 0, nullptr);
-                reinterpret_cast<GetShared>(core_base + 0x36c740)(app.object, &context);
+                reinterpret_cast<GetShared>(core_address(core_base, 0x36c740))(app.object, &context);
                 if (!context.object) RaiseException(ERROR_NOT_READY, 0, 0, nullptr);
-                reinterpret_cast<GetShared>(core_base + 0x6f4d90)(context.object, &manager);
+                reinterpret_cast<GetShared>(core_address(core_base, 0x6f4d90))(context.object, &manager);
                 if (!manager.object) RaiseException(ERROR_NOT_READY, 0, 0, nullptr);
                 using ImageFromFile = SharedMessage* (__fastcall*)(void*, SharedMessage*, void*);
-                reinterpret_cast<ImageFromFile>(core_base + 0x3d9d990)(nullptr, &message, &qstring);
+                reinterpret_cast<ImageFromFile>(core_address(core_base, 0x3d9d990))(nullptr, &message, &qstring);
                 if (!message.object || !message.control) RaiseException(ERROR_INVALID_DATA, 0, 0, nullptr);
                 auto object = static_cast<unsigned char*>(message.object);
                 struct WideStringView { wchar_t data[8]; uint64_t length, capacity; };
@@ -136,7 +136,7 @@ static DWORD send_image_on_task(const TextConfig& config, bool probe) {
                 SharedMessage transferred = message;
                 _InterlockedIncrement(reinterpret_cast<volatile LONG*>(
                     static_cast<unsigned char*>(message.control) + 8));
-                reinterpret_cast<SendFunction>(core_base + 0x178f100)(manager.object, result, &transferred, 1);
+                reinterpret_cast<SendFunction>(core_address(core_base, 0x178f100))(manager.object, result, &transferred, 1);
                 report.native_status = *reinterpret_cast<uint32_t*>(result);
                 report.native_status_high = *reinterpret_cast<uint32_t*>(result + 4);
                 const auto error = reinterpret_cast<const SmallString*>(result + 8);

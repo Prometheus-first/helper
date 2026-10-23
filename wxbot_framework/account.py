@@ -1,9 +1,10 @@
-"""微信 4.1.15.13 当前登录账号的只读快照，不保存账号缓存。"""
+"""已核对微信版本当前登录账号的只读快照，不保存账号缓存。"""
 from __future__ import annotations
 
 import struct
 
 from .text import SYSTEM_PEERS, validate_target
+from .native_profiles import select_memory_profile
 
 # 由该版本的反汇编及当前进程核对；使用前后端已校验核心 DLL SHA256。
 APP_GLOBAL_RVA = 0xB912690
@@ -63,19 +64,23 @@ def read_current_account(read_memory, core_base):
         return struct.unpack("<Q", read(address, 8))[0]
 
     try:
-        app = _pointer(ptr(core_base + APP_GLOBAL_RVA))
-        app_table = ptr(app)
-        if app_table != core_base + APP_VTABLE_RVA:
+        profile = select_memory_profile(read_memory, core_base)
+        if profile is None:
             return None
-        if ptr(app_table + 0x60) != core_base + APP_CONTEXT_GETTER_RVA:
+        rva = profile.rva
+        app = _pointer(ptr(core_base + rva(APP_GLOBAL_RVA)))
+        app_table = ptr(app)
+        if app_table != core_base + rva(APP_VTABLE_RVA):
+            return None
+        if ptr(app_table + 0x60) != core_base + rva(APP_CONTEXT_GETTER_RVA):
             return None
         context = _pointer(ptr(app + 0x68))
         table = ptr(context)
-        if table != core_base + CONTEXT_VTABLE_RVA:
+        if table != core_base + rva(CONTEXT_VTABLE_RVA):
             return None
-        if ptr(table + 0x18) != core_base + IDENTITY_GETTER_RVA:
+        if ptr(table + 0x18) != core_base + rva(IDENTITY_GETTER_RVA):
             return None
-        if read(core_base + IDENTITY_GETTER_RVA, 5) != b"\x48\x8d\x41\x48\xc3":
+        if read(core_base + rva(IDENTITY_GETTER_RVA), 5) != b"\x48\x8d\x41\x48\xc3":
             return None
         address = context + 0x48
         header = read(address, 32)
@@ -86,7 +91,8 @@ def read_current_account(read_memory, core_base):
         body = read(buffer, length)
         account = validate_account(body.decode("ascii"))
         if (read(address, 32) != header or read(buffer, length) != body or
-                ptr(core_base + APP_GLOBAL_RVA) != app or ptr(app + 0x68) != context or ptr(context) != table):
+                ptr(core_base + rva(APP_GLOBAL_RVA)) != app or ptr(app) != app_table or
+                ptr(app + 0x68) != context or ptr(context) != table):
             return None
         return account
     except (OSError, ValueError, struct.error):
@@ -100,12 +106,15 @@ def read_current_profile(read_memory, core_base):
     if not account:
         return None
     try:
+        profile = select_memory_profile(read_memory, core_base)
+        if profile is None:
+            return None
         def read(address, length):
             value = read_memory(_pointer(address), length)
             if len(value) != length:
                 raise ValueError("微信名字字段读取不完整")
             return value
-        app = struct.unpack("<Q", read(core_base + APP_GLOBAL_RVA, 8))[0]
+        app = struct.unpack("<Q", read(core_base + profile.rva(APP_GLOBAL_RVA), 8))[0]
         context = struct.unpack("<Q", read(app + 0x68, 8))[0]
         address = context + 0x88
         header = read(address, 32)
@@ -118,6 +127,7 @@ def read_current_profile(read_memory, core_base):
         if not name.strip() or len(name) > 64 or any(ord(ch) < 32 for ch in name):
             return None
         if (read(address, 32) != header or read(buffer, length) != body or
+                struct.unpack("<Q", read(core_base + profile.rva(APP_GLOBAL_RVA), 8))[0] != app or
                 struct.unpack("<Q", read(app + 0x68, 8))[0] != context or
                 read_current_account(read_memory, core_base) != account):
             return None

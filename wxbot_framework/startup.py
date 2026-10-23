@@ -42,7 +42,7 @@ def ensure_account_binding(root, store, *, scan=None, input_fn=None, output=prin
     started = clock()
     last_wait = None
     require_choice = False
-    output("首次启动：请在电脑微信 4.1.15.13 中登录机器人账号，程序会自动识别并保存微信 ID。")
+    output("首次启动：请在受支持版本的电脑微信中登录机器人账号，程序会自动识别并保存微信 ID。")
 
     def candidates():
         rows = scan()
