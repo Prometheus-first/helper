@@ -116,7 +116,7 @@ voice.send / friend.voice.send / group.voice.send
 
 需要明确启用的插件可在 `plugin.json` 设置 `"default_enabled": false`。当旧配置尚无该插件条目时，框架也会保持关闭；控制台 `enable 插件名` 才会启用并保存设置。
 
-`message.recall` 表示后端可提供微信原始消息编号和撤回通知。框架把撤回事件及媒体监控元数据定向交给内置 `anti_recall` 插件，不广播为普通文本；参考该插件的精确编号匹配、会话缓存和 `ctx.reply` 连接检查。补发插件默认开启，网页监控标记独立保留。
+`message.recall` 表示后端可提供微信原始消息编号和撤回通知。框架把撤回事件及媒体监控元数据定向交给内置防撤回插件，不广播为普通文本；参考 `anti_recall` 的精确编号匹配、会话缓存和发送连接检查。它同时补发文字、内置表情和 emoji；后端提供 `emoticon.send` 时，还会异步缓存类型 47 的原件并用 `ctx.reply_emoticon` 补发。原始 XML、CDN 地址及凭据不应进入日志或大模型。补发插件默认开启，网页监控标记独立保留。
 
 ## 群成员与昵称
 

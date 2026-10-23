@@ -37,6 +37,7 @@ class PluginTests(unittest.TestCase):
         self.ctx = PluginContext('anti_recall',{},self.service,TEXT_CAPABILITIES)
         self.plugin = Plugin()
         self.plugin.on_load(self.ctx)
+        self.addCleanup(self.plugin.on_unload,self.ctx)
 
     def emit(self, message):
         self.plugin.on_message(message,self.ctx)

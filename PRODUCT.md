@@ -31,7 +31,7 @@ The operator starts a local Python service, normally with start_web.bat, and ope
 - Preserve existing local accounts, group settings, aliases, databases, and credentials during visual updates.
 - UI copy is Chinese and concise: keep task labels and necessary feedback; avoid repeated explanations. IDs and technical settings remain selectable and readable.
 - Support light and dark themes with browser-local preference; first use follows the system. The dark theme uses neutral black and gray surfaces, not green-tinted surfaces.
-- The supported native client is WeChat 4.1.15.13 x64 on Windows. The native bridge also forwards voice, video and sticker metadata for monitoring without downloading those media.
+- The supported native client is WeChat 4.1.15.13 x64 on Windows. The native bridge also forwards voice, video and sticker metadata. Monitoring uses placeholders; the default text anti-recall plugin separately caches supported sticker originals from WeChat CDN addresses and re-sends them after recall. Keep this cache bounded and account-isolated; never expose download credentials or raw XML to logs or models.
 
 ## Brand Commitments
 
