@@ -31,6 +31,7 @@ export default defineConfig({
         { text: '好友申请与群管理', link: '/guide/friends-and-groups' },
         { text: '文本与真实艾特', link: '/messages/text' },
         { text: '图片收发', link: '/messages/images' },
+        { text: '图库图片', link: '/messages/gallery' },
         { text: '文件收发', link: '/messages/files' },
         { text: '合并转发解析', link: '/messages/forwarded' },
         { text: '防撤回与补发', link: '/messages/recall' },

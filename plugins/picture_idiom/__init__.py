@@ -130,7 +130,8 @@ class Plugin:
             self.session_id = message.session_id
         text = message.text.strip()
         if text == '/help' and not getattr(ctx, 'plugin_is_active', lambda name: False)('idiom_chain'):
-            ctx.reply(message, '1. 看图猜成语\n\n2. /help')
+            gallery = getattr(ctx, 'plugin_is_active', lambda name: False)('image_gallery')
+            ctx.reply(message, '1. 看图猜成语\n\n2. /来张图\n\n3. /help' if gallery else '1. 看图猜成语\n\n2. /help')
             return
         if text == '成语接龙' and getattr(ctx, 'plugin_is_active', lambda name: False)('idiom_chain'):
             self.games.pop(message.chat_id, None)

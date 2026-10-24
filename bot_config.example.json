@@ -75,6 +75,17 @@
     "echo": {
       "enabled": true,
       "prefix": "echo "
+    },
+    "image_gallery": {
+      "enabled": true,
+      "source": "xxapi",
+      "commands": [
+        "/来张图",
+        "/美女"
+      ],
+      "cooldown_seconds": 10,
+      "timeout_seconds": 12,
+      "max_image_bytes": 10485760
     }
   }
 }

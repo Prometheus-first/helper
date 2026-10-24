@@ -119,6 +119,45 @@ class PanelFixture(unittest.TestCase):
 
 
 class ControllerTests(PanelFixture):
+    def test_real_plugin_descriptions_survive_start_reload_disable_and_stop(self):
+        from wxbot_framework.backend import CAPABILITIES
+        from wxbot_framework.plugins import PluginManager
+        from wxbot_framework.sdk import ServiceFacade
+
+        (self.root/'plugins/echo/__init__.py').write_text(
+            'class Plugin:\n def on_message(self, message, context): pass\n', encoding='utf-8')
+
+        class PluginApp(FakeApp):
+            def __init__(self, root, store):
+                super().__init__(root, store)
+                self.service = ServiceFacade(text_delay={'enabled':False})
+                self.plugins = PluginManager(root/'plugins', store, self.service, CAPABILITIES)
+                self.plugins.load_one('echo')
+
+            def stop(self):
+                try:
+                    super().stop()
+                finally:
+                    self.plugins.shutdown()
+                    self.service.close()
+
+        self.controller.factory = PluginApp
+
+        def assert_description(active):
+            row = next(row for row in self.controller.snapshot()['plugins'] if row['name']=='echo')
+            self.assertEqual(row.get('description'), '回声')
+            self.assertEqual(row['active'], active)
+
+        assert_description(False)
+        self.controller.start()
+        assert_description(True)
+        self.controller.plugin_action({'name':'echo','action':'reload'})
+        assert_description(True)
+        self.controller.plugin_action({'name':'echo','action':'disable'})
+        assert_description(False)
+        self.wait_stopped()
+        assert_description(False)
+
     def test_start_plugin_operation_uses_runtime_thread_then_stop_releases_lock(self):
         self.controller.start()
         with self.assertRaises(PanelError):

@@ -278,6 +278,7 @@ class PluginManager:
                 spec = specs.get(name)
                 missing = spec.requires - self.capabilities if spec else frozenset()
                 rows.append({"name": name, "active": bool(record and record.active),
+                             "description": spec.description if spec else record.spec.description,
                              "enabled": self.config.get("plugins", {}).get(name, {}).get("enabled", spec.default_enabled if spec else True),
                              "api": spec.api if spec else "unknown", "missing_capabilities": sorted(missing),
                              "handled": record.handled if record else 0, "errors": record.errors if record else 0,

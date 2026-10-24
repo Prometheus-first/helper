@@ -28,7 +28,7 @@ features:
     link: /messages/text
   - icon: 🖼️
     title: 图片与动态表情
-    details: 下载普通图片、发送本地图片，提取本地缓存表情并发送动态 GIF。
+    details: 下载普通图片、发送本地图片或从免费图库取图，提取本地缓存表情并发送动态 GIF。
     link: /messages/images
   - icon: 🎙️
     title: 语音合成与发送

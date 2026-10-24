@@ -231,6 +231,17 @@ class FrameworkTests(unittest.TestCase):
         self.manager.dispatch(self.message("echo 恢复了", 3))
         wait_for(lambda: ("filehelper", "恢复了") in self.backend.sent)
 
+    def test_running_plugin_keeps_description_when_manifest_cannot_be_read(self):
+        self.manager.load_one("echo")
+        expected = self.manager.records["echo"].spec.description
+        (self.root / "plugins/echo/plugin.json").write_text("{broken", encoding="utf-8")
+
+        row = next(row for row in self.manager.status() if row["name"] == "echo")
+
+        self.assertTrue(row["active"])
+        self.assertEqual(row.get("description"), expected)
+        self.assertTrue(row["error"])
+
     def test_reload_uses_fresh_source_and_failed_reload_keeps_previous(self):
         source = "class Plugin:\n def on_message(self,m,c):\n  c.reply(m,'v1')\n"
         path = self.create_plugin("reloadable", source)

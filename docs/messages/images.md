@@ -1,5 +1,7 @@
 # 图片收发
 
+群内发送 `/来张图` 或 `/美女`，可通过默认启用的 `image_gallery` 插件自动从免费图库取图并发送。支持切换图源、自定义 HTTPS API 和按群冷却，配置见[图库图片](./gallery.md)。
+
 使用 `native_text` 后端时，收到允许会话的普通图片会通过当前微信的 CDN 下载任务保存到本地。`bot_config.json` 可设置 `"image_directory": ".runtime/images"`；相对路径以项目目录为起点，目录下再按微信账号隔离。未配置时使用该默认值。`chat_allowlist` 同时控制图片下载和插件分发，空列表允许所有会话。
 
 收到图片后日志显示状态和文件路径。插件中 `message.type == 3` 表示图片，`message.text` 为空；`message.data["image_status"]` 为 `ready` 时，`message.image_path` 指向已保存的图片。下载失败时状态为 `failed`，路径为空，原因在 `message.data["image_error"]` 中。`message.data["image_quality"]` 区分 `standard`（普通尺寸）、`original`（消息仅提供原图引用）和 `thumbnail`（消息仅提供缩略图引用）。普通文本的类型为 `1`。图片不会进入文字聊天记录或大模型的文本上下文。
