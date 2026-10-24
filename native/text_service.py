@@ -6,6 +6,7 @@ import time
 import uuid
 import ctypes as c
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV5
@@ -259,6 +260,24 @@ class NativeTextService(NativeFileHelperService):
                                       expected_account=self.self_wxid)
             self._check_account(force=True)
             return rows
+
+    def contacts(self):
+        """只读枚举当前账号缓存；不联网拉取、不保存联系人资料。"""
+        from wxbot_framework.contacts import read_contact_directory
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError("联系人查询需要已连接的微信账号")
+            self._check_account(force=True)
+            account, session = self.self_wxid, self._friend_session_id
+            snapshot = read_contact_directory(self._channel.read_memory, self._channel.core_base,
+                                              expected_account=account)
+            self._check_account(force=True)
+            if account != self.self_wxid or session != self._friend_session_id:
+                raise RuntimeError("联系人所属的微信连接已结束")
+            if snapshot is None:
+                raise RuntimeError("微信联系人缓存尚未就绪，请稍后重试")
+            return dict(snapshot, account=account, session_id=session,
+                        scanned_at=datetime.now().astimezone().isoformat(timespec="seconds"))
 
     def _sender_wechat_name(self, wxid):
         if self._channel is None:

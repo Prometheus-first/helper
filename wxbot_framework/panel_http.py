@@ -130,6 +130,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, {'chats': controller.chats()})
             if path == '/api/group-members':
                 return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
+            if path == '/api/contacts':
+                return self.send(200, controller.contacts())
             if path == '/api/send-connection':
                 return self.send(200, controller.send_connection())
             if path == '/api/send-status':

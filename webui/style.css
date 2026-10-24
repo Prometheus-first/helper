@@ -483,10 +483,55 @@ dialog .form-footer { justify-content: flex-end; }
 .member-role { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .send-status { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .send-status.error { color: var(--danger); }
+.contact-filters { display: flex; align-items: center; gap: var(--space-3); }
+.contact-filters .search { flex: 1; max-width: 540px; min-width: 0; }
+.contact-filter { margin: 0; width: 200px; min-width: 0; }
+.contact-filter select { margin: 0; }
+.contact-status { margin: var(--space-3) 0 var(--space-4); font-size: 12px; min-height: 20px; overflow-wrap: anywhere; }
+.contact-status.error { color: var(--danger); }
+.contact-table th:first-child { width: 36%; }
+.contact-table th:nth-child(2) { width: 23%; }
+.contact-table th:nth-child(3) { width: 30%; }
+.contact-table th:last-child { width: 11%; }
+.contact-row:hover { background: var(--row-hover); }
+.contact-row.selected, .contact-row.selected:hover { background: var(--selected-row); }
+.contact-name { display: block; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.contact-nickname { display: block; color: var(--muted); font-size: 12px; margin-top: var(--space-1); overflow-wrap: anywhere; }
+.contact-id { display: block; color: var(--muted); font: 12px/1.8 var(--font-data); overflow-wrap: anywhere; }
+.contact-row .contact-id { margin-top: var(--space-1); }
+.contact-alias { font: 12px/1.8 var(--font-data); color: var(--muted); }
+.contact-tags { color: var(--muted); font-size: 13px; line-height: 1.8; }
+.contact-action { text-align: right; }
+.contact-action .text-button { padding-inline: var(--space-2); }
+.contact-detail > td { padding: var(--space-5); }
+.contact-details { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-5) var(--space-8); margin: 0; }
+.contact-details > div { min-width: 0; }
+.contact-details dt { color: var(--muted); font-size: 12px; margin-bottom: var(--space-1); }
+.contact-details dd { margin: 0; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.contact-details .contact-id { font-size: 12px; }
+.contact-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-4); }
+.contact-pagination .count { margin: 0; }
+.contact-pagination > div { display: flex; gap: var(--space-2); }
 @media (max-width: 600px) {
   .member-table td, .member-table th { padding: 8px; }
   .member-table th:last-child { width: 90px; }
   .member-heading { gap: var(--space-2); }
+  #page-contacts .page-heading { gap: var(--space-3); }
+  .contact-filters { align-items: stretch; flex-direction: column; }
+  .contact-filters .search, .contact-filter { max-width: none; width: 100%; }
+  .contact-table thead { display: none; }
+  .contact-table tbody { display: block; }
+  .contact-table .contact-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: var(--space-2) var(--space-3); padding: var(--space-4); border-top: 1px solid var(--rule); }
+  .contact-table .contact-row:first-child { border-top: 0; }
+  .contact-row > td { display: block; border: 0; padding: 0; }
+  .contact-row > td:first-child { grid-column: 1; grid-row: 1; }
+  .contact-action { grid-column: 2; grid-row: 1; align-self: start; }
+  .contact-alias, .contact-tags { grid-column: 1 / -1; }
+  .contact-row .sr-only { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif; }
+  .contact-table .contact-detail { display: block; }
+  .contact-detail > td { display: block; padding: var(--space-4); }
+  .contact-details { grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-4); }
+  .contact-table .table-empty { display: block; height: auto; padding: var(--space-8) var(--space-4); }
 }
 @media (max-width: 800px) {
   .message-table th:first-child { width: 88px; }

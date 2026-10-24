@@ -493,6 +493,23 @@ class PanelController:
             return {'room': room, 'session_id': session, 'members': list(rows)}
         return self._call(query)
 
+    def contacts(self):
+        def query(app):
+            if not app._connection_ready or app.backend is None:
+                raise PanelError('微信尚未连接', 409)
+            backend, session = app.backend, app.backend.session_id
+            try:
+                snapshot = app.service.contacts(expected_session=session)
+            except RuntimeError as error:
+                raise PanelError(str(error), 409) from None
+            if (not app._connection_ready or app.backend is not backend or
+                    backend.session_id != session or not app.service.session_is_current(session)):
+                raise PanelError('联系人所属的微信连接已结束，请重新扫描', 409)
+            if snapshot is None:
+                raise PanelError('微信联系人缓存尚未就绪，请稍后重试', 409)
+            return dict(snapshot, session_id=session)
+        return self._call(query)
+
     def send_status(self, identifier):
         with self.lock:
             job = self.send_jobs.get(identifier)

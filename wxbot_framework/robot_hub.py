@@ -115,6 +115,7 @@ class RobotProxy:
     def configuration(self): return self.request('config')
     def accounts(self): return self.request('accounts')['accounts']
     def chats(self): return self.request('chats')['chats']
+    def contacts(self): return self.request('contacts')
     def group_members(self, room):
         from urllib.parse import urlencode
         return self.request('group-members?' + urlencode({'room': room}))

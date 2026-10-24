@@ -78,6 +78,7 @@ class Plugin:
 | `ctx.send_voice(chat_id, path)` | 发送语音条 |
 | `ctx.export_emoticons(convert=True)` | 显式导出当前账号本地缓存表情 |
 | `ctx.group_members(room, expected_session=message.session_id)` | 读取完整群成员快照，缓存不可用时返回 `None` |
+| `ctx.contacts(expected_session=message.session_id)` | 扫描当前账号的好友及资料，需要 `contact.read` 能力 |
 | `ctx.group_member_name(room, wxid, expected_session=message.session_id)` | 查询群昵称，未设置时返回微信名 |
 | `ctx.group_member_role(room, wxid, expected_session=message.session_id)` | 查询群主、群管理员或普通群友身份，未确认时返回 `unknown` |
 
@@ -110,6 +111,7 @@ group.file.receive / group.file.send
 friend.request.receive / friend.request.accept
 group.member.invite / group.create
 group.members.read / group.events
+contact.read
 message.recall
 emoticon.extract / emoticon.send
 voice.send / friend.voice.send / group.voice.send
@@ -122,6 +124,10 @@ voice.send / friend.voice.send / group.voice.send
 需要明确启用的插件可在 `plugin.json` 设置 `"default_enabled": false`。当旧配置尚无该插件条目时，框架也会保持关闭；控制台 `enable 插件名` 才会启用并保存设置。
 
 `message.recall` 表示后端可提供微信原始消息编号和撤回通知。框架把撤回事件及媒体监控元数据定向交给内置防撤回插件，不广播为普通文本；参考 `anti_recall` 的精确编号匹配、会话缓存和发送连接检查。它同时补发文字、内置表情和 emoji；后端提供 `emoticon.send` 时，还会异步缓存类型 47 的原件并用 `ctx.reply_emoticon` 补发。原始 XML、CDN 地址及凭据不应进入日志或大模型。补发插件默认开启，网页监控标记独立保留。
+
+## 联系人
+
+`ctx.contacts(expected_session=message.session_id)` 返回含 `account`、`session_id`、`scanned_at`、`contacts` 和标签目录 `tags` 的快照。每位好友含 `wxid`、`nickname`、`remark`、`alias`、`description`、`sex`、`country`、`province`、`city`、`signature`、`tag_ids`、`tags` 和 `tags_status`。`tags_status == "ready"` 且 `tags` 为空才代表已确认没有标签；`unavailable` 表示字段或标签名称尚未就绪。未读取到的个人资料为空，性别为 `unknown`。`complete` 当前为 `false`，仅表示已加载缓存，不保证完整好友名单。连接不可用或读期间切换账号会失败，不返回旧账号结果。当前仅验证微信 4.1.15.56，使用说明见[扫描联系人](../guide/web-panel.md#扫描联系人)。
 
 ## 群成员与昵称
 

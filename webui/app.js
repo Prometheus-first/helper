@@ -36,10 +36,12 @@ let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
 let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
+let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
+const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
 const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
-const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', models:'模型与语音', logs:'运行日志'};
+const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', contacts:'联系人', models:'模型与语音', logs:'运行日志'};
 const pluginNames = {anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], image_gallery:['图库图片'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -103,6 +105,7 @@ function renderState() {
   const running=!!state&&activeStates.includes(state.state);
   document.querySelectorAll('form:not(#send-form):not(#plugin-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   renderSendState();
+  renderContacts();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
   renderPlugins();
@@ -493,8 +496,98 @@ function renderLogs(){
 }
 $('#pause-logs').onclick=()=>{paused=!paused;$('#pause-logs').textContent=paused?'继续滚动':'暂停滚动';};
 $('#clear-logs').onclick=()=>{logs=[];renderLogs();};$('#log-level').onchange=renderLogs;
+function contactConnectionIdentity() {
+  return JSON.stringify([robot,state?.account,state?.pid,state?.started_at]);
+}
+function resetContacts(message='') {
+  contactGeneration++;contactData=null;contactLoading=false;contactError=message;contactIdentity='';contactDetail='';contactPage=0;contactSignature='';
+  $('#contact-search').value='';$('#contact-tag').innerHTML='<option value="">全部标签</option>';
+  renderContacts();
+}
+function contactTagText(row) {
+  return row.tags_status==='ready'?(row.tags?.length?row.tags.join('、'):'无标签'):'暂不可读取';
+}
+function renderContactDetails(row,index) {
+  const fields=[['微信 ID',row.wxid,true],['微信号',row.alias,true],['昵称',row.nickname],['备注',row.remark],['描述',row.description],['性别',{male:'男',female:'女'}[row.sex]],['国家或地区',row.country],['省份',row.province],['城市',row.city],['个性签名',row.signature],['好友标签',contactTagText(row)]];
+  return `<tr class="contact-detail"><td colspan="4"><dl id="contact-detail-${index}" class="contact-details" aria-label="${escape(row.remark||row.nickname||row.wxid)} 的资料">${fields.filter(([,value])=>value).map(([label,value,mono])=>`<div><dt>${label}</dt><dd${mono?' class="contact-id"':''}>${escape(value)}</dd></div>`).join('')}</dl></td></tr>`;
+}
+function renderContacts() {
+  if(contactIdentity&&(!serviceAvailable||!state?.connected||contactIdentity!==contactConnectionIdentity())) {
+    resetContacts(serviceAvailable&&state?.connected?'微信连接已变化，请重新扫描。':'当前账号已断开，连接后请重新扫描。');return;
+  }
+  const ready=serviceAvailable&&!!state?.connected;
+  $('#scan-contacts').disabled=!ready||busy||contactLoading;
+  $('#scan-contacts').textContent=contactLoading?'正在扫描…':'扫描联系人';
+  $('#contact-search').disabled=!ready||!contactData||contactLoading;
+  $('#contact-tag').disabled=!ready||!contactData||contactLoading;
+  const query=$('#contact-search').value.trim().toLowerCase(),tag=$('#contact-tag').value;
+  const all=contactData?.contacts||[];
+  const rows=all.filter(row=>(!query||[row.wxid,row.alias,row.nickname,row.remark,...(row.tags||[])].some(value=>String(value||'').toLowerCase().includes(query)))&&(!tag||(tag==='__untagged'?row.tags_status==='ready'&&!row.tag_ids?.length&&!row.tags?.length:tag==='__unavailable'?row.tags_status!=='ready':row.tag_ids?.includes(tag))));
+  const pageCount=Math.max(1,Math.ceil(rows.length/contactPageSize));contactPage=Math.min(contactPage,pageCount-1);
+  $('#contact-count').textContent=contactData?((query||tag?rows.length+' / ':'')+all.length+' 位'):'';
+  let status=!serviceAvailable?'管理服务连接中断，恢复后请重新扫描。':!state?'正在读取账号状态…':!ready?'当前账号未连接，请先启动机器人。':contactLoading?'正在扫描当前账号的联系人…':contactError;
+  if(!status&&contactData) {
+    const date=new Date(contactData.scanned_at),time=Number.isNaN(date.getTime())?'本次':date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+    status=time+' 扫描 · 微信本地缓存'+(contactData.complete?'':' · 名单可能尚未同步完整');
+  }
+  const statusText=status||'点击“扫描联系人”读取当前账号的好友。';
+  if($('#contact-status').textContent!==statusText)$('#contact-status').textContent=statusText;
+  $('#contact-status').classList.toggle('error',!!contactError&&ready);
+  $('#contact-pagination').classList.toggle('hidden',!contactData||rows.length<=contactPageSize);
+  $('#contact-page').textContent=`第 ${contactPage+1} / ${pageCount} 页`;
+  $('#contact-previous').disabled=contactPage===0||contactLoading;
+  $('#contact-next').disabled=contactPage>=pageCount-1||contactLoading;
+  const signature=JSON.stringify([contactGeneration,contactLoading,ready,query,tag,contactPage,contactDetail,contactError]);
+  if(signature===contactSignature)return;
+  contactSignature=signature;
+  const focusId=document.activeElement?.dataset.contact;
+  const empty=contactLoading?'正在读取联系人…':!ready?'连接后点击“扫描联系人”。':contactError?'未显示联系人，请重新扫描。':!contactData?'尚未扫描联系人。':query||tag?'没有匹配的联系人。':'本地缓存中暂无好友，请在微信打开通讯录后重新扫描。';
+  $('#contact-list').innerHTML=rows.slice(contactPage*contactPageSize,(contactPage+1)*contactPageSize).map(row=>{
+    const index=all.indexOf(row),expanded=contactDetail===row.wxid;
+    return `<tr class="contact-row${expanded?' selected':''}"><td><span class="contact-name">${escape(row.remark||row.nickname||row.wxid)}</span>${row.remark&&row.nickname&&row.remark!==row.nickname?`<span class="contact-nickname">${escape(row.nickname)}</span>`:''}<span class="contact-id">${escape(row.wxid)}</span></td><td class="contact-alias"><span class="sr-only">微信号：</span>${escape(row.alias||'未提供')}</td><td class="contact-tags"><span class="sr-only">好友标签：</span>${escape(contactTagText(row))}</td><td class="contact-action"><button type="button" class="text-button small" data-contact="${escape(row.wxid)}" aria-expanded="${expanded}"${expanded?` aria-controls="contact-detail-${index}"`:''} aria-label="${expanded?'收起':'查看'} ${escape(row.remark||row.nickname||row.wxid)} 的资料">${expanded?'收起':'详情'}</button></td></tr>`+(expanded?renderContactDetails(row,index):'');
+  }).join('')||`<tr><td colspan="4" class="table-empty">${empty}</td></tr>`;
+  if(focusId)[...$('#contact-list').querySelectorAll('[data-contact]')].find(node=>node.dataset.contact===focusId)?.focus({preventScroll:true});
+}
+async function scanContacts() {
+  if($('#scan-contacts').disabled)return;
+  resetContacts();
+  const requested=robot,generation=contactGeneration;
+  contactIdentity=contactConnectionIdentity();contactLoading=true;renderContacts();
+  try {
+    const connection=await api('send-connection',undefined,requested);
+    if(requested!==robot||generation!==contactGeneration)return;
+    const data=await api('contacts',undefined,requested);
+    if(requested!==robot||generation!==contactGeneration)return;
+    if(!connection.session_id||data.session_id!==connection.session_id||state?.account&&data.account!==state.account)throw new Error('微信连接已变化，请重新扫描');
+    if(!Array.isArray(data.contacts)||!Array.isArray(data.tags))throw new Error('联系人返回格式不正确，请更新管理台');
+    data.contacts.sort((a,b)=>String(a.remark||a.nickname||a.wxid).localeCompare(String(b.remark||b.nickname||b.wxid),'zh-CN'));
+    contactData=data;
+    $('#contact-tag').innerHTML='<option value="">全部标签</option>'+data.tags.map(tag=>`<option value="${escape(tag.id)}">${escape(tag.name)}</option>`).join('')+(data.contacts.some(row=>row.tags_status==='ready'&&!row.tag_ids?.length&&!row.tags?.length)?'<option value="__untagged">无标签</option>':'')+(data.contacts.some(row=>row.tags_status!=='ready')?'<option value="__unavailable">标签暂不可读取</option>':'');
+  } catch(error) {
+    if(requested===robot&&generation===contactGeneration)contactError=error.status===404?'联系人接口尚未加载，请重新打开管理台。':error.message||'扫描失败，请重试。';
+  } finally {
+    if(requested===robot&&generation===contactGeneration){contactLoading=false;renderContacts();}
+  }
+}
+async function validateContactSession(requested,generation) {
+  if(!contactData||contactLoading||!state?.connected)return;
+  const session=contactData.session_id,scannedGeneration=contactGeneration;
+  try {
+    const connection=await api('send-connection',undefined,requested);
+    if(requested!==robot||generation!==messageGeneration||scannedGeneration!==contactGeneration)return;
+    if(connection.session_id!==session)resetContacts('微信连接已变化，请重新扫描。');
+  } catch {
+    if(requested===robot&&generation===messageGeneration&&scannedGeneration===contactGeneration)resetContacts('无法确认微信连接，请重新扫描。');
+  }
+}
+$('#scan-contacts').onclick=scanContacts;
+$('#contact-search').oninput=()=>{contactPage=0;contactDetail='';renderContacts();};
+$('#contact-tag').onchange=()=>{contactPage=0;contactDetail='';renderContacts();};
+$('#contact-list').onclick=event=>{const button=event.target.closest('[data-contact]');if(!button)return;contactDetail=contactDetail===button.dataset.contact?'':button.dataset.contact;renderContacts();};
+for(const [id,direction] of [['previous',-1],['next',1]])$('#contact-'+id).onclick=()=>{contactPage+=direction;contactDetail='';renderContacts();$('#contact-list').closest('table').scrollIntoView({block:'start'});};
 function serviceDisconnected() {
   serviceAvailable=false;
+  resetContacts('管理服务连接中断，恢复后请重新扫描。');
   $('#service-banner').textContent='连接中断，状态待更新。服务重启后请刷新页面。';
   $('#service-banner').classList.remove('hidden'); renderState();
 }
@@ -509,6 +602,7 @@ async function poll(){
     if(tail.cursor<logCursor)logs=[];logCursor=tail.cursor;
     if(tail.rows.length){logs=[...logs,...tail.rows].slice(-1000);renderLogs();}
     await pollMessages(requested,generation);
+    await validateContactSession(requested,generation);
     if(requested!==robot||generation!==messageGeneration)return;
     if(Date.now()-lastRobotFetch>4000){lastRobotFetch=Date.now();await loadRobots();}
     if(Date.now()-lastAccountFetch>10000)await loadAccounts(true);
@@ -524,6 +618,7 @@ async function loadRobots(){
 }
 async function switchRobot(identifier){
   if($('#plugin-dialog').open)$('#plugin-dialog').close();
+  resetContacts();
   resetComposer();
   messageGeneration++;messages=[];messageCursor=0;messageStream='';messageError='';$('#message-search').value='';messageSignature='';renderMessages();
   robot=identifier;sessionStorage.setItem('helper-robot',robot);

@@ -20,6 +20,7 @@
 - 群系统消息 `10000/10002` 不作为普通聊天正文；完整群成员和真实群昵称由 `wxbot_framework/group_members.py` 只读获取，`group_events.py` 负责变动确认与去重。
 - 当前接收通道为 `WxPollMediaMessageV5`，在 V4 的元数据缓冲区后追加 64 位微信原始消息编号，以十进制字符串传给 Python，保留 V1–V4 调用方的缓冲区边界。普通消息与独立系统 XML 入口共同提供撤回关联；新增 Hook 沿用回调计数和正常卸载流程。管理台保留原记录，`anti_recall` 插件控制自动补发。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
+- 好友目录由 `wxbot_framework/contacts.py` 只读获取，包含资料及好友标签关联，当前仅验证 4.1.15.56；结果限于已加载的本地缓存，不发起联网同步。
 
 源码 `text_bridge.cpp` 复用 `selftest_bridge.cpp` 的公共结构、任务调度和清理逻辑，因此两个源文件都要保留。`vendor/` 中只保留编译所需的 MinHook 源码、头文件和许可。
 

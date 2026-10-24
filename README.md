@@ -9,6 +9,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 ## 功能
 
 - 多账号管理：发现已登录微信，按账号启停，独立保存插件配置与数据。
+- 联系人：扫描当前账号的好友，搜索及按标签筛选，查看昵称、备注、微信号、地区和签名。
 - 消息收发：文本、图片、文件、表情包、语音条，支持真实群艾特与群成员身份查询。
 - 消息监控：显示时间、会话 ID、发送者及正文，展开合并转发记录，保留撤回标记。
 - 群聊插件：进退群通知、成员昵称绑定、聊天总结、人格切换、成语游戏和图库取图。
@@ -59,6 +60,7 @@ python main.py
 | --- | --- |
 | 安装、选择账号、添加群 | [快速开始](docs/guide/quick-start.md) · [账号与群聊](docs/guide/account-and-groups.md) |
 | 启停账号、监控消息、修改插件 | [网页管理台](docs/guide/web-panel.md) |
+| 扫描好友、查看资料和标签 | [扫描联系人](docs/guide/web-panel.md#扫描联系人) |
 | 图片、文件、表情和语音 | [图片](docs/messages/images.md) · [文件](docs/messages/files.md) · [表情](docs/messages/emoticons.md) · [语音](docs/messages/voice.md) |
 | 合并转发与防撤回 | [合并转发](docs/messages/forwarded.md) · [防撤回](docs/messages/recall.md) |
 | 好友申请、群成员与群管理 | [好友申请与群管理](docs/guide/friends-and-groups.md) |
