@@ -54,3 +54,11 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Historical wxbot copies and reverse engineering workspaces
+/adaptation_*/
+/snapshot_*/
+/ghidra_*/
+/wxbot-main/
+/config.json
+/Helper_*.dll

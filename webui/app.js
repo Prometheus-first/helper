@@ -30,7 +30,7 @@ const $ = (q, root = document) => root.querySelector(q);
 const token = $('meta[name="helper-token"]').content;
 let state = null, config = null, logCursor = 0, logs = [], paused = false, busy = false;
 let selectedPlugin = '', toastTimer, pollBusy = false, serviceAvailable = true;
-let pluginEditor = null, pluginEditorGeneration = 0, pluginFileSignature = '';
+let pluginEditor = null, pluginEditorGeneration = 0, pluginFunctionSignature = '';
 let robot = sessionStorage.getItem('helper-robot') || 'default', robotRows = [], lastRobotFetch = 0;
 let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
@@ -251,8 +251,8 @@ function renderPluginEditor() {
     $('#plugin-current-function').classList.toggle('hidden',!single);
     $('#plugin-current-function').textContent=pluginEditor.function_labels[pluginEditor.functionId]||'暂无业务函数';
     const signature=JSON.stringify(Object.keys(pluginEditor.functions).map(name=>[name,pluginEditor.function_labels[name],pluginEditor.functions[name]!==pluginEditor.originalFunctions[name]]));
-    if(signature!==pluginFileSignature){
-      pluginFileSignature=signature;
+    if(signature!==pluginFunctionSignature){
+      pluginFunctionSignature=signature;
       $('#plugin-function').innerHTML=Object.keys(pluginEditor.functions).map(name=>`<option value="${escape(name)}">${escape(pluginEditor.function_labels[name]||name)}${pluginEditor.functions[name]!==pluginEditor.originalFunctions[name]?' *':''}</option>`).join('');
       $('#plugin-function').value=pluginEditor.functionId;
     }
@@ -270,18 +270,18 @@ function pluginTab(name, focus=false) {
     if(active&&focus)node.focus();
   }
 }
-function acceptPluginSource(data, feedback='') {
+function acceptPluginBusiness(data, feedback='') {
   const functionId=pluginEditor?.functionId in data.functions?pluginEditor.functionId:Object.keys(data.functions)[0];
   pluginEditor={...pluginEditor,...data,functionId,loaded:true,originalFunctions:{...data.functions},functions:{...data.functions},originalOptions:JSON.stringify(data.options,null,2),feedback};
   $('#plugin-source').value=data.functions[functionId]||'';
   $('#plugin-source').scrollTop=0;$('#plugin-line-numbers').scrollTop=0;
   $('#plugin-options').value=pluginEditor.originalOptions;
   $('#plugin-editor-scope').textContent=profileLabel(robotRows.find(row=>row.id===pluginEditor.robot))+' · '+(data.customized?'自定义代码':'默认代码');
-  pluginFileSignature='';$('#plugin-reset-confirm').classList.add('hidden');renderPluginEditor();
+  pluginFunctionSignature='';$('#plugin-reset-confirm').classList.add('hidden');renderPluginEditor();
 }
 async function openPluginEditor(name, reset=false) {
   const generation=++pluginEditorGeneration,identifier=robot;
-  selectedPlugin=name;pluginEditor={name,robot:identifier,loaded:false};pluginFileSignature='';
+  selectedPlugin=name;pluginEditor={name,robot:identifier,loaded:false};pluginFunctionSignature='';
   $('#plugin-dialog-title').textContent=(pluginNames[name]?.[0]||name)+' · 配置';
   $('#plugin-editor-scope').textContent='';$('#plugin-source').value='';$('#plugin-options').value='';$('#plugin-function').replaceChildren();$('#plugin-line-numbers').textContent='';
   $('#plugin-reset-confirm').classList.add('hidden');pluginTab('code');
@@ -289,7 +289,7 @@ async function openPluginEditor(name, reset=false) {
   renderPluginEditor();
   const data=await api('plugin-business?name='+encodeURIComponent(name),undefined,identifier);
   if(generation!==pluginEditorGeneration||identifier!==robot)return;
-  acceptPluginSource(data);
+  acceptPluginBusiness(data);
   if(reset)$('#plugin-reset-confirm').classList.remove('hidden');
 }
 async function submitPluginSource(reset=false) {
@@ -304,7 +304,7 @@ async function submitPluginSource(reset=false) {
   const data=await api('plugin-business',{name:target.name,revision:target.revision,action:reset?'reset':'save',...(reset?{}:{functions:target.functions,options})},target.robot);
   if(generation!==pluginEditorGeneration||target.robot!==robot)return;
   const feedback=(reset?'已重置':'已保存')+(data.applied?'并重载':data.running?'，插件保持停用':'，下次启动生效');
-  acceptPluginSource(data,feedback);await loadConfig();
+  acceptPluginBusiness(data,feedback);await loadConfig();
 }
 function closePluginEditor(){
   if(busy)return;

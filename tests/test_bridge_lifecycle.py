@@ -19,8 +19,6 @@ from wxbot_framework.shutdown import ShutdownHandlers
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE = ROOT / "native"
-if not NATIVE.is_dir():
-    NATIVE = ROOT / "adaptation_4.1.15.13/native"
 SCRATCH = ROOT / ".runtime/tests"
 CLEAN = {"pid": 123, "code": 0, "dll_unloaded": True}
 
