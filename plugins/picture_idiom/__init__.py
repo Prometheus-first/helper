@@ -45,7 +45,7 @@ class Plugin:
         if self.source not in ('ffapi', 'local'):
             raise ValueError('picture_idiom.source 应为 ffapi 或 local')
         self.next_online_attempt = 0
-        root = Path(__file__).resolve().parents[2]
+        root = getattr(ctx, 'project_root', None) or Path(__file__).resolve().parents[2]
         font = ctx.config.get('font_file')
         if font is not None:
             if not isinstance(font, str) or not font.strip() or '\0' in font:

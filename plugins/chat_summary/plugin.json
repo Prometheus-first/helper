@@ -3,5 +3,14 @@
   "api": "v1",
   "description": "使用配置的大模型总结当前群成员或全群当天聊天",
   "entry": "__init__.py",
-  "requires": ["group.text.receive", "group.text.send"]
+  "requires": [
+    "group.text.receive",
+    "group.text.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.reply_summary",
+      "label": "生成并回复总结"
+    }
+  ]
 }

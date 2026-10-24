@@ -36,19 +36,7 @@ class Plugin:
                 name = "本群" if group else snapshot.member.name
                 ctx.reply(message, f"{name}今天还没有可总结的聊天记录。", delivery_guard=guard)
                 return
-            summarizer = ChatSummarizer(ctx.llm_for(message, personality=personality),
-                                       chunk_chars=self.summarizer.chunk_chars)
-            summary = summarizer.summarize(snapshot, rows,
-                current=lambda: self.members.snapshot_is_current(snapshot))
-            if group:
-                participants = len({row["sender_id"] for row in rows})
-                title = f"今日群聊总结（{snapshot.day}，{len(rows)}条，{participants}人）\n"
-            else:
-                title = f"{snapshot.member.name} 今日聊天（{snapshot.day}，{len(rows)}条）\n"
-            content = personality_text(summary, personality.name) if personality.name == "嘴臭" else title + summary
-            for part in split_text(content):
-                if not ctx.reply(message, part, delivery_guard=guard):
-                    raise RuntimeError("原生文本发送未成功")
+            self.reply_summary(message, ctx, snapshot, rows, personality, group, guard)
             ctx.logger.info("聊天总结完成：room=%s scope=%s member=%s records=%d", message.chat_id,
                             "group" if group else "member", "本群" if group else snapshot.member.name, len(rows))
         except SnapshotExpired:
@@ -59,3 +47,19 @@ class Plugin:
                 ctx.reply(message, "暂时无法生成聊天总结，请稍后重试。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+
+    def reply_summary(self, message, ctx, snapshot, rows, personality, group, delivery_guard):
+        """当天记录已准备好，在这里生成总结、组织文案并回复。"""
+        summarizer = ChatSummarizer(ctx.llm_for(message, personality=personality),
+                                   chunk_chars=self.summarizer.chunk_chars)
+        summary = summarizer.summarize(snapshot, rows,
+            current=lambda: self.members.snapshot_is_current(snapshot))
+        if group:
+            participants = len({row["sender_id"] for row in rows})
+            title = f"今日群聊总结（{snapshot.day}，{len(rows)}条，{participants}人）\n"
+        else:
+            title = f"{snapshot.member.name} 今日聊天（{snapshot.day}，{len(rows)}条）\n"
+        content = personality_text(summary, personality.name) if personality.name == "嘴臭" else title + summary
+        for part in split_text(content):
+            if not ctx.reply(message, part, delivery_guard=delivery_guard):
+                raise RuntimeError("原生文本发送未成功")

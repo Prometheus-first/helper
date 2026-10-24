@@ -2,6 +2,20 @@
   "api": "v1",
   "default_enabled": true,
   "description": "图片被撤回后重新发送已下载的图片，独立开关",
-  "message_types": [3, 10000, 10002],
-  "requires": ["image.receive", "image.send", "message.recall"]
+  "message_types": [
+    3,
+    10000,
+    10002
+  ],
+  "requires": [
+    "image.receive",
+    "image.send",
+    "message.recall"
+  ],
+  "business": [
+    {
+      "function": "Plugin.send_recalled",
+      "label": "补发撤回图片"
+    }
+  ]
 }

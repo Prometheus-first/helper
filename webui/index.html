@@ -80,6 +80,22 @@
 
 </main>
 <div id="toast" class="toast hidden" role="status"></div>
-<dialog id="plugin-dialog" aria-labelledby="plugin-dialog-title"><form id="plugin-form"><div class="dialog-heading"><h2 id="plugin-dialog-title">插件配置</h2><button type="button" class="icon-button" id="close-plugin-dialog" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><label for="plugin-options">插件选项（JSON）</label><textarea id="plugin-options" name="options" rows="13" spellcheck="false"></textarea><p class="dialog-error hidden" role="alert"></p><div class="form-footer"><button type="submit" class="primary">保存插件配置</button></div></form></dialog>
+<dialog id="plugin-dialog" class="plugin-editor" aria-labelledby="plugin-dialog-title">
+  <form id="plugin-form">
+    <div class="dialog-heading"><h2 id="plugin-dialog-title">插件配置</h2><button type="button" class="icon-button" id="close-plugin-dialog" aria-label="关闭编辑器"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div>
+    <p id="plugin-editor-scope" class="editor-scope"></p>
+    <div class="editor-tabs" role="tablist" aria-label="插件编辑内容"><button type="button" id="plugin-code-tab" role="tab" aria-selected="true" aria-controls="plugin-code-panel">业务代码</button><button type="button" id="plugin-options-tab" role="tab" aria-selected="false" aria-controls="plugin-options-panel" tabindex="-1">配置</button></div>
+    <div id="plugin-code-panel" role="tabpanel" aria-labelledby="plugin-code-tab">
+      <div class="editor-filebar"><label for="plugin-function">处理函数</label><span id="plugin-current-function" class="editor-current-function hidden"></span><select id="plugin-function" aria-label="业务函数"></select><button type="button" class="text-button small" id="reload-plugin-source">重新读取</button></div>
+      <label for="plugin-source" class="sr-only">业务函数代码</label>
+      <div class="code-editor"><pre id="plugin-line-numbers" aria-hidden="true"></pre><textarea id="plugin-source" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="plugin-editor-status"></textarea></div>
+    </div>
+    <div id="plugin-options-panel" class="hidden" role="tabpanel" aria-labelledby="plugin-options-tab"><label for="plugin-options" class="editor-options-label">插件选项（JSON）</label><textarea id="plugin-options" name="options" rows="14" spellcheck="false" wrap="off" aria-describedby="plugin-editor-status"></textarea></div>
+    <p id="plugin-editor-status" class="editor-status" role="status">正在读取…</p>
+    <p class="dialog-error hidden" role="alert"></p>
+    <div id="plugin-reset-confirm" class="editor-reset-confirm hidden"><p>恢复此插件的默认代码和配置？当前修改会被替换，聊天记录保留。</p><div><button type="button" class="secondary small" id="cancel-plugin-reset">取消</button><button type="button" class="secondary small danger-text" id="confirm-plugin-reset">确认重置</button></div></div>
+    <div class="editor-footer"><button type="button" class="text-button danger-text" id="reset-plugin-source">重置插件</button><button type="submit" class="primary" id="save-plugin-source">保存并生效</button></div>
+  </form>
+</dialog>
 </body>
 </html>

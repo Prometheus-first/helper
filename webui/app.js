@@ -30,6 +30,7 @@ const $ = (q, root = document) => root.querySelector(q);
 const token = $('meta[name="helper-token"]').content;
 let state = null, config = null, logCursor = 0, logs = [], paused = false, busy = false;
 let selectedPlugin = '', toastTimer, pollBusy = false, serviceAvailable = true;
+let pluginEditor = null, pluginEditorGeneration = 0, pluginFileSignature = '';
 let robot = sessionStorage.getItem('helper-robot') || 'default', robotRows = [], lastRobotFetch = 0;
 let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
@@ -100,11 +101,12 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#plugin-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   renderSendState();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
   renderPlugins();
+  renderPluginEditor();
 }
 function renderPlugins() {
   if (!state) { pluginSignature=''; $('#plugin-list').innerHTML='<tr><td colspan="4" class="table-empty">正在读取插件列表…</td></tr>'; return; }
@@ -117,7 +119,7 @@ function renderPlugins() {
   const focusKey = focused && [focused.dataset.plugin,focused.dataset.action];
   $('#plugin-list').innerHTML = cards.map(p => {
     const name = pluginNames[p.name]?.[0] || p.name;
-    return `<tr class="plugin-row"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button></div></td></tr>`;
+    return `<tr class="plugin-row"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reset" ${busy||!serviceAvailable?'disabled':''}>重置</button></div></td></tr>`;
   }).join('') || '<tr><td colspan="4" class="table-empty">没有匹配的插件。</td></tr>';
   if (focusKey) {
     const candidates = [...$('#plugin-list').querySelectorAll('[data-plugin]')];
@@ -218,15 +220,121 @@ $('#account-list').onclick=event=>{
 $('#plugin-search').oninput = renderPlugins;
 $('#plugin-list').onclick = e => {
   const button=e.target.closest('[data-plugin]');if(!button)return;
-  if(button.dataset.action==='configure') {
-    if(state && ['starting','running','stopping'].includes(state.state)) {toast('请先停止机器人再编辑插件选项',true);return;}
-    selectedPlugin=button.dataset.plugin;$('#plugin-dialog-title').textContent=(pluginNames[selectedPlugin]?.[0]||selectedPlugin)+' · 配置';
-    $('#plugin-form').elements.options.value=JSON.stringify(config?.plugins[selectedPlugin]||{},null,2);openDialog('#plugin-dialog');return;
+  if(['configure','reset'].includes(button.dataset.action)) {
+    action(()=>openPluginEditor(button.dataset.plugin,button.dataset.action==='reset'));return;
   }
   action(async()=>{await api('plugin',{name:button.dataset.plugin,action:button.dataset.action});await loadConfig();toast('插件操作已完成');});
 };
-$('#close-plugin-dialog').onclick=()=>$('#plugin-dialog').close();
-$('#plugin-form').onsubmit=e=>{e.preventDefault();action(async()=>{let options;try{options=JSON.parse(e.target.elements.options.value);}catch{throw new Error('JSON 格式有误，请检查逗号和引号');}await api('plugin',{name:selectedPlugin,action:'configure',options});await loadConfig();$('#plugin-dialog').close();toast('插件配置已保存');});};
+function flushPluginBuffer() {
+  if(pluginEditor?.loaded&&pluginEditor.functionId)pluginEditor.functions[pluginEditor.functionId]=$('#plugin-source').value;
+}
+function pluginDirty() {
+  return !!pluginEditor?.loaded&&(Object.keys(pluginEditor.functions).some(name=>pluginEditor.functions[name]!==pluginEditor.originalFunctions[name])||$('#plugin-options').value!==pluginEditor.originalOptions);
+}
+function renderPluginEditor() {
+  if(!$('#plugin-dialog').open)return;
+  const loaded=!!pluginEditor?.loaded, unavailable=busy||!serviceAvailable||!loaded;
+  const dirty=pluginDirty();
+  $('#save-plugin-source').disabled=unavailable||!dirty;
+  $('#reset-plugin-source').disabled=unavailable;
+  $('#confirm-plugin-reset').disabled=unavailable;
+  $('#cancel-plugin-reset').disabled=busy;
+  $('#reload-plugin-source').disabled=busy||!serviceAvailable;
+  $('#plugin-function').disabled=unavailable;
+  $('#plugin-source').readOnly=unavailable||!pluginEditor?.functionId;$('#plugin-options').readOnly=unavailable;
+  $('#close-plugin-dialog').disabled=busy;
+  $('#plugin-editor-status').textContent=!serviceAvailable?'连接中断，修改尚未丢失':!loaded?'正在读取…':dirty?'有未保存的修改':pluginEditor.feedback||'保存后仅对当前账号生效';
+  $('#plugin-editor-status').classList.toggle('unsaved',dirty);
+  if(loaded) {
+    const ids=Object.keys(pluginEditor.functions), single=ids.length<2;
+    $('#plugin-function').classList.toggle('hidden',single);
+    $('#plugin-current-function').classList.toggle('hidden',!single);
+    $('#plugin-current-function').textContent=pluginEditor.function_labels[pluginEditor.functionId]||'暂无业务函数';
+    const signature=JSON.stringify(Object.keys(pluginEditor.functions).map(name=>[name,pluginEditor.function_labels[name],pluginEditor.functions[name]!==pluginEditor.originalFunctions[name]]));
+    if(signature!==pluginFileSignature){
+      pluginFileSignature=signature;
+      $('#plugin-function').innerHTML=Object.keys(pluginEditor.functions).map(name=>`<option value="${escape(name)}">${escape(pluginEditor.function_labels[name]||name)}${pluginEditor.functions[name]!==pluginEditor.originalFunctions[name]?' *':''}</option>`).join('');
+      $('#plugin-function').value=pluginEditor.functionId;
+    }
+    const lines=$('#plugin-source').value.split('\n').length;
+    $('.code-editor').classList.toggle('compact-code',lines<12);
+    $('#plugin-line-numbers').textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
+    $('#plugin-line-numbers').scrollTop=$('#plugin-source').scrollTop;
+  }
+}
+function pluginTab(name, focus=false) {
+  for(const tab of ['code','options']) {
+    const active=tab===name,node=$('#plugin-'+tab+'-tab');
+    node.setAttribute('aria-selected',String(active));node.tabIndex=active?0:-1;
+    $('#plugin-'+tab+'-panel').classList.toggle('hidden',!active);
+    if(active&&focus)node.focus();
+  }
+}
+function acceptPluginSource(data, feedback='') {
+  const functionId=pluginEditor?.functionId in data.functions?pluginEditor.functionId:Object.keys(data.functions)[0];
+  pluginEditor={...pluginEditor,...data,functionId,loaded:true,originalFunctions:{...data.functions},functions:{...data.functions},originalOptions:JSON.stringify(data.options,null,2),feedback};
+  $('#plugin-source').value=data.functions[functionId]||'';
+  $('#plugin-source').scrollTop=0;$('#plugin-line-numbers').scrollTop=0;
+  $('#plugin-options').value=pluginEditor.originalOptions;
+  $('#plugin-editor-scope').textContent=profileLabel(robotRows.find(row=>row.id===pluginEditor.robot))+' · '+(data.customized?'自定义代码':'默认代码');
+  pluginFileSignature='';$('#plugin-reset-confirm').classList.add('hidden');renderPluginEditor();
+}
+async function openPluginEditor(name, reset=false) {
+  const generation=++pluginEditorGeneration,identifier=robot;
+  selectedPlugin=name;pluginEditor={name,robot:identifier,loaded:false};pluginFileSignature='';
+  $('#plugin-dialog-title').textContent=(pluginNames[name]?.[0]||name)+' · 配置';
+  $('#plugin-editor-scope').textContent='';$('#plugin-source').value='';$('#plugin-options').value='';$('#plugin-function').replaceChildren();$('#plugin-line-numbers').textContent='';
+  $('#plugin-reset-confirm').classList.add('hidden');pluginTab('code');
+  if(!$('#plugin-dialog').open)openDialog('#plugin-dialog');
+  renderPluginEditor();
+  const data=await api('plugin-business?name='+encodeURIComponent(name),undefined,identifier);
+  if(generation!==pluginEditorGeneration||identifier!==robot)return;
+  acceptPluginSource(data);
+  if(reset)$('#plugin-reset-confirm').classList.remove('hidden');
+}
+async function submitPluginSource(reset=false) {
+  if(!pluginEditor?.loaded||pluginEditor.robot!==robot)throw new Error('请重新打开当前账号的插件');
+  flushPluginBuffer();
+  const target=pluginEditor,generation=pluginEditorGeneration;
+  let options;
+  if(!reset){
+    try{options=JSON.parse($('#plugin-options').value);}catch{throw new Error('配置的 JSON 格式有误，请检查逗号和引号');}
+    if(!options||Array.isArray(options)||typeof options!=='object')throw new Error('插件配置应为 JSON 对象');
+  }
+  const data=await api('plugin-business',{name:target.name,revision:target.revision,action:reset?'reset':'save',...(reset?{}:{functions:target.functions,options})},target.robot);
+  if(generation!==pluginEditorGeneration||target.robot!==robot)return;
+  const feedback=(reset?'已重置':'已保存')+(data.applied?'并重载':data.running?'，插件保持停用':'，下次启动生效');
+  acceptPluginSource(data,feedback);await loadConfig();
+}
+function closePluginEditor(){
+  if(busy)return;
+  flushPluginBuffer();
+  if(pluginDirty()&&!confirm('有未保存的修改，确定关闭？'))return;
+  $('#plugin-dialog').close();
+}
+$('#close-plugin-dialog').onclick=closePluginEditor;
+$('#plugin-dialog').oncancel=event=>{event.preventDefault();closePluginEditor();};
+$('#plugin-dialog').onclose=()=>{pluginEditorGeneration++;pluginEditor=null;selectedPlugin='';};
+$('#plugin-function').onchange=()=>{
+  flushPluginBuffer();pluginEditor.functionId=$('#plugin-function').value;
+  $('#plugin-source').value=pluginEditor.functions[pluginEditor.functionId];$('#plugin-source').scrollTop=0;$('#plugin-line-numbers').scrollTop=0;renderPluginEditor();
+};
+$('#plugin-source').oninput=()=>{flushPluginBuffer();renderPluginEditor();};
+$('#plugin-options').oninput=renderPluginEditor;
+$('#plugin-source').onscroll=()=>{$('#plugin-line-numbers').scrollTop=$('#plugin-source').scrollTop;};
+$('#plugin-source').onkeydown=event=>{
+  if(event.key==='Tab'&&!event.shiftKey&&!event.target.readOnly){event.preventDefault();event.target.setRangeText('    ',event.target.selectionStart,event.target.selectionEnd,'end');event.target.dispatchEvent(new Event('input'));}
+};
+$('#plugin-dialog').addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();if(!$('#save-plugin-source').disabled)$('#plugin-form').requestSubmit();}});
+for(const name of ['code','options']) {
+  const tab=$('#plugin-'+name+'-tab');tab.onclick=()=>pluginTab(name);
+  tab.onkeydown=event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();pluginTab(event.key==='Home'?'code':event.key==='End'?'options':name==='code'?'options':'code',true);}};
+}
+$('#reload-plugin-source').onclick=()=>{flushPluginBuffer();if(pluginDirty()&&!confirm('重新读取会丢弃未保存的修改，继续？'))return;action(()=>openPluginEditor(pluginEditor.name));};
+$('#reset-plugin-source').onclick=()=>{$('#plugin-reset-confirm').classList.remove('hidden');$('#confirm-plugin-reset').focus();};
+$('#cancel-plugin-reset').onclick=()=>{$('#plugin-reset-confirm').classList.add('hidden');$('#reset-plugin-source').focus();};
+$('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
+$('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
 $('#groups-form').onsubmit=e=>{e.preventDefault();action(()=>save({groups:lines(e.target.elements.groups.value),history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked}));};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
 for (const name of ['llm','tts']) $('#'+name+'-form').onsubmit=e=>{
@@ -415,6 +523,7 @@ async function loadRobots(){
   renderState();
 }
 async function switchRobot(identifier){
+  if($('#plugin-dialog').open)$('#plugin-dialog').close();
   resetComposer();
   messageGeneration++;messages=[];messageCursor=0;messageStream='';messageError='';$('#message-search').value='';messageSignature='';renderMessages();
   robot=identifier;sessionStorage.setItem('helper-robot',robot);

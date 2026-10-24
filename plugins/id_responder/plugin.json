@@ -1,5 +1,14 @@
 {
   "api": "legacy",
   "description": "发送 test，回复当前会话 ID",
-  "requires": ["text.receive", "text.send"]
+  "requires": [
+    "text.receive",
+    "text.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.on_message",
+      "label": "回复会话 ID"
+    }
+  ]
 }

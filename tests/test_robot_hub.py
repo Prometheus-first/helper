@@ -23,6 +23,15 @@ class FakeWorker:
 
     def request(self, route, data=None):
         controller=self.controller
+        if route.startswith('plugin-business?'):
+            from urllib.parse import parse_qs
+            return controller.plugin_business(parse_qs(route.split('?',1)[1])['name'][0])
+        if route=='plugin-business':return controller.save_plugin_business(data)
+        if route.startswith('plugin-source?'):
+            from urllib.parse import parse_qs
+            return controller.plugin_editor(parse_qs(route.split('?',1)[1])['name'][0])
+        if route in ('plugin-source','plugin-reset'):
+            return controller.save_plugin_source(data,reset=route=='plugin-reset')
         if route=='state':return controller.snapshot()
         if route=='config' and data is None:return controller.configuration()
         if route=='accounts':return {'accounts':controller.accounts()}
@@ -66,6 +75,26 @@ class HubTests(unittest.TestCase):
         recreated=RobotHub(self.root,worker_factory=FakeWorker)
         self.addCleanup(recreated.close)
         self.assertEqual(recreated.entries()[1],entry)
+
+    def test_source_editor_proxy_is_scoped_to_selected_robot(self):
+        entry=self.hub.create_robot({'name':'源码测试机器人'})
+        a,b=self.hub.robot('default'),self.hub.robot(entry['id'])
+        data=a.plugin_editor('echo')
+        data['files']['__init__.py']+='\n# 当前账号的修改\n'
+        saved=a.save_plugin_source(data)
+        self.assertTrue(saved['customized'])
+        self.assertFalse(b.plugin_editor('echo')['customized'])
+        self.assertNotIn('# 当前账号的修改',b.plugin_editor('echo')['files']['__init__.py'])
+        reset=a.save_plugin_source(saved,reset=True)
+        self.assertFalse(reset['customized'])
+
+    def test_business_editor_proxy_keeps_accounts_independent(self):
+        entry=self.hub.create_robot({'name':'业务函数测试账号'})
+        a,b=self.hub.robot('default'),self.hub.robot(entry['id'])
+        data=a.plugin_business('echo');self.assertNotIn('files',data)
+        key=next(iter(data['functions']));data['functions'][key]+='\n    # 本账号的业务逻辑\n'
+        result=a.save_plugin_business(data);self.assertTrue(result['customized'])
+        self.assertFalse(b.plugin_business('echo')['customized'])
 
     def test_two_bots_run_independently_with_distinct_configs(self):
         entry=self.hub.create_robot({'name':'第二个机器人'})

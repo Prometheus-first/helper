@@ -71,7 +71,7 @@ class MediaRecallPlugin:
             if self._signature(entry.path) != entry.signature:
                 raise ValueError('缓存附件已被替换')
             if self.media == 'image':
-                sent = ctx.reply_image(message, entry.path)
+                sent = self.send_recalled(message, ctx, entry.path)
             else:
                 # 接收缓存的路径带随机前缀；发送快照恢复原文件名，不改接收文件。
                 with prepare_file(entry.path, entry.path.parent) as snapshot:
@@ -80,12 +80,15 @@ class MediaRecallPlugin:
                     named = snapshot.path.with_name(entry.name)
                     if named != snapshot.path:
                         snapshot.path.rename(named)
-                    sent = ctx.reply_file(message, named)
+                    sent = self.send_recalled(message, ctx, named)
             if sent is False:
                 ctx.logger.warning('撤回%s补发未获微信确认，不重复发送', self.label)
         except (OSError, ValueError, RuntimeError):
             # 不记录本地路径、附件名或底层带凭据的异常。
             ctx.logger.warning('撤回%s未补发：缓存不可用或原连接已结束', self.label)
+
+    def send_recalled(self, message, ctx, path):
+        return ctx.reply_image(message, path) if self.media == 'image' else ctx.reply_file(message, path)
 
     def on_message(self, message, ctx):
         if not message.session_id or message.data.get('bot_generated'):

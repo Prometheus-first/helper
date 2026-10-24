@@ -4,6 +4,8 @@
 
 ## 新建插件
 
+网页“插件管理 → 配置”只展示可修改的业务函数和 JSON 选项，保存后自动重载；支持按账号隔离与恢复默认，见[网页修改与重置插件](../guide/web-panel.md#网页修改与重置插件)。项目的 `plugins/` 目录作为默认代码，网页修改保存在当前机器人的 `.runtime/plugin_code/` 副本中。插件资源相对 `__file__` 所在目录读取；需要项目根目录时可使用 `ctx.project_root`。
+
 复制 `plugins/_template`，改成不以下划线开头的新目录，例如 `plugins/hello`：
 
 ```text
@@ -20,11 +22,14 @@ plugins/
   "api": "v1",
   "description": "收到 /hello 后回复",
   "message_types": [1],
-  "requires": ["text.receive", "text.send"]
+  "requires": ["text.receive", "text.send"],
+  "business": [{"function": "Plugin.on_message", "label": "回复消息"}]
 }
 ```
 
 在 `__init__.py` 实现 `Plugin`：
+
+`business` 声明网页可编辑的函数（最多 8 个）。默认文件是 `__init__.py`；函数位于别的模块时，增加 `"file": "business.py"`，并填写模块内的函数名。未声明的旧插件默认展示 `Plugin.on_message`。推荐将初始化、消息过滤、缓存和连接检查留在固定代码里，把回复文案、业务判断或处理结果拆成一个清晰的函数并声明在这里。网页只读取这些函数，保存时校验签名并局部替换，不让用户逐个浏览源文件。
 
 ```python
 class Plugin:

@@ -1,5 +1,15 @@
 {
   "api": "v1",
   "description": "真实艾特机器人后，按群人格回复并携带发言者前十条上下文",
-  "requires": ["group.text.receive", "group.text.send", "group.text.mention"]
+  "requires": [
+    "group.text.receive",
+    "group.text.send",
+    "group.text.mention"
+  ],
+  "business": [
+    {
+      "function": "Plugin.reply_to_member",
+      "label": "生成并发送对话回复"
+    }
+  ]
 }

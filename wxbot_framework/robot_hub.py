@@ -131,6 +131,16 @@ class RobotProxy:
     def bind_account(self, data): return self.request('account', data)
     def save_configuration(self, data): return self.request('config', data)
     def plugin_action(self, data): return self.request('plugin', data)
+    def plugin_editor(self, name):
+        from urllib.parse import urlencode
+        return self.request('plugin-source?' + urlencode({'name': name}))
+    def save_plugin_source(self, data, *, reset=False):
+        return self.request('plugin-reset' if reset else 'plugin-source', data)
+    def plugin_business(self, name):
+        from urllib.parse import urlencode
+        return self.request('plugin-business?' + urlencode({'name': name}))
+    def save_plugin_business(self, data):
+        return self.request('plugin-business', data)
 
 
 class RobotHub:

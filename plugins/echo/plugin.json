@@ -1,5 +1,14 @@
 {
   "api": "v1",
   "description": "发送 echo 文字，原样回复后面的文字",
-  "requires": ["text.receive", "text.send"]
+  "requires": [
+    "text.receive",
+    "text.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.on_message",
+      "label": "文字回复"
+    }
+  ]
 }

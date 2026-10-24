@@ -2,6 +2,18 @@
   "api": "v1",
   "default_enabled": false,
   "description": "按群选择 Fish Audio 音色，艾特机器人后用语音回复",
-  "message_types": [1],
-  "requires": ["group.text.receive", "text.send", "voice.send"]
+  "message_types": [
+    1
+  ],
+  "requires": [
+    "group.text.receive",
+    "text.send",
+    "voice.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.on_message",
+      "label": "查看与切换音色"
+    }
+  ]
 }

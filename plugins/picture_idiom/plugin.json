@@ -2,6 +2,23 @@
   "api": "v1",
   "default_enabled": false,
   "description": "在线题源与本地题库的看图猜成语：抢答、提示、换题和揭晓",
-  "requires": ["group.text.receive", "group.text.send", "group.text.mention", "image.send"],
-  "message_types": [1]
+  "requires": [
+    "group.text.receive",
+    "group.text.send",
+    "group.text.mention",
+    "image.send"
+  ],
+  "message_types": [
+    1
+  ],
+  "business": [
+    {
+      "function": "Plugin._feedback",
+      "label": "答题点评"
+    },
+    {
+      "function": "Plugin.on_message",
+      "label": "猜成语规则"
+    }
+  ]
 }

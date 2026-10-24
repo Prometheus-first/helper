@@ -38,5 +38,9 @@ class Plugin:
         if getattr(ctx, "_members", None) is not None:
             # /绑定 只在本群有效；退出时仍能使用保存过的群昵称。
             nickname = ctx.members.display_name(event["member_id"], message.chat_id) or nickname
+        ctx.reply(message, self.notice_text(nickname, kind))
+
+    def notice_text(self, nickname, kind):
+        """kind 为 join（进群）或 leave（退群），返回通知文字。"""
         template = self.welcome_template if kind == "join" else self.leave_template
-        ctx.reply(message, template.format(nickname=nickname[:64]))
+        return template.format(nickname=nickname[:64])

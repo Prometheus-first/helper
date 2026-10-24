@@ -23,10 +23,7 @@ class Plugin:
         try:
             snapshot = self.members.conversation_snapshot(message)
             guard = lambda: ctx.response_guard(snapshot, personality)
-            reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(snapshot),
-                                     personality.name)
-            display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
-            deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=guard)
+            self.reply_to_member(message, ctx, snapshot, personality, guard)
             ctx.logger.info("艾特对话完成：room=%s persona=%s context=%d", message.chat_id,
                             personality.name, len(snapshot.messages))
         except SnapshotExpired:
@@ -37,3 +34,10 @@ class Plugin:
                 ctx.reply(message, "暂时无法回复，请稍后再艾特我。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+
+    def reply_to_member(self, message, ctx, snapshot, personality, delivery_guard):
+        """上下文已准备好，在这里生成并发送给群友的回复。"""
+        reply = personality_text(Dialogue(ctx.llm_for(message, personality=personality)).reply(snapshot),
+                                 personality.name)
+        display = self.members.display_name(message.sender_id, message.chat_id) or snapshot.speaker_name
+        deliver_model_reply(ctx, message, reply, display_name=display, delivery_guard=delivery_guard)

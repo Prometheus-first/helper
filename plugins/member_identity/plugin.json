@@ -1,5 +1,14 @@
 {
   "api": "v1",
   "description": "成员本人发送 /绑定 昵称，自由注册或更新称呼，关联真实 ID 和聊天记录",
-  "requires": ["group.text.receive", "group.text.send"]
+  "requires": [
+    "group.text.receive",
+    "group.text.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.on_message",
+      "label": "绑定群内称呼"
+    }
+  ]
 }

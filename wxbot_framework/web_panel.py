@@ -21,6 +21,8 @@ from urllib.parse import parse_qs, urlsplit
 from .config import ConfigStore, EXAMPLE_ACCOUNT, account_is_unbound, initialize_configs, validate_name
 from .locking import InstanceLock
 from .message_monitor import MessageBuffer
+from .plugin_sources import PluginSources
+from .plugin_business import view as business_view, merge as merge_business
 from .runtime import BotApplication
 from .startup import scan_logged_accounts
 from .text import validate_target, validate_mentions
@@ -96,6 +98,7 @@ class PanelController:
                     with target.open('x', encoding='utf-8') as output:
                         output.write((self.root / (stem + '.example.json')).read_text(encoding='utf-8-sig'))
         self.store = ConfigStore(self.workspace / 'bot_config.json')
+        self.plugin_sources = PluginSources(self.root / 'plugins', self.workspace)
         self.factory, self.scan, self.lock_factory = app_factory, scan, lock_factory
         self.lock = threading.RLock()
         self.actions = threading.Lock()
@@ -264,9 +267,11 @@ class PanelController:
             for path in sorted((self.root / 'plugins').glob('*/plugin.json')):
                 if path.parent.name.startswith('_') or not (path.parent / '__init__.py').is_file():
                     continue
+                name = path.parent.name
+                path = self.plugin_sources.path(name) / 'plugin.json'
                 manifest = read_json(path)
-                options = config.get('plugins', {}).get(path.parent.name, {})
-                rows.append({'name': path.parent.name, 'description': manifest.get('description', ''),
+                options = config.get('plugins', {}).get(name, {})
+                rows.append({'name': name, 'description': manifest.get('description', ''),
                     'enabled': options.get('enabled', manifest.get('default_enabled', True)),
                     'active': False, 'handled': 0, 'errors': 0, 'error': ''})
             return rows
@@ -417,6 +422,75 @@ class PanelController:
 
     def chats(self):
         return self._call(lambda app: app.backend.chats() if app.backend and hasattr(app.backend, 'chats') else [])
+
+    def plugin_editor(self, name):
+        name = validate_name(name)
+        with self.lock:
+            options = self.store.load().get('plugins', {}).get(name, {})
+            result = self.plugin_sources.snapshot(name, options)
+            result['running'] = bool(self.app is not None and self.state != 'stopping')
+            result['active'] = bool(self.app and self.app.plugins.is_active(name))
+            return result
+
+    def plugin_business(self, name):
+        return business_view(self.plugin_editor(name))
+
+    def save_plugin_business(self, data):
+        if data.get('action', 'save') not in ('save', 'reset'):
+            raise PanelError('不支持的业务函数操作')
+        return self.save_plugin_source(data, reset=data.get('action') == 'reset', business=True)
+
+    def save_plugin_source(self, data, *, reset=False, business=False):
+        name = validate_name(data.get('name'))
+        if not isinstance(data.get('revision'), str):
+            raise PanelError('缺少源码版本，请重新打开编辑器', 409)
+        with self.actions:
+            with self.lock:
+                if self.state == 'stopping' or self.stop_event.is_set():
+                    raise PanelError('机器人正在停止，请稍后重试', 409)
+                running = self.app is not None
+            if running:
+                return self._call(lambda app: self._write_plugin_source(name, data, reset=reset, app=app, business=business))
+            with self.lock, self._editing():
+                return self._write_plugin_source(name, data, reset=reset, business=business)
+
+    def _write_plugin_source(self, name, data, *, reset, app=None, business=False):
+        with self.lock:
+            before = self.store.load()
+            sources = self.plugin_sources
+            current = sources.snapshot(name, before.get('plugins', {}).get(name, {}))
+            if data['revision'] != current['revision']:
+                raise PanelError('插件已被其他页面修改，请重新读取后再保存', 409)
+            options = sources.defaults(name) if reset else data.get('options')
+            if not isinstance(options, dict) or ('enabled' in options and type(options['enabled']) is not bool):
+                raise PanelError('插件配置应为 JSON 对象，enabled 应为布尔值')
+            previous = sources.pointer(name)
+            files = merge_business(current['files'], data.get('functions')) if business and not reset else data.get('files')
+            revision = None if reset else sources.prepare(name, files)
+            config = deepcopy(before)
+            config.setdefault('plugins', {})[name] = options
+            try:
+                sources.activate(name, revision)
+                self._save_many({self.store.path: config})
+                if app is not None:
+                    app.plugins.config = config
+                    spec = app.plugins.discover().get(name)
+                    if spec is None:
+                        raise ValueError('插件清单无法加载')
+                    if options.get('enabled', spec.default_enabled):
+                        app.plugins.load_one(name)
+                    else:
+                        app.plugins.disable(name, persist=False)
+            except BaseException as error:
+                sources.activate(name, previous)
+                atomic_json(self.store.path, before)
+                if app is not None:
+                    app.plugins.config = before
+                detail = redact(error) if isinstance(error, Exception) else '插件主动中止加载'
+                raise PanelError('保存未生效，已恢复原版本：' + detail, 400) from None
+            result = self.plugin_editor(name)
+            result['applied'] = bool(app is not None and app.plugins.is_active(name))
+            return business_view(result) if business else result
 
     def group_members(self, room):
         from .group_management import validate_group_id
@@ -577,7 +651,19 @@ class PanelHandler(BaseHTTPRequestHandler):
                         not self.headers.get('Content-Length', '').isdigit()):
                     raise PanelError('请使用 JSON 请求')
                 size = int(self.headers['Content-Length'])
-                if not 1 <= size <= 65536:
+                limit = 2 * 1024 * 1024 if path in ('/api/plugin-source', '/api/plugin-reset', '/api/plugin-business') else 65536
+                if not 1 <= size <= limit:
+                    # Windows 关闭仍有未读请求体的连接时可能发送 RST，掩盖 413 响应。
+                    # 只丢弃略超限的有界请求，限制等待，绝不解析或保存它。
+                    if 0 < size - limit <= 65536:
+                        previous_timeout = self.connection.gettimeout()
+                        try:
+                            self.connection.settimeout(2)
+                            self.rfile.read(size)
+                        except (OSError, TimeoutError):
+                            pass
+                        finally:
+                            self.connection.settimeout(previous_timeout)
                     raise PanelError('请求大小超出限制', 413)
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data, dict):
@@ -590,6 +676,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.start_selected(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
+                if path in ('/api/plugin-source', '/api/plugin-reset'):
+                    return self.send(200, controller.save_plugin_source(data, reset=path == '/api/plugin-reset'))
+                if path == '/api/plugin-business':
+                    return self.send(200, controller.save_plugin_business(data))
                 actions = {'/api/start': lambda: controller.start(), '/api/stop': lambda: controller.stop(),
                     '/api/restart': lambda: controller.restart(),
                     '/api/account': lambda: controller.bind_account(data),
@@ -603,6 +693,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.snapshot())
             if path == '/api/config':
                 return self.send(200, controller.configuration())
+            if path == '/api/plugin-source':
+                return self.send(200, controller.plugin_editor(parse_qs(parsed.query).get('name', [''])[0]))
+            if path == '/api/plugin-business':
+                return self.send(200, controller.plugin_business(parse_qs(parsed.query).get('name', [''])[0]))
             if path == '/api/accounts':
                 return self.send(200, hub.logged_accounts() if hub is not None else {'accounts': controller.accounts()})
             if path == '/api/chats':

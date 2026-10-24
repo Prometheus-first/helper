@@ -16,6 +16,7 @@ from pathlib import Path
 from .config import validate_name
 from .sdk import PluginContext, LegacyService
 from .speech import SpeechController
+from .plugin_sources import PluginSources
 
 logger = logging.getLogger("Plugins")
 
@@ -112,6 +113,7 @@ class PluginRecord:
 class PluginManager:
     def __init__(self, directory, store, service, capabilities, queue_size=128, *, member_store=None):
         self.directory = Path(directory).resolve()
+        self.sources = PluginSources(self.directory, store.path.parent)
         self.store, self.service = store, service
         self.capabilities = frozenset(capabilities)
         self.queue_size = queue_size
@@ -139,8 +141,8 @@ class PluginManager:
                 continue
             try:
                 name = validate_name(directory.name)
-                if not path.resolve().is_relative_to(self.directory):
-                    raise ValueError("插件源文件必须位于插件目录内")
+                directory = self.sources.path(name)
+                path = directory / "__init__.py"
                 manifest_path = directory / "plugin.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig")) if manifest_path.exists() else {}
                 api = manifest.get("api", "v1")
@@ -169,6 +171,7 @@ class PluginManager:
         context = PluginContext(spec.name, options, self.service, self.capabilities,
                                 llm_config_path=self.store.path.parent / self.config.get("llm_config_file", "llm_config.json"),
                                 member_store=self.member_store, speech=self.speech, plugin_active=self.is_active)
+        context.project_root = self.directory.parent
         # 每次使用独立模块名并重新编译源文件，热重载不复用旧入口字节码。
         if "_wxbot_plugins" not in sys.modules:
             package = types.ModuleType("_wxbot_plugins")

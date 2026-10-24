@@ -20,7 +20,8 @@ class Plugin:
         self.cooldown=finite_number(ctx.config.get('cooldown_seconds',10),'cooldown_seconds',0,300)
         self.members=ctx.members
         account=hashlib.sha256(self.members.account.encode('ascii')).hexdigest()[:16]
-        directory=Path(__file__).resolve().parents[2]/'.runtime/image_gallery'/account
+        root=getattr(ctx,'project_root',None) or Path(__file__).resolve().parents[2]
+        directory=root/'.runtime/image_gallery'/account
         self.client=GalleryClient(directory,ctx.config)
         self.stopped=threading.Event()
         self.last_request={}
@@ -69,7 +70,7 @@ class Plugin:
             with self.client.fetch(current=current) as image:
                 self._guard_check(message,ctx)
                 try:
-                    success=ctx.reply_image(message,image.path,delivery_guard=guard)
+                    success=self.reply_picture(message,ctx,image.path,guard)
                 except GalleryCancelled:
                     raise
                 except Exception:
@@ -90,6 +91,10 @@ class Plugin:
     def _guard_check(self, message, ctx):
         if not self._current(message,ctx):
             raise GalleryCancelled('图库回复已取消')
+
+    def reply_picture(self, message, ctx, path, delivery_guard):
+        """图片已由框架准备好，在这里决定如何回复。"""
+        return ctx.reply_image(message, path, delivery_guard=delivery_guard)
 
     def _failure(self, message, ctx, text):
         if self._current(message,ctx):

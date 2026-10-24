@@ -1,5 +1,15 @@
 {
   "api": "v1",
   "description": "群内成语接龙：独立艾特、合并抢答、退出及 /help；大模型判定与出题",
-  "requires": ["group.text.receive", "group.text.send", "group.text.mention"]
+  "requires": [
+    "group.text.receive",
+    "group.text.send",
+    "group.text.mention"
+  ],
+  "business": [
+    {
+      "function": "Plugin._handle",
+      "label": "成语接龙规则"
+    }
+  ]
 }

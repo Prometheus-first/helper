@@ -3,5 +3,14 @@
   "api": "v1",
   "description": "手动清空当前群聊天记录",
   "entry": "__init__.py",
-  "requires": ["group.text.receive", "group.text.send"]
+  "requires": [
+    "group.text.receive",
+    "group.text.send"
+  ],
+  "business": [
+    {
+      "function": "Plugin.on_message",
+      "label": "清空聊天记录"
+    }
+  ]
 }

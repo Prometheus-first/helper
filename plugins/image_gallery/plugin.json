@@ -2,6 +2,18 @@
   "api": "v1",
   "default_enabled": true,
   "description": "图库图片：/来张图 或 /美女，从免费图库取图并发送",
-  "requires": ["group.text.receive", "group.text.send", "image.send"],
-  "message_types": [1]
+  "requires": [
+    "group.text.receive",
+    "group.text.send",
+    "image.send"
+  ],
+  "message_types": [
+    1
+  ],
+  "business": [
+    {
+      "function": "Plugin.reply_picture",
+      "label": "发送图库图片"
+    }
+  ]
 }

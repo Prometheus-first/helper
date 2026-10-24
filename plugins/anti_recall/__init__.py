@@ -57,9 +57,13 @@ class Plugin:
             except (OSError, ValueError, RuntimeError):
                 ctx.logger.warning('撤回表情包补发未完成，不重复发送')
             return
-        for part in split_text('撤回的消息是：' + entry.content, byte_limit=1023):
+        for part in split_text(self.format_recall(entry.content), byte_limit=1023):
             if ctx.reply(message, part, delivery_guard=self._delivery_guard) is False:
                 break
+
+    def format_recall(self, content):
+        """content 是被撤回的原文，返回要补发的文字。"""
+        return '撤回的消息是：' + content
 
     @contextmanager
     def _delivery_guard(self):
