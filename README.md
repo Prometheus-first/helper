@@ -84,7 +84,8 @@ tools/                配置初始化、测试与发布检查
 <details>
 <summary>交流群二维码</summary>
 
-<img width="260" alt="交流群二维码" src="https://github.com/user-attachments/assets/f6125f82-b369-4106-90c4-052c624fa400" />
+<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/cd2e28c8-e353-4c90-b425-5ddcf491ddc4" />
+
 
 </details>
 
