@@ -19,6 +19,7 @@ from .locking import InstanceLock
 from .panel_common import PanelError as PanelError, redact as redact
 from .panel_http import PanelHandler as PanelHandler, PanelServer as PanelServer
 from .message_monitor import MessageBuffer
+from .moments import MomentsPublisher
 from .plugin_sources import PluginSources
 from .plugin_business import view as business_view, merge as merge_business
 from .runtime import BotApplication
@@ -96,6 +97,8 @@ class PanelController:
         self.logs = LogBuffer()
         self.messages = MessageBuffer(sanitize=redact)
         self.send_jobs = {}
+        self._moments_identity = None
+        self.moments = MomentsPublisher(self.workspace, self._deliver_moments, self._moments_session)
         logging.getLogger().addHandler(self.logs)
 
     def _paths(self, config):
@@ -227,6 +230,7 @@ class PanelController:
         self.start()
 
     def close(self):
+        self.moments.close()
         self.stop_event.set()
         self.stop()
         if self.worker is not None:
@@ -585,3 +589,102 @@ class PanelController:
                 raise PanelError('微信尚未连接', 409)
             return {'session_id': app.backend.session_id}
         return self._call(query)
+
+    def _moments_session(self):
+        """只查看当前运行连接，不启动机器人，也不复用切号前的连接身份。"""
+        with self.lock:
+            app = self.app
+            if (self.stop_event.is_set() or self.state != 'running' or app is None or
+                    not app._connection_ready or app.backend is None):
+                return None
+            backend = app.backend
+            session = getattr(backend, 'session_id', None)
+            account = app.config.get('wechat_account')
+            if not isinstance(session, str) or not session or account_is_unbound(account):
+                return None
+            actual = getattr(getattr(backend, 'raw', None), 'self_wxid', None)
+            if actual is not None and actual != account:
+                return None
+            identity = (session, account, backend)
+            previous = self._moments_identity
+            if previous is not None and previous[0] == session and (previous[1] != account or previous[2] is not backend):
+                return None
+            self._moments_identity = identity
+            return {'session_id': session, 'account': account}
+
+    def moments_connection(self):
+        current = self._moments_session()
+        if current is None:
+            raise PanelError('请先启动并连接需要发布朋友圈的机器人账号', 409)
+        with self.lock:
+            if self._moments_session() != current:
+                raise PanelError('微信连接或发布账号已变化，请刷新后重新选择', 409)
+            app, backend = self.app, self.app.backend
+            service = getattr(app, 'service', None)
+        capability = getattr(service, 'moments_capabilities', None)
+        supported, reason = False, '当前服务尚未接入朋友圈发布能力'
+        if callable(capability):
+            try:
+                result = capability(expected_session=current['session_id'])
+            except Exception:
+                result = None
+                reason = '当前连接暂时无法确认朋友圈发布能力，请刷新后重试'
+            if isinstance(result, dict):
+                supported = result.get('supported') is True
+                value = result.get('reason')
+                if isinstance(value, str) and value.strip():
+                    # 原生诊断仅提取说明；路径、凭据和异常原文不透传到页面。
+                    if not re.search(r'[A-Za-z]:[\\/]|(?:^|\s)/(?:Users|home|tmp|var)/', value):
+                        reason = redact(value)[:500]
+                elif not supported:
+                    reason = '当前微信版本的朋友圈原生发布能力尚未验证，暂不能发布'
+        if not callable(getattr(service, 'publish_moments', None)):
+            supported, reason = False, '当前服务尚未接入朋友圈发布接口'
+        if self._moments_session() != current or self.app is not app or app.backend is not backend:
+            raise PanelError('微信连接或发布账号已变化，请刷新后重新选择', 409)
+        return dict(current, supported=supported, reason='' if supported else reason, images=True,
+                    max_images=9, visibility=['public', 'private'])
+
+    def publish_moments(self, data):
+        # 已存在的同一请求交回任务模块核对内容；断线后查询/重复点按不会另发。
+        if isinstance(data, dict):
+            try:
+                self.moments.status(data.get('request_id'))
+            except PanelError as error:
+                if error.status != 404:
+                    raise
+            else:
+                return self.moments.submit(data)
+        connection = self.moments_connection()
+        if not connection['supported']:
+            raise PanelError(connection['reason'], 409)
+        return self.moments.submit(data)
+
+    def moments_status(self, identifier):
+        return self.moments.status(identifier)
+
+    def _deliver_moments(self, payload):
+        current = self._moments_session()
+        if current is None or current['session_id'] != payload['session_id']:
+            return {'status': 'failed', 'phase': 'preflight'}
+        with self.lock:
+            if self._moments_session() != current:
+                return {'status': 'failed', 'phase': 'preflight'}
+            app, backend = self.app, self.app.backend
+            service = getattr(app, 'service', None)
+        try:
+            capability = self.moments_connection()
+        except PanelError:
+            return {'status': 'failed', 'phase': 'preflight'}
+        if (not capability['supported'] or capability['account'] != current['account'] or
+                self._moments_session() != current or self.app is not app or app.backend is not backend):
+            return {'status': 'failed', 'phase': 'preflight'}
+        publish = getattr(service, 'publish_moments', None)
+        if not callable(publish):
+            return {'status': 'failed', 'phase': 'preflight'}
+        # 不用 _call() 的 15 秒 Future 超时：临时图必须一直保留到原生函数真正退出。
+        result = publish(payload, expected_session=payload['session_id'])
+        if self._moments_session() != current or self.app is not app or app.backend is not backend:
+            return {'status': 'unknown', 'unload_blocked': isinstance(result, dict) and result.get('unload_blocked') is True,
+                    'retain_images': isinstance(result, dict) and result.get('retain_images') is True}
+        return result

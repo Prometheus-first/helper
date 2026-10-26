@@ -7,6 +7,7 @@
   <meta name="color-scheme" content="light dark">
   <title>helper · 本地管理台</title>
   <link rel="icon" href="data:,">
+  <script src="/moments.js"></script>
   <script src="/app.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -19,6 +20,7 @@
     <a href="#plugins" data-page="plugins"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><rect x="14" y="14" width="6.5" height="6.5" rx="1"/></svg>插件管理<span id="nav-plugin-count" class="nav-count">—</span></a>
     <a href="#groups" data-page="groups"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7.5" r="3"/><path d="M3.5 20v-3.5a5.5 5.5 0 0 1 11 0V20M16 4.5a3 3 0 0 1 0 6M17 13a5 5 0 0 1 3.5 4.8V20"/></svg>群聊与会话</a>
     <a href="#contacts" data-page="contacts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="15.5" height="17" rx="2"/><path d="M3.5 7h3M3.5 12h3M3.5 17h3M10 17v-1a3.5 3.5 0 0 1 7 0v1"/><circle cx="13.5" cy="9" r="2.5"/></svg>联系人</a>
+    <a href="#moments" data-page="moments"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>朋友圈</a>
     <a href="#models" data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>模型与语音</a>
     <a href="#logs" data-page="logs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1"/></svg>运行日志</a>
   </nav>
@@ -78,6 +80,20 @@
     <div class="table-container"><table class="contact-table"><thead><tr><th scope="col">联系人</th><th scope="col">微信号</th><th scope="col">好友标签</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="contact-list"><tr><td colspan="4" class="table-empty">连接后点击“扫描联系人”。</td></tr></tbody></table></div>
     <div id="contact-pagination" class="contact-pagination hidden"><span id="contact-page" class="count"></span><div><button id="contact-previous" class="secondary small" type="button">上一页</button><button id="contact-next" class="secondary small" type="button">下一页</button></div></div>
   </section>
+  <section class="page hidden" id="page-moments" aria-labelledby="moments-heading">
+    <div class="page-heading"><h1 id="moments-heading">朋友圈</h1></div>
+    <form id="moments-form" class="settings-section moments-composer">
+      <div id="moments-single-account" class="moments-identity"></div>
+      <label id="moments-account-field" class="hidden" for="moments-account">发布账号<select id="moments-account"><option value="">选择运行中的机器人</option></select></label>
+      <p id="moments-availability" class="editor-status" role="status">请先启动并连接机器人。</p>
+      <label for="moments-content">正文<textarea id="moments-content" rows="7" maxlength="2000" placeholder="写点什么…"></textarea></label>
+      <div class="moments-image-actions"><label for="moments-images" class="secondary moments-file-label">添加图片<input id="moments-images" type="file" accept="image/jpeg,image/png" multiple></label><span id="moments-counter" class="count">0 / 1000 字 · 0 / 9 张</span></div>
+      <div id="moments-image-list" class="moments-images"></div>
+      <label class="moments-visibility" for="moments-visibility">谁可以看<select id="moments-visibility"><option value="public">公开</option><option value="private">仅自己可见</option></select></label>
+      <p id="moments-feedback" class="editor-status" role="status" aria-live="polite"></p>
+      <div class="form-footer"><button type="button" id="moments-clear" class="text-button">清空草稿</button><button id="moments-preview" type="submit" class="primary" disabled>预览</button></div>
+    </form>
+  </section>
   <section class="page hidden" id="page-models" aria-labelledby="models-heading">
     <div class="page-heading"><div><h1 id="models-heading">模型与语音</h1></div></div>
     <div class="model-columns"><form id="llm-form" class="settings-section model-form"><h2>大模型</h2><label>接口地址<input name="base_url" type="url" required spellcheck="false"></label><label>模型名称<input name="model" required spellcheck="false"></label><label>API 密钥 <span class="key-state"></span><input name="api_key" type="password" autocomplete="new-password" placeholder="留空保留已有密钥"></label><details class="advanced-settings"><summary>高级选项</summary><div class="field-pair"><label>超时（秒）<input name="timeout_seconds" type="number" min="1" max="60" required></label><label>最大 tokens<input name="max_tokens" type="number" min="128" max="4096" required></label></div><label>令牌参数<select name="token_limit_parameter"><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label><label class="inline"><input name="json_mode" type="checkbox">启用 JSON 模式</label><label>扩展参数（JSON）<textarea name="extra_body" rows="4" spellcheck="false" placeholder="{}"></textarea></label><label class="inline clear-key"><input name="clear_api_key" type="checkbox">清除已保存的密钥</label></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存大模型配置</button></div></form><form id="tts-form" class="settings-section model-form"><h2>Fish Audio 语音</h2><label>接口地址<input name="base_url" type="url" required spellcheck="false"></label><label>语音模型<input name="model" required spellcheck="false"></label><label>API 密钥 <span class="key-state"></span><input name="api_key" type="password" autocomplete="new-password" placeholder="留空保留已有密钥"></label><label>默认音色 ID<input name="default_voice" placeholder="可留空，在群中选择" spellcheck="false"></label><details class="advanced-settings"><summary>高级选项</summary><div class="field-pair"><label>超时（秒）<input name="timeout_seconds" type="number" min="1" max="120" required></label><label>每段字数<input name="max_chars_per_clip" type="number" min="20" max="180" required></label></div><label class="inline clear-key"><input name="clear_api_key" type="checkbox">清除已保存的密钥</label></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存语音配置</button></div></form></div>
@@ -91,6 +107,15 @@
 
 </main>
 <div id="toast" class="toast hidden" role="status"></div>
+<dialog id="moments-confirm" class="moments-confirm" aria-labelledby="moments-confirm-title">
+  <div class="dialog-heading"><h2 id="moments-confirm-title">发布朋友圈</h2><button type="button" id="moments-cancel" class="text-button" aria-label="关闭预览">取消</button></div>
+  <p id="moments-preview-account" class="moments-identity"></p>
+  <p id="moments-preview-visibility" class="count"></p>
+  <div id="moments-preview-content" class="moments-preview-content"></div>
+  <div id="moments-preview-images" class="moments-images"></div>
+  <p id="moments-confirm-error" class="dialog-error hidden" role="alert"></p>
+  <div class="form-footer"><button type="button" id="moments-publish" class="primary">发布</button></div>
+</dialog>
 <dialog id="plugin-dialog" class="plugin-editor" aria-labelledby="plugin-dialog-title">
   <form id="plugin-form">
     <div class="dialog-heading"><h2 id="plugin-dialog-title">插件配置</h2><button type="button" class="icon-button" id="close-plugin-dialog" aria-label="关闭编辑器"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div>

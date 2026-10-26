@@ -548,3 +548,5 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxArmMentionProbe(void* parameter)
     hook_created = true;
     return 0;
 }
+
+#include "moments_send.h"

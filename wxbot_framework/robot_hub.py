@@ -124,6 +124,11 @@ class RobotProxy:
     def send_status(self, identifier):
         from urllib.parse import urlencode
         return self.request('send-status?' + urlencode({'id': identifier}))
+    def moments_connection(self): return self.request('moments-connection')
+    def publish_moments(self, data): return self.request('moments-publish', data)
+    def moments_status(self, identifier):
+        from urllib.parse import urlencode
+        return self.request('moments-status?' + urlencode({'id': identifier}))
     def tail(self, after=0): return self.request(f'logs?after={after}')
     def message_tail(self, after=0): return self.request(f'messages?after={after}')
     def start(self): return self.request('start', {})

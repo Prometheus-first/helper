@@ -124,6 +124,12 @@ class NativeTextBackend(NativeFileHelperBackend):
         snapshot = self.raw.contacts()
         return dict(snapshot, session_id=self.session_id)
 
+    def moments_capabilities(self):
+        return self.raw.moments_capabilities()
+
+    def publish_moments(self, payload):
+        return self.raw.publish_moments(payload)
+
     def send_emoticon(self, chat_id, path):
         return self.raw.send_emoticon(chat_id, path)
 

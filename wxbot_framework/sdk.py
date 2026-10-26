@@ -268,6 +268,32 @@ class ServiceFacade:
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
 
+    def moments_capabilities(self, *, expected_session=None):
+        return self._manage("moments_capabilities", expected_session=expected_session)
+
+    def publish_moments(self, payload, *, expected_session):
+        """长任务不持有连接锁；离线取消与原生清理可继续进行。"""
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if backend is None or not self._available or backend.session_id != expected_session:
+                return {'status': 'failed', 'phase': 'preflight'}
+            method = getattr(backend, 'publish_moments', None)
+            if not callable(method):
+                return {'status': 'failed', 'phase': 'preflight'}
+        with self._send_lock:
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != expected_session):
+                    return {'status': 'failed', 'phase': 'preflight'}
+            result = method(payload)
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != expected_session):
+                    return {'status': 'unknown',
+                            'unload_blocked': isinstance(result, dict) and result.get('unload_blocked') is True,
+                            'retain_images': isinstance(result, dict) and result.get('retain_images') is True}
+            return result
+
     def accept_friend(self, request_id, *, expected_session=None):
         if not isinstance(request_id, str) or not request_id or len(request_id) > 80:
             raise ValueError("请提供 friend-requests 中显示的申请 ID")

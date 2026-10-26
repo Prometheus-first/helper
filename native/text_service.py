@@ -497,6 +497,35 @@ class NativeTextService(NativeFileHelperService):
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)
 
+    def moments_capabilities(self):
+        from moments_transport import moments_capabilities
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                return {'supported': False, 'reason': '微信尚未连接'}
+            self._check_account(force=True)
+            return moments_capabilities(self.pid, bridge_path=self._dll)
+
+    def publish_moments(self, payload):
+        from moments_transport import publish_moments
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                return {'status': 'failed', 'phase': 'preflight'}
+            self._check_account(force=True)
+            account, session = self.self_wxid, self._friend_session_id
+            result = publish_moments(self.pid, account, content=payload['content'],
+                                     images=payload['images'], visibility=payload['visibility'],
+                                     bridge_path=self._dll, workspace=self.file_directory.parent,
+                                     keep_loaded=True)
+            try:
+                self._check_account(force=True)
+                current = account == self.self_wxid and session == self._friend_session_id
+            except (OSError, RuntimeError):
+                current = False
+            if not current:
+                return {'status': 'unknown', 'unload_blocked': result.get('unload_blocked') is True,
+                        'retain_images': result.get('retain_images') is True}
+            return result
+
     def send_at_text(self, room_wxid, content, at_list):
         members = validate_mentions(room_wxid, at_list)
         return self._send_text(room_wxid, content, mentions=members)

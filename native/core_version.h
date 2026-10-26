@@ -37,6 +37,7 @@ static uintptr_t core_rva(uintptr_t legacy) {
         case 0x47220: return 0x47220;
         case 0x47310: return 0x47310;
         case 0x857a0: return 0x857a0;
+        case 0x88ad0: return 0x88ad0;
         case 0x8edb0: return 0x8edb0;
         case 0x9b5d0: return 0x9b5e0;
         case 0x9f4b0: return 0x9f4c0;

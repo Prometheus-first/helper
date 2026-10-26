@@ -61,7 +61,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             parsed = urlsplit(self.path)
             path = parsed.path
             controller = self.server.controller
-            if not write and path in ('/', '/index.html', '/style.css', '/app.js'):
+            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js'):
                 name = 'index.html' if path == '/' else path[1:]
                 raw = (controller.root / 'webui' / name).read_bytes()
                 if name == 'index.html':
@@ -79,6 +79,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     raise PanelError('请使用 JSON 请求')
                 size = int(self.headers['Content-Length'])
                 limit = 2 * 1024 * 1024 if path in ('/api/plugin-source', '/api/plugin-reset', '/api/plugin-business') else 65536
+                if path == '/api/moments-publish':
+                    limit = 29 * 1024 * 1024
                 if not 1 <= size <= limit:
                     # Windows 关闭仍有未读请求体的连接时可能发送 RST，掩盖 413 响应。
                     # 只丢弃略超限的有界请求，限制等待，绝不解析或保存它。
@@ -103,6 +105,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.start_selected(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
+                if path == '/api/moments-publish':
+                    return self.send(200, controller.publish_moments(data))
                 if path in ('/api/plugin-source', '/api/plugin-reset'):
                     return self.send(200, controller.save_plugin_source(data, reset=path == '/api/plugin-reset'))
                 if path == '/api/plugin-business':
@@ -136,6 +140,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.send_connection())
             if path == '/api/send-status':
                 return self.send(200, controller.send_status(parse_qs(parsed.query).get('id', [''])[0]))
+            if path == '/api/moments-connection':
+                return self.send(200, controller.moments_connection())
+            if path == '/api/moments-status':
+                return self.send(200, controller.moments_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/logs':
                 after = int(parse_qs(parsed.query).get('after', ['0'])[0])
                 return self.send(200, controller.logs.tail(max(0, after)))

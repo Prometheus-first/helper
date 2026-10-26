@@ -21,6 +21,7 @@ VERIFIED_RVAS = {
     0x47220: 0x47220,
     0x47310: 0x47310,
     0x857a0: 0x857a0,
+    0x88ad0: 0x88ad0,
     0x8edb0: 0x8edb0,
     0x9b5d0: 0x9b5e0,
     0x9f4b0: 0x9f4c0,
@@ -147,7 +148,7 @@ class NativeVersionBridgeTests(unittest.TestCase):
         self.assertEqual(len(rows), len(VERIFIED_RVAS))
         self.assertEqual(len({old for old, _ in rows}), len(rows))
         self.assertEqual({int(old, 16): int(new, 16) for old, new in rows}, VERIFIED_RVAS)
-        self.assertEqual(len(VERIFIED_RVAS), 54)
+        self.assertEqual(len(VERIFIED_RVAS), 55)
 
     def test_all_production_module_relative_references_use_verified_profile_resolver(self):
         used = set()

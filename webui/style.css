@@ -1,3 +1,19 @@
+.moments-composer {max-width: 760px;}
+.moments-composer textarea {resize: vertical; min-height: 150px;}
+.moments-identity {font-weight: 600; overflow-wrap: anywhere; margin-bottom: var(--space-3);}
+.moments-image-actions {display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-3) 0;}
+.moments-file-label {position: relative; display: inline-flex; align-items: center; min-height: 40px; cursor: pointer; overflow: hidden; margin: 0;}
+.moments-file-label input {position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;}
+.moments-file-label:focus-within {outline: 2px solid var(--accent); outline-offset: 3px;}
+.moments-images {display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0;}
+.moments-images:empty {display: none;}
+.moments-images figure {min-width: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2);}
+.moments-images img {width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-control); background: var(--canvas);}
+.moments-visibility {max-width: 240px;}
+.moments-confirm {width: min(680px, calc(100% - 32px));}
+.moments-preview-content {white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; line-height: 1.6; margin: var(--space-4) 0;}
+.moments-confirm .form-footer {justify-content: flex-end;}
+@media (max-width: 600px) {.moments-composer {padding: var(--space-4);} .moments-images {grid-template-columns: repeat(3, minmax(0, 1fr));}}
 :root {
   font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   color: var(--ink);
