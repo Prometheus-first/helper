@@ -74,10 +74,49 @@ int main() {
     assert(WxPollMediaMessageV4(current.get()) == 0);
     assert(current->present && (current->reserved & 1) && !current->image_xml[0]);
 
+    // V6 carries binary voice after the XML's NUL; legacy V5 writes its exact
+    // original boundary. This is a structural fixture, not playable audio.
+    std::string voice("\x02#!SILK_V3", 10);
+    voice.append("\x03\0a\0b", 5);
+    std::string voice_xml("<msg><voicemsg voicelength=\"20\" length=\"15\" endflag=\"1\"/></msg>");
+    SmallString voice_value = voice_borrow(voice.c_str(), voice.size());
+    SmallString xml_value = voice_borrow(voice_xml.c_str(), voice_xml.size());
+    struct BinaryWrapper { void* reserved; SmallString* value; uint32_t length, padding; } binary{};
+    binary.value = &voice_value;
+    binary.length = static_cast<uint32_t>(voice.size());
+    wrapper.string = &xml_value;
+    auto binary_pointer = &binary;
+    std::memcpy(raw + 0x30, &binary_pointer, sizeof(binary_pointer));
+    _InterlockedExchange(&core_profile_id, 2);
+    copy_voice_message(raw, sender, receiver, "", 123456789);
+    assert(WxPollMediaMessageV6(current.get()) == 0);
+    assert(current->size == 267568 && current->native_message_id == 123456789 && current->type == 34);
+    assert(current->voice_offset == voice_xml.size() + 1 && current->voice_size == voice.size());
+    assert(std::strcmp(current->image_xml, voice_xml.c_str()) == 0);
+    assert(std::memcmp(current->image_xml + current->voice_offset, voice.data(), voice.size()) == 0);
+    voice_value.data[12] = 'z';
+    assert(current->image_xml[current->voice_offset + 12] == 'a');
+    voice_value = voice_borrow(voice.c_str(), voice.size());
+    copy_voice_message(raw, sender, receiver, "", 7);
+    std::vector<unsigned char> v5(267560 + 128, 0xa5);
+    assert(WxPollMediaMessageV5(v5.data()) == 0);
+    assert(*reinterpret_cast<uint32_t*>(v5.data()) == 267560);
+    for (size_t i = 267560; i < v5.size(); ++i) assert(v5[i] == 0xa5);
+    for (size_t i = 0; i < voice.size(); ++i)
+        assert(v5[offsetof(ReceivedMessage, image_xml) + voice_xml.size() + 1 + i] == 0);
+    binary.length += 1;
+    copy_voice_message(raw, sender, receiver, "", 8);
+    assert(WxPollMediaMessageV6(current.get()) == 0 && !current->voice_size);
+    binary.length -= 1;
+    _InterlockedExchange(&core_profile_id, 1);
+    copy_voice_message(raw, sender, receiver, "", 9);
+    assert(WxPollMediaMessageV6(current.get()) == 0 && !current->voice_size);
+    _InterlockedExchange(&core_profile_id, 0);
+
     for (int i = 0; i < 65; ++i) enqueue_received(sender, receiver, "fixture");
     assert(WxPollMediaMessageV4(current.get()) == 0 && current->dropped == 1);
     for (int i = 0; i < 64; ++i) WxPollMediaMessageV4(current.get());
     assert(current->present == 0);
-    std::puts("Native receive queue: V3 guard, V4 long payload, limit and bounded eviction passed.");
+    std::puts("Native queue: V3/V4/V5 boundaries, V6 voice binary ownership, profile and length guards passed.");
     return 0;
 }

@@ -39,7 +39,7 @@
 
 ## 防撤回补发
 
-防撤回分为三个独立插件，均默认开启：`anti_recall` 补发原文字、内置表情和 emoji，并重新发送已缓存的表情包；`anti_recall_image` 重发已下载的图片，`anti_recall_file` 按原文件名重发已下载的文件。可在网页插件管理分别开关，或在控制台使用 `disable <插件名>`。无需模型，适用范围由 `chat_allowlist` 控制；大小、缓存及下载失败限制见[防撤回与自动补发](../messages/recall.md)。
+防撤回分为四个独立插件，均默认开启：`anti_recall` 补发原文字、内置表情和 emoji，并重新发送已缓存的表情包；`anti_recall_image` 重发已下载的图片，`anti_recall_file` 按原文件名重发已下载的文件，`anti_recall_voice` 重发已完整接收的语音。可在网页插件管理分别开关，或在控制台使用 `disable <插件名>`。无需模型，适用范围由 `chat_allowlist` 控制；大小、缓存及下载失败限制见[防撤回与自动补发](../messages/recall.md)。
 
 ## 进群欢迎与退群提醒
 

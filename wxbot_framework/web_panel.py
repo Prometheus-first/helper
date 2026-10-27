@@ -98,6 +98,7 @@ class PanelController:
         self.messages = MessageBuffer(sanitize=redact)
         self.send_jobs = {}
         self._moments_identity = None
+        self._moments_read_lock = threading.Lock()
         self.moments = MomentsPublisher(self.workspace, self._deliver_moments, self._moments_session)
         logging.getLogger().addHandler(self.logs)
 
@@ -662,6 +663,42 @@ class PanelController:
 
     def moments_status(self, identifier):
         return self.moments.status(identifier)
+
+    def read_moments(self, data):
+        """仅手动读取当前连接的本地缓存，不保存正文，也不触发微信翻页。"""
+        if not isinstance(data, dict) or type(data.get('limit', 20)) is not int or not 1 <= data.get('limit', 20) <= 50:
+            raise PanelError('读取条数必须是 1 到 50 的整数')
+        current = self._moments_session()
+        if current is None or data.get('session_id') != current['session_id']:
+            raise PanelError('微信连接已变化，请重新选择账号后读取', 409)
+        if not self._moments_read_lock.acquire(blocking=False):
+            raise PanelError('正在读取朋友圈，请稍候', 409)
+        try:
+            with self.lock:
+                if self._moments_session() != current:
+                    raise PanelError('微信连接已变化，请重新读取', 409)
+                app, backend = self.app, self.app.backend
+                service = getattr(app, 'service', None)
+            read = getattr(service, 'read_moments', None)
+            if not callable(read):
+                raise PanelError('请更新管理台后重新启动机器人', 409)
+            try:
+                result = read(data.get('limit', 20), expected_session=current['session_id'])
+            except Exception as error:
+                from .moments_reader import MomentsReadError
+                if isinstance(error, MomentsReadError):
+                    raise PanelError(str(error), 409) from None
+                raise PanelError('朋友圈读取失败，请确认电脑微信已打开朋友圈后重试', 409) from None
+            if self._moments_session() != current or self.app is not app or app.backend is not backend:
+                raise PanelError('微信连接已变化，已丢弃旧账号的读取结果', 409)
+            # 不转发进程地址、诊断或原生元数据，仅返回页面需要的已验证字段。
+            fields = ('sns_id', 'author', 'nickname', 'is_self', 'timestamp', 'time',
+                      'private', 'content', 'content_type', 'media_count')
+            return dict(current, source='loaded_pc_moments_cache',
+                        rows=[{key: row[key] for key in fields} for row in result['rows']],
+                        loaded_count=result['loaded_count'], truncated=result['truncated'])
+        finally:
+            self._moments_read_lock.release()
 
     def _deliver_moments(self, payload):
         current = self._moments_session()

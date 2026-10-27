@@ -192,6 +192,25 @@ class GroupMonitorIntegrationTests(unittest.TestCase):
         self.poll({ACCOUNT:'机器人', FIRST:'成员甲', SECOND:'新人'})
         self.app.plugins.dispatch.assert_called_once()
 
+    def test_scan_notice_supplies_missing_nickname_after_two_roster_confirmations(self):
+        self.poll({ACCOUNT:'机器人', FIRST:'成员甲'})
+        self.app._emit(Message('',ROOM,type=10000,is_group=True,session_id='first',sequence=42,
+            data={'system_content':'"示例群友"通过扫描你分享的二维码加入群聊'}))
+        self.app.plugins.dispatch.assert_not_called()
+        changed = {ACCOUNT:'机器人', FIRST:'成员甲', SECOND:''}
+        self.poll(changed)
+        self.app.plugins.dispatch.assert_not_called()
+        self.poll(changed)
+        self.app.plugins.dispatch.assert_called_once()
+        message = self.app.plugins.dispatch.call_args.args[0]
+        self.assertEqual(message.data['group_event']['member_id'], SECOND)
+        self.assertEqual(message.data['group_event']['nickname'], '示例群友')
+        plugin = Plugin()
+        ctx = PluginContext('group_notice', {}, self.app.service, ())
+        plugin.on_load(ctx)
+        plugin.on_message(message, ctx)
+        self.backend.send_text.assert_called_once_with(ROOM, '欢迎 示例群友 加入群聊！')
+
     def test_disconnect_resets_baseline(self):
         self.poll({ACCOUNT:'机器人', FIRST:'成员甲'})
         self.app._disconnect()

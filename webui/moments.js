@@ -4,6 +4,14 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   const form = $('#moments-form'), dialog = $('#moments-confirm');
   let target = '', mode = 0, generation = 0, connection = null, lastCheck = 0;
   let fetching = false, reading = false, submitting = false, images = [], preview = null, pending = null, timer = null;
+  let feedBusy = false, feedGeneration = 0;
+  const feedStatus = (message, error = false) => {
+    const node = $('#moments-read-status'); node.textContent = message; node.classList.toggle('account-error', error);
+  };
+  function clearFeed() {
+    feedGeneration++; feedBusy = false;
+    $('#moments-timeline-list').replaceChildren(); feedStatus('尚未读取。');
+  }
   const live = () => robots().filter(row => row.state === 'running' && row.connected);
   const count = () => [...$('#moments-content').value].length;
   const feedback = (message, error = false) => {
@@ -17,7 +25,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   function choose(identifier) {
     if (identifier === target) return;
     const hadAccount = !!target;
-    target = identifier; generation++; connection = null; lastCheck = 0; preview = null;
+    target = identifier; generation++; connection = null; lastCheck = 0; preview = null; clearFeed();
     if (hadAccount) clearDraft('发布账号已变化，草稿已清空。');
   }
   function drawImages(container = $('#moments-image-list'), readonly = false) {
@@ -41,13 +49,14 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     try {
       const next = await api('moments-connection', undefined, requested);
       if (requested !== target || version !== generation) return;
-      if (connection && connection.session_id !== next.session_id) clearDraft('微信连接已变化，草稿已清空。');
+      if (connection && connection.session_id !== next.session_id) { clearDraft('微信连接已变化，草稿已清空。'); clearFeed(); }
       connection = next;
     } catch (error) {
       if (requested === target && version === generation) connection = {supported: false, reason: error.message};
     } finally { fetching = false; render(false); }
   }
   function render(check = true) {
+    if (!available() && (feedBusy || $('#moments-timeline-list').childElementCount)) clearFeed();
     const rows = live(), nextMode = rows.length === 1 ? 1 : rows.length > 1 ? 2 : 0;
     if (!pending && !submitting) {
       if (nextMode === 1) choose(rows[0].id);
@@ -63,7 +72,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     select.value = target; select.disabled = !!pending || submitting || !available();
     $('#moments-account-field').classList.toggle('hidden', mode !== 2);
     const row = rows.find(entry => entry.id === target);
-    $('#moments-single-account').textContent = mode === 1 && row ? '发布账号：' + label(row) : '';
+    $('#moments-single-account').textContent = mode === 1 && row ? '操作账号：' + label(row) : '';
     const ready = !!row && available() && !!connection?.supported && !!connection?.session_id;
     $('#moments-availability').textContent = !available() ? '管理服务连接中断。' : !rows.length ? '请先启动并连接机器人。' : !target ? '请选择发布账号。' : !connection ? '正在检查朋友圈接口…' : ready ? '' : connection.reason || '当前微信尚不支持朋友圈发布。';
     $('#moments-counter').textContent = count() + ' / 1000 字 · ' + images.length + ' / 9 张';
@@ -73,11 +82,43 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     $('#moments-content').disabled = !!pending || submitting;
     $('#moments-visibility').disabled = !!pending || submitting;
     $('#moments-publish').disabled = !!pending || submitting || !ready;
+    $('#moments-read').disabled = !ready || feedBusy;
+    $('#moments-read').textContent = feedBusy ? '读取中…' : '读取列表';
     for (const option of $('#moments-visibility').options) option.disabled = !!connection?.visibility && !connection.visibility.includes(option.value);
     if (check && !$('#page-moments').classList.contains('hidden')) void refresh();
   }
   $('#moments-account').onchange = event => { if (!pending && !submitting) choose(event.target.value); render(); };
   $('#moments-content').oninput = () => { preview = null; render(false); };
+  $('#moments-read').onclick = async () => {
+    if (feedBusy || !target || !connection?.session_id || !available()) return;
+    const requested = target, session = connection.session_id, version = ++feedGeneration;
+    feedBusy = true; $('#moments-timeline-list').replaceChildren(); feedStatus('正在读取已加载的记录…'); render(false);
+    try {
+      const result = await api('moments-read', {session_id: session, limit: 20}, requested);
+      if (requested !== target || version !== feedGeneration || session !== connection?.session_id) return;
+      if (result.session_id !== session) throw new Error('微信连接已变化，请重新读取。');
+      const list = $('#moments-timeline-list');
+      for (const row of result.rows) {
+        const article = document.createElement('article'); article.className = 'moments-feed-row';
+        const heading = document.createElement('h3'); heading.textContent = row.nickname || row.author;
+        const author = document.createElement('div'); author.className = 'contact-id'; author.textContent = row.author;
+        const meta = document.createElement('div'); meta.className = 'moments-feed-meta';
+        const time = document.createElement('time'); time.dateTime = row.time; time.textContent = new Date(row.timestamp * 1000).toLocaleString('zh-CN', {hour12:false});
+        meta.append(time);
+        if (row.is_self && row.private) meta.append(document.createTextNode(' · 仅自己可见'));
+        const content = document.createElement('p'); content.className = 'moments-feed-content'; content.textContent = row.content || '（无文字）';
+        article.append(heading, author, meta, content);
+        if (row.media_count) { const media = document.createElement('div'); media.className = 'editor-status'; media.textContent = '媒体附件：' + row.media_count + ' 项'; article.append(media); }
+        const id = document.createElement('div'); id.className = 'contact-id'; id.textContent = '朋友圈 ID：' + row.sns_id; article.append(id);
+        list.append(article);
+      }
+      feedStatus(result.rows.length ? '已读取 ' + result.rows.length + ' 条' + (result.truncated ? '，缓存共 ' + result.loaded_count + ' 条。' : '。') : '当前没有已加载的记录，请先在电脑微信打开朋友圈后重试。');
+    } catch (error) {
+      if (requested === target && version === feedGeneration) feedStatus(error.message, true);
+    } finally {
+      if (version === feedGeneration) { feedBusy = false; render(false); }
+    }
+  };
   $('#moments-visibility').onchange = () => { preview = null; };
   $('#moments-clear').onclick = () => { clearDraft(); render(false); };
   $('#moments-images').onchange = async event => {

@@ -9,7 +9,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV5
+from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV6
 from wxbot_framework.mentions import parse_at_members
 from run_selftest import TEXT_DLL, K, check, modules, wechat_candidates, run
 from wxbot_framework.text import TextRouter, validate_target, validate_mentions
@@ -68,8 +68,8 @@ def find_account_process(account=None):
 
 class NativeTextService(NativeFileHelperService):
     _dll = TEXT_DLL
-    _poll_export = b"WxPollMediaMessageV5"
-    _message_type = ReceivedMediaMessageV5
+    _poll_export = b"WxPollMediaMessageV6"
+    _message_type = ReceivedMediaMessageV6
     _run = staticmethod(run_text)
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
@@ -86,6 +86,7 @@ class NativeTextService(NativeFileHelperService):
         self.image_allowlist = frozenset(image_allowlist)
         self._image_receiver = None
         self._file_receiver = None
+        self._voice_receiver = None
         self._forwarded_receiver = None
         self.file_directory = Path(file_directory or
                                    Path(__file__).resolve().parent.parent / ".runtime/files")
@@ -144,6 +145,34 @@ class NativeTextService(NativeFileHelperService):
             self._download_image, self._deliver_forwarded,
             lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account,
             queue_size=8)
+        from wxbot_framework.voice_receiver import VoiceReceiver
+        self._voice_receiver = VoiceReceiver(self.voice_directory / 'received', account,
+            self._deliver_voice,
+            lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
+
+    def _deliver_voice(self, data):
+        if self._stop.is_set():
+            return
+        if data.get('voice_status') == 'failed':
+            logger.warning('语音未完整缓存，撤回后无法补发原音频')
+        for handler in list(self.msg_handlers):
+            try:
+                handler(self.pid, 11046, data, self)
+            except Exception:
+                logger.warning('语音接收事件处理暂不可用')
+
+    @staticmethod
+    def _voice_payload(message):
+        if not isinstance(message, ReceivedMediaMessageV6):
+            return b''
+        offset, size = message.voice_offset, message.voice_size
+        if (not size or size > 262143 or offset < len(message.image_xml) + 1 or
+                offset + size > 262144):
+            return b''
+        # image_xml is a NUL-terminated XML prefix followed by a binary slice.
+        # Never use the c_char array getter for the SILK payload: it truncates NULs.
+        address = c.addressof(message) + ReceivedMediaMessageV6.image_xml.offset + offset
+        return c.string_at(address, size)
 
     def _deliver_forwarded(self, data):
         if self._stop.is_set():
@@ -214,6 +243,11 @@ class NativeTextService(NativeFileHelperService):
 
     def stop(self):
         self._stop.set()
+        if self._voice_receiver is not None:
+            self._voice_receiver.close(timeout=30)
+            if self._voice_receiver.is_alive:
+                raise RuntimeError('语音接收缓存尚未结束，保留桥接等待清理重试')
+            self._voice_receiver = None
         if self._friend_requests is not None:
             self._friend_requests.close()
             self._friend_requests = None
@@ -324,7 +358,23 @@ class NativeTextService(NativeFileHelperService):
                 data["dispatch_to_plugins"] = True
             self.chats[data["chat_id"]] = {"chat_id": data["chat_id"],
                                            "is_group": bool(data["room_wxid"])}
-            if message.type in (34, 43, 47, 62):
+            if message.type == 34:
+                data['monitor_only'] = True
+                data['raw_content'] = data.get('content') or body
+                enabled = not self.image_allowlist or data['chat_id'] in self.image_allowlist
+                receiving = enabled and self._voice_receiver is not None
+                status = 'pending' if receiving else 'unavailable' if enabled else 'skipped'
+                sanitized = dict(data, voice_status=status, voice_path='')
+                for field in ('raw_content', 'content', 'msg'):
+                    sanitized[field] = ''
+                if receiving:
+                    # Validation failure can synchronously deliver failed; always
+                    # enqueue pending first, and do not emit it again on return.
+                    self._deliver_voice(sanitized)
+                    self._voice_receiver.submit(data, self._voice_payload(message))
+                    return None
+                return sanitized
+            if message.type in (43, 47, 62):
                 data['monitor_only'] = True
                 return data
             forwarded = None
@@ -504,6 +554,15 @@ class NativeTextService(NativeFileHelperService):
                 return {'supported': False, 'reason': '微信尚未连接'}
             self._check_account(force=True)
             return moments_capabilities(self.pid, bridge_path=self._dll)
+
+    def read_moments(self, limit=20, *, cancelled=lambda: False):
+        from wxbot_framework.moments_reader import read_loaded_moments
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError('微信尚未连接')
+            self._check_account(force=True)
+            return read_loaded_moments(self.pid, self.self_wxid, limit=limit,
+                                       cancelled=lambda: self._stop.is_set() or cancelled())
 
     def publish_moments(self, payload):
         from moments_transport import publish_moments

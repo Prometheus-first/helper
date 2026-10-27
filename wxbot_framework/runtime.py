@@ -114,7 +114,15 @@ class BotApplication:
                     parsed = parse_group_system_message(message.data.get("system_content", ""),
                         msg_type=message.type, room_id=message.chat_id, self_id=tracker.account)
                     identified = [item for item in parsed if item.member_id]
-                    if not identified or not tracker.members(message.chat_id):
+                    if not parsed or not tracker.members(message.chat_id):
+                        return
+                    if not identified:
+                        # A plain system notice may know the newcomer's name
+                        # before the contact cache does. It cannot trigger a
+                        # welcome; retain its name for a unique confirmed delta.
+                        tracker.observe_system(message.chat_id,
+                            message.data.get("system_content", ""), message.type,
+                            sequence=message.sequence, session_id=message.session_id)
                         return
                     # 系统消息也可能是历史同步。只有完整实时名单支持同一变化时才提前通知。
                     rows = self.service.group_members(message.chat_id, expected_session=message.session_id)
@@ -142,7 +150,7 @@ class BotApplication:
         self._emit_chat(message)
 
     def _dispatch_recall_plugins(self, message):
-        for name in ('anti_recall', 'anti_recall_image', 'anti_recall_file'):
+        for name in ('anti_recall', 'anti_recall_image', 'anti_recall_file', 'anti_recall_voice'):
             self.plugins.dispatch(message, only=name)
 
     def _emit_chat(self, message):
@@ -233,7 +241,7 @@ class BotApplication:
             try:
                 rows = self.service.group_members(room, expected_session=session_id)
                 snapshot = None if rows is None else {
-                    row["wxid"]: row.get("nickname") or row.get("wechat_name") or "群友" for row in rows}
+                    row["wxid"]: row.get("nickname") or row.get("wechat_name") or "" for row in rows}
                 events = tracker.update(room, snapshot, session_id=session_id)
                 if rows is not None:
                     self._remember_group_members(room, rows)

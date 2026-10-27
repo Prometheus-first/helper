@@ -18,9 +18,9 @@
 - `friend_request.h`：`WxInspectFriendRequest` / `WxAcceptFriendRequest`，核对账号并等待微信原生验证结果；申请凭据不写报告。
 - `group_management.h`：原生邀请好友进群及创建群聊，创建成功时读取服务器返回的群 ID；未进行真实群管理操作测试。
 - 群系统消息 `10000/10002` 不作为普通聊天正文；完整群成员和真实群昵称由 `wxbot_framework/group_members.py` 只读获取，`group_events.py` 负责变动确认与去重。
-- 当前接收通道为 `WxPollMediaMessageV5`，在 V4 的元数据缓冲区后追加 64 位微信原始消息编号，以十进制字符串传给 Python，保留 V1–V4 调用方的缓冲区边界。普通消息与独立系统 XML 入口共同提供撤回关联；新增 Hook 沿用回调计数和正常卸载流程。管理台保留原记录，`anti_recall` 插件控制自动补发。
+- 当前接收通道为 `WxPollMediaMessageV6`，在 V4 的元数据缓冲区后追加 64 位微信原始消息编号，以十进制字符串传给 Python，V6 在 V5 后追加音频偏移与长度，保留 V1–V5 调用方的缓冲区边界。普通消息与独立系统 XML 入口共同提供撤回关联；新增 Hook 沿用回调计数和正常卸载流程。管理台保留原记录，`anti_recall` 插件控制自动补发。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
-- `moments_send.h` / `moments_transport.py`：微信 4.1.15.56 原生朋友圈发布，已实测仅自己可见的纯文字与双图发布；4.1.15.13 暂不支持。图片先复制到微信自身的 InputTemp 缓存，完成回执含有效 SNS ID 才确认成功。取消订阅后沿用原生事件清理函数释放回调引用，活动回调内由原生 Emit 收尾，不绕过 DLL 卸载保护；结果不确定时不自动重发。
+- `moments_send.h` / `moments_transport.py`：微信 4.1.15.56 原生朋友圈发布，已实测仅自己可见的纯文字与双图发布，并由其他账号确认公开纯文字可见；4.1.15.13 暂不支持。图片先复制到微信自身的 InputTemp 缓存，完成回执含有效 SNS ID 才确认成功。取消订阅后沿用原生事件清理函数释放回调引用，活动回调内由原生 Emit 收尾，不绕过 DLL 卸载保护；结果不确定时不自动重发。
 - 好友目录由 `wxbot_framework/contacts.py` 只读获取，包含资料及好友标签关联，当前仅验证 4.1.15.56；结果限于已加载的本地缓存，不发起联网同步。
 
 源码 `text_bridge.cpp` 复用 `selftest_bridge.cpp` 的公共结构、任务调度和清理逻辑，因此两个源文件都要保留。`vendor/` 中只保留编译所需的 MinHook 源码、头文件和许可。

@@ -4,6 +4,7 @@
 #define WXBOT_MEDIA_RECEIVE
 #define WXBOT_LARGE_MEDIA_RECEIVE
 #define WXBOT_MESSAGE_ID_RECEIVE
+#define WXBOT_VOICE_RECEIVE
 #define WXBOT_RECALL_RECEIVE
 #define WXBOT_FRIEND_RECEIVE
 #include "selftest_bridge.cpp"
@@ -305,6 +306,32 @@ static void copy_app_message(const unsigned char* message, const char* sender,
     } __finally { HeapFree(GetProcessHeap(), 0, content); }
 }
 
+static void copy_voice_message(const unsigned char* message, const char* sender,
+                               const char* receiver, const char* source, uint64_t message_id) {
+    char metadata[16384]{};
+    if (!read_pb_string(message, 0x20, metadata, sizeof(metadata))) metadata[0] = 0;
+    const char* payload = nullptr;
+    uint32_t length = 0;
+    // 4.1.15.56 a7dcc0@a7e39c..a7e4d8 copies ImgBuf to voice bytes (+98).
+    // +28 is a status DWORD; the optional SKBuiltinBuffer_t pointer is at +30.
+    if (InterlockedCompareExchange(&core_profile_id, 0, 0) == 2) {
+        const auto buffer = *reinterpret_cast<const unsigned char* const*>(message + 0x30);
+        if (buffer) {
+            const uint32_t declared = *reinterpret_cast<const uint32_t*>(buffer + 0x10);
+            const auto value = *reinterpret_cast<const SmallString* const*>(buffer + 8);
+            if (value && declared > 0 && declared <= 262143 && value->length == declared &&
+                value->capacity >= value->length &&
+                (value->capacity == 15 || (value->capacity >= 16 && value->capacity <= 1024 * 1024))) {
+                payload = value->capacity > 15 ? *reinterpret_cast<const char* const*>(value->data) : value->data;
+                if (payload) length = declared;
+            }
+        }
+    }
+    // Explicit byte count preserves NULs. The queue owns its copy before the
+    // original receive handler can release the AddMsg buffer. No disk I/O here.
+    enqueue_received(sender, receiver, "", source, 34, metadata, 0, message_id, payload, length);
+}
+
 static void sample_all_text(const uintptr_t* batch, size_t stride) {
     __try {
         _InterlockedIncrement64(&receive_statistics.batches);
@@ -327,7 +354,9 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
             if (!try_read_source(message, 0x38, source, sizeof(source))) source[0] = 0;
             // Sync AddMsg +0x50 -> 消息对象 +0x148；保留 64 位服务器编号，不能用队列序号代替。
             const uint64_t message_id = *reinterpret_cast<const uint64_t*>(message + 0x50);
-            if (monitor_only) {
+            if (type == 34) {
+                copy_voice_message(message, sender, receiver, source, message_id);
+            } else if (monitor_only) {
                 // 只复制已有消息布局的元数据；不下载或解析语音、视频和表情媒体。
                 char metadata[16384]{};
                 if (!read_pb_string(message, 0x20, metadata, sizeof(metadata))) metadata[0] = 0;
@@ -407,11 +436,19 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollTextMessageV2(void* paramete
     return code;
 }
 
+static void scrub_legacy_voice(ReceivedMessage* message) {
+    if (message->voice_size && message->voice_offset <= sizeof(message->image_xml) &&
+        message->voice_size <= sizeof(message->image_xml) - message->voice_offset)
+        SecureZeroMemory(message->image_xml + message->voice_offset, message->voice_size);
+    message->voice_offset = message->voice_size = 0;
+}
+
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV3(void* parameter) {
     if (!parameter) return ERROR_INVALID_PARAMETER;
     auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!message) return ERROR_NOT_ENOUGH_MEMORY;
     const DWORD code = poll_received(message.get());
+    scrub_legacy_voice(message.get());
     if (std::strlen(message->image_xml) >= 16384) {
         SecureZeroMemory(message->image_xml, 16384);
         message->reserved |= 1;
@@ -426,12 +463,24 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV4(void* paramet
     auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!message) return ERROR_NOT_ENOUGH_MEMORY;
     const DWORD code = poll_received(message.get());
+    scrub_legacy_voice(message.get());
     std::memcpy(parameter, message.get(), 267552);
     *static_cast<uint32_t*>(parameter) = 267552;
     return code;
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV5(void* parameter) {
+    if (!parameter) return ERROR_INVALID_PARAMETER;
+    auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
+    if (!message) return ERROR_NOT_ENOUGH_MEMORY;
+    const DWORD code = poll_received(message.get());
+    scrub_legacy_voice(message.get());
+    std::memcpy(parameter, message.get(), 267560);
+    *static_cast<uint32_t*>(parameter) = 267560;
+    return code;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV6(void* parameter) {
     return poll_received(static_cast<ReceivedMessage*>(parameter));
 }
 

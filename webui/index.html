@@ -84,7 +84,7 @@
     <div class="page-heading"><h1 id="moments-heading">朋友圈</h1></div>
     <form id="moments-form" class="settings-section moments-composer">
       <div id="moments-single-account" class="moments-identity"></div>
-      <label id="moments-account-field" class="hidden" for="moments-account">发布账号<select id="moments-account"><option value="">选择运行中的机器人</option></select></label>
+      <label id="moments-account-field" class="hidden" for="moments-account">操作账号<select id="moments-account"><option value="">选择运行中的机器人</option></select></label>
       <p id="moments-availability" class="editor-status" role="status">请先启动并连接机器人。</p>
       <label for="moments-content">正文<textarea id="moments-content" rows="7" maxlength="2000" placeholder="写点什么…"></textarea></label>
       <div class="moments-image-actions"><label for="moments-images" class="secondary moments-file-label">添加图片<input id="moments-images" type="file" accept="image/jpeg,image/png" multiple></label><span id="moments-counter" class="count">0 / 1000 字 · 0 / 9 张</span></div>
@@ -93,6 +93,12 @@
       <p id="moments-feedback" class="editor-status" role="status" aria-live="polite"></p>
       <div class="form-footer"><button type="button" id="moments-clear" class="text-button">清空草稿</button><button id="moments-preview" type="submit" class="primary" disabled>预览</button></div>
     </form>
+    <section class="moments-timeline" aria-labelledby="moments-timeline-heading">
+      <div class="section-heading"><h2 id="moments-timeline-heading">已加载的朋友圈</h2><button type="button" id="moments-read" class="secondary" disabled>读取列表</button></div>
+      <p class="editor-status">先在电脑微信打开朋友圈，再读取当前已加载的记录。最多显示 20 条。</p>
+      <p id="moments-read-status" class="editor-status" role="status" aria-live="polite">尚未读取。</p>
+      <div id="moments-timeline-list"></div>
+    </section>
   </section>
   <section class="page hidden" id="page-models" aria-labelledby="models-heading">
     <div class="page-heading"><div><h1 id="models-heading">模型与语音</h1></div></div>

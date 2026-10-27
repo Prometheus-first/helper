@@ -73,8 +73,13 @@ struct ReceivedMessage {
 #ifdef WXBOT_MESSAGE_ID_RECEIVE
     uint64_t native_message_id;
 #endif
+#ifdef WXBOT_VOICE_RECEIVE
+    uint32_t voice_offset, voice_size; // Binary slice within image_xml, after its XML NUL.
+#endif
 };
-#ifdef WXBOT_MESSAGE_ID_RECEIVE
+#ifdef WXBOT_VOICE_RECEIVE
+static_assert(sizeof(ReceivedMessage) == 267568, "Unexpected media receive V6 ABI");
+#elif defined(WXBOT_MESSAGE_ID_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 267560, "Unexpected media receive V5 ABI");
 #elif defined(WXBOT_LARGE_MEDIA_RECEIVE)
 static_assert(sizeof(ReceivedMessage) == 267552, "Unexpected media receive V4 ABI");
@@ -92,7 +97,8 @@ static uint64_t receive_sequence = 0;
 
 static void enqueue_received(const char* sender, const char* receiver, const char* text,
                              const char* source = nullptr, uint32_t type = 1, const char* image_xml = nullptr,
-                             uint32_t reserved = 0, uint64_t native_message_id = 0) {
+                             uint32_t reserved = 0, uint64_t native_message_id = 0,
+                             const void* voice = nullptr, uint32_t voice_size = 0) {
     // 大型转发内容留在堆上，避免消耗微信接收线程的栈。
     auto storage = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!storage) return;
@@ -119,6 +125,19 @@ static void enqueue_received(const char* sender, const char* receiver, const cha
     if (image_xml) strcpy_s(message.image_xml, image_xml);
 #else
     (void)image_xml;
+#endif
+#ifdef WXBOT_VOICE_RECEIVE
+    if (type == 34 && voice && voice_size) {
+        const size_t offset = std::strlen(message.image_xml) + 1;
+        if (offset < sizeof(message.image_xml) && voice_size <= sizeof(message.image_xml) - offset) {
+            std::memcpy(message.image_xml + offset, voice, voice_size);
+            message.voice_offset = static_cast<uint32_t>(offset);
+            message.voice_size = voice_size;
+        }
+    }
+#else
+    (void)voice;
+    (void)voice_size;
 #endif
     AcquireSRWLockExclusive(&receive_lock);
     if (receive_count == std::size(received_messages)) {

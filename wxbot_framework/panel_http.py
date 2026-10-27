@@ -107,6 +107,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.send_text(data))
                 if path == '/api/moments-publish':
                     return self.send(200, controller.publish_moments(data))
+                if path == '/api/moments-read':
+                    return self.send(200, controller.read_moments(data))
                 if path in ('/api/plugin-source', '/api/plugin-reset'):
                     return self.send(200, controller.save_plugin_source(data, reset=path == '/api/plugin-reset'))
                 if path == '/api/plugin-business':

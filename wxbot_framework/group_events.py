@@ -15,6 +15,7 @@ from .text import validate_target
 
 MAX_GROUP_SYSTEM_BYTES = 16_384
 _SYSTEM_TYPES = frozenset({10000, 10002})
+_NAME_HINT_SECONDS = 60
 _DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _PLACEHOLDER = r"\$(?P<target>[A-Za-z0-9_]{1,64})\$"
 _ANY_PLACEHOLDER = r"\$[A-Za-z0-9_]{1,64}\$"
@@ -132,7 +133,7 @@ def parse_group_system_message(content: str, *, msg_type: int, room_id: str,
 
     结构化 sysmsgtemplate 从模板中选取动作的目标占位符，再读取同名 link
     的 memberlist/member/username、nickname。邀请者与被邀请者不会混淆。
-    名字文本可单独解析展示，但没有 ID，不能用于自动欢迎或成员目录更新。
+    名字文本没有 ID，本身不能触发欢迎；只可补充之后由完整名单确认的唯一变化。
     """
     if type(msg_type) is not int or msg_type not in _SYSTEM_TYPES:
         return ()
@@ -203,6 +204,7 @@ class _RoomState:
     pending: dict[str, tuple[str, int]] = field(default_factory=dict)
     expected: dict[str, tuple[bool, float]] = field(default_factory=dict)
     sequences: OrderedDict = field(default_factory=OrderedDict)
+    name_hints: OrderedDict = field(default_factory=OrderedDict)
 
 
 class GroupMembershipTracker:
@@ -278,6 +280,22 @@ class GroupMembershipTracker:
             state = self._rooms.get(room_id)
             return dict(state.members) if state and state.members is not None else {}
 
+    @staticmethod
+    def _expire_name_hints(state, now):
+        known_names = set(state.members.values())
+        for key, deadline in list(state.name_hints.items()):
+            if now >= deadline or (key[0] == "join" and key[1] in known_names):
+                state.name_hints.pop(key)
+
+    @staticmethod
+    def _take_name_hint(state, kind, candidates):
+        # Names never establish identity or membership. Use only one recent name
+        # for one independently confirmed change; ambiguous batches are discarded.
+        keys = [key for key in state.name_hints if key[0] == kind]
+        for key in keys:
+            state.name_hints.pop(key)
+        return keys[0][1] if candidates == 1 and len(keys) == 1 else ""
+
     def update(self, room_id: str, snapshot: Mapping[str, str] | None, *,
                session_id: str | None = None) -> tuple[GroupMemberEvent, ...]:
         _room(room_id)
@@ -294,6 +312,11 @@ class GroupMembershipTracker:
                 state.members = checked
                 return ()
             result, now = [], self._clock()
+            self._expire_name_hints(state, now)
+            changes = {
+                "join": len(checked.keys() - state.members.keys() - {self.account}),
+                "leave": len(state.members.keys() - checked.keys() - {self.account}),
+            }
             for member_id in sorted(state.members.keys() | checked.keys() |
                                     state.pending.keys() | state.expected.keys()):
                 before, after = member_id in state.members, member_id in checked
@@ -316,6 +339,8 @@ class GroupMembershipTracker:
                 if count < self.confirmations:
                     continue
                 nickname = checked[member_id] if after else state.members[member_id]
+                hint = self._take_name_hint(state, kind, changes[kind])
+                nickname = nickname or hint
                 if after:
                     state.members[member_id] = nickname
                 else:
@@ -347,9 +372,18 @@ class GroupMembershipTracker:
             # 启动时同步的旧系统消息不能给既有群成员补发欢迎。
             if state.members is None:
                 return ()
+            self._expire_name_hints(state, self._clock())
             result = []
             for event in events:
-                if not event.member_id or event.member_id == self.account:
+                if not event.member_id:
+                    if event.nickname:
+                        key = (event.kind, event.nickname)
+                        if key not in state.name_hints:
+                            state.name_hints[key] = self._clock() + _NAME_HINT_SECONDS
+                        while len(state.name_hints) > 64:
+                            state.name_hints.popitem(last=False)
+                    continue
+                if event.member_id == self.account:
                     continue
                 present = event.member_id in state.members
                 if (event.kind == "join") == present:

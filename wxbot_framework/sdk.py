@@ -294,6 +294,25 @@ class ServiceFacade:
                             'retain_images': isinstance(result, dict) and result.get('retain_images') is True}
             return result
 
+    def read_moments(self, limit=20, *, expected_session):
+        """只读任务可随断线取消；结果不跨连接返回，也不进入发送队列。"""
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('读取条数必须是 1 到 50 的整数')
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if backend is None or not self._available or backend.session_id != expected_session:
+                raise RuntimeError('微信连接已结束')
+            method = getattr(backend, 'read_moments', None)
+            if not callable(method):
+                raise CapabilityError('当前后端尚未开放朋友圈读取')
+        # close() 持有连接锁并等待底层操作退出，取消回调不能再获取该锁。
+        result = method(limit, cancelled=cancel.is_set)
+        with self._lock:
+            if (self._backend is not backend or not self._available or cancel.is_set() or
+                    backend.session_id != expected_session):
+                raise RuntimeError('微信连接已结束')
+            return result
+
     def accept_friend(self, request_id, *, expected_session=None):
         if not isinstance(request_id, str) or not request_id or len(request_id) > 80:
             raise ValueError("请提供 friend-requests 中显示的申请 ID")

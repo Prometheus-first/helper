@@ -30,6 +30,9 @@
     "anti_recall_file": {
       "enabled": true
     },
+    "anti_recall_voice": {
+      "enabled": true
+    },
     "picture_idiom": {
       "enabled": false,
       "source": "ffapi",

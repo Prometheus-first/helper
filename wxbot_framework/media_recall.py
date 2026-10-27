@@ -7,6 +7,7 @@ from .file_metadata import FileMetadataError, parse_file_metadata
 from .files import inspect_file, prepare_file, safe_file_name
 from .images import validate_image_path
 from .recall import message_id
+from .voices import inspect_voice_file, TENCENT_SILK_HEADER
 
 
 def is_file_attachment(message):
@@ -57,7 +58,24 @@ class MediaRecallPlugin:
         raw = message.data.get(self.media + '_path')
         if not raw:
             return None
-        path = validate_image_path(raw) if self.media == 'image' else inspect_file(raw).path
+        if self.media == 'image':
+            path = validate_image_path(raw)
+        elif self.media == 'voice':
+            path = Path(raw)
+            if not path.is_absolute() or path.resolve(strict=True) != path:
+                raise ValueError('语音缓存必须为无链接的绝对路径')
+            for part in (path, *path.parents):
+                if part.is_symlink() or (part.exists() and getattr(part.lstat(), 'st_file_attributes', 0) & 0x400):
+                    raise ValueError('语音缓存不能使用链接')
+            voice = inspect_voice_file(path)
+            with path.open('rb') as source:
+                if source.read(len(TENCENT_SILK_HEADER)) != TENCENT_SILK_HEADER:
+                    raise ValueError('语音缓存必须为完整的 Tencent SILK')
+            duration = message.data.get('voice_duration_ms', voice.duration_ms)
+            if type(duration) is not int or duration != voice.duration_ms:
+                raise ValueError('语音缓存时长已变化')
+        else:
+            path = inspect_file(raw).path
         name = safe_file_name(message.data.get('file_name') or path.name)
         return CachedMedia(path, self._signature(path), name)
 
@@ -70,7 +88,7 @@ class MediaRecallPlugin:
         try:
             if self._signature(entry.path) != entry.signature:
                 raise ValueError('缓存附件已被替换')
-            if self.media == 'image':
+            if self.media in ('image', 'voice'):
                 sent = self.send_recalled(message, ctx, entry.path)
             else:
                 # 接收缓存的路径带随机前缀；发送快照恢复原文件名，不改接收文件。
@@ -88,6 +106,8 @@ class MediaRecallPlugin:
             ctx.logger.warning('撤回%s未补发：缓存不可用或原连接已结束', self.label)
 
     def send_recalled(self, message, ctx, path):
+        if self.media == 'voice':
+            return ctx.reply_voice(message, path)
         return ctx.reply_image(message, path) if self.media == 'image' else ctx.reply_file(message, path)
 
     def on_message(self, message, ctx):
@@ -104,6 +124,7 @@ class MediaRecallPlugin:
                 self._reply(key, message, ctx)
             return
         if not ((self.media == 'image' and message.type == 3) or
+                (self.media == 'voice' and message.type == 34) or
                 (self.media == 'file' and is_file_attachment(message))):
             return
         identifier = message_id(message.data.get('native_message_id'))

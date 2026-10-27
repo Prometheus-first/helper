@@ -1,0 +1,8 @@
+{
+  "api": "v1",
+  "default_enabled": true,
+  "description": "语音被撤回后补发已完整缓存的原语音，独立开关",
+  "message_types": [34, 10000, 10002],
+  "requires": ["voice.receive", "voice.send", "message.recall"],
+  "business": [{"function": "Plugin.send_recalled", "label": "补发撤回语音"}]
+}

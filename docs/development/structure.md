@@ -14,6 +14,7 @@
 | `web_panel.py` | 管理台配置、插件事务和机器人控制 |
 | `panel_http.py` / `panel_common.py` | HTTP 路由、本机访问校验、共用错误与日志脱敏 |
 | `robot_hub.py` | 账号发现与工作进程管理 |
+| `moments_reader.py` | 只读解析微信已加载的朋友圈缓存 |
 | `moments.py` | 朋友圈草稿校验、图片临时文件、发布任务与结果查询 |
 
 表内 Python 模块位于 `wxbot_framework/`。`webui/` 只负责页面交互，通过 HTTP API 调用管理台；`plugins/` 负责具体群聊业务。

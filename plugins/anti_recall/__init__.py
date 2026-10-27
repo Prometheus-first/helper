@@ -115,7 +115,8 @@ class Plugin:
             return
         key = (message.session_id, message.chat_id, identifier)
         delegate = ('anti_recall_image' if message.type == 3 else
-                    'anti_recall_file' if is_file_attachment(message) else '')
+                    'anti_recall_file' if is_file_attachment(message) else
+                    'anti_recall_voice' if message.type == 34 else '')
         entry = Original(content[:2000], delegate)
         sticker = None
         if message.type == 47 and 'emoticon.send' in ctx.capabilities:

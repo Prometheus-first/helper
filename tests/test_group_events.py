@@ -89,6 +89,7 @@ class ParserTests(unittest.TestCase):
     def test_plain_system_templates_return_name_only_events(self):
         cases = (('“邀请人”邀请“被邀请者”加入了群聊', "join", "被邀请者"),
                  ('"小艾"通过扫描"分享者"分享的二维码加入群聊', "join", "小艾"),
+                 ('"示例群友"通过扫描你分享的二维码加入群聊', "join", "示例群友"),
                  ('「新成员」加入了群聊', "join", "新成员"),
                  ('"小艾"退出了群聊', "leave", "小艾"),
                  ('你将"小艾"移出了群聊', "leave", "小艾"),
@@ -282,6 +283,83 @@ class TrackerTests(unittest.TestCase):
             self.assertEqual(self.observe(content), ())
         self.assertEqual(self.tracker.members(ROOM), self.baseline)
         self.assertEqual(self.tracker.observe_system(ROOM, join(), 1), ())
+
+    def test_plain_scan_name_fills_only_a_confirmed_member_without_cached_name(self):
+        self.start()
+        self.assertEqual(self.observe('"示例群友"通过扫描你分享的二维码加入群聊', sequence=31), ())
+        changed = {**self.baseline, NEW: ""}
+        self.assertEqual(self.tracker.update(ROOM, changed), ())
+        event, = self.tracker.update(ROOM, changed)
+        self.assertEqual((event.kind, event.member_id, event.nickname), ("join", NEW, "示例群友"))
+        self.assertEqual(self.tracker.members(ROOM)[NEW], "示例群友")
+        self.assertEqual(self.tracker.update(ROOM, changed), ())
+        self.assertEqual(self.observe('"示例群友"通过扫描你分享的二维码加入群聊', sequence=31), ())
+
+    def test_system_name_does_not_override_a_real_group_nickname(self):
+        self.start()
+        self.observe('"微信原名"加入了群聊')
+        changed = {**self.baseline, NEW: "本群昵称"}
+        self.tracker.update(ROOM, changed)
+        event, = self.tracker.update(ROOM, changed)
+        self.assertEqual(event.nickname, "本群昵称")
+
+    def test_name_hint_does_not_identify_ambiguous_simultaneous_members(self):
+        self.start()
+        self.observe('"名字甲"加入了群聊')
+        changed = {**self.baseline, NEW: "", "wxid_another_new": ""}
+        self.tracker.update(ROOM, changed)
+        self.assertEqual([event.nickname for event in self.tracker.update(ROOM, changed)], ["", ""])
+
+    def test_multiple_system_names_do_not_guess_one_new_members_name(self):
+        self.start()
+        self.observe('"名字甲"加入了群聊')
+        self.observe('"名字乙"加入了群聊')
+        changed = {**self.baseline, NEW: ""}
+        self.tracker.update(ROOM, changed)
+        self.assertEqual(self.tracker.update(ROOM, changed)[0].nickname, "")
+
+    def test_expired_or_prebaseline_names_are_not_reused(self):
+        self.observe('"历史名字"加入了群聊')
+        self.start()
+        changed = {**self.baseline, NEW: ""}
+        self.tracker.update(ROOM, changed)
+        self.assertEqual(self.tracker.update(ROOM, changed)[0].nickname, "")
+        self.observe('"过期名字"加入了群聊')
+        self.now += 61
+        changed["wxid_later_new"] = ""
+        self.tracker.update(ROOM, changed)
+        self.assertEqual(self.tracker.update(ROOM, changed)[0].nickname, "")
+
+    def test_name_hints_are_group_scoped_and_do_not_trigger_leaves(self):
+        self.start()
+        self.tracker.update(OTHER_ROOM, self.baseline)
+        self.observe('"只属于群甲"加入了群聊')
+        changed = {**self.baseline, NEW: ""}
+        self.tracker.update(OTHER_ROOM, changed)
+        self.assertEqual(self.tracker.update(OTHER_ROOM, changed)[0].nickname, "")
+        self.assertEqual(self.tracker.update(ROOM, self.baseline), ())
+
+    def test_name_hint_store_is_bounded(self):
+        self.start()
+        for index in range(80):
+            self.observe(f'"名字{index}"加入了群聊')
+        self.assertEqual(len(self.tracker._rooms[ROOM].name_hints), 64)
+
+    def test_existing_members_system_name_is_not_assigned_to_a_newcomer(self):
+        self.start()
+        self.observe('"群昵称小艾"加入了群聊')
+        changed = {**self.baseline, NEW: ""}
+        self.tracker.update(ROOM, changed)
+        self.assertEqual(self.tracker.update(ROOM, changed)[0].nickname, "")
+
+    def test_structured_join_does_not_leave_a_name_hint_for_the_next_person(self):
+        self.start()
+        self.observe('"示例群友"加入了群聊')
+        self.observe(join(nickname="示例群友"))
+        changed = {**self.baseline, NEW: "示例群友", "wxid_next_person": ""}
+        self.tracker.update(ROOM, changed)
+        event, = self.tracker.update(ROOM, changed)
+        self.assertEqual((event.member_id, event.nickname), ("wxid_next_person", ""))
 
     def test_independent_rooms_and_connections_do_not_share_baselines(self):
         self.start()
