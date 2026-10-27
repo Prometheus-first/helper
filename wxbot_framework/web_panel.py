@@ -1,7 +1,7 @@
 """仅监听本机的管理台；配置、密钥和原生生命周期仍由当前项目管理。"""
 from __future__ import annotations
 
-from collections import deque
+from collections import deque, OrderedDict
 from concurrent.futures import TimeoutError as ControlTimeout
 from contextlib import contextmanager
 from copy import deepcopy
@@ -20,6 +20,7 @@ from .panel_common import PanelError as PanelError, redact as redact
 from .panel_http import PanelHandler as PanelHandler, PanelServer as PanelServer
 from .message_monitor import MessageBuffer
 from .moments import MomentsPublisher
+from .moments_interactions import MomentsInteractions
 from .plugin_sources import PluginSources
 from .plugin_business import view as business_view, merge as merge_business
 from .runtime import BotApplication
@@ -99,7 +100,10 @@ class PanelController:
         self.send_jobs = {}
         self._moments_identity = None
         self._moments_read_lock = threading.Lock()
+        self._moments_seen = OrderedDict()
         self.moments = MomentsPublisher(self.workspace, self._deliver_moments, self._moments_session)
+        self.moments_interactions = MomentsInteractions(self._deliver_moments_interaction, self._moments_session,
+                                                       self._moments_allowed)
         logging.getLogger().addHandler(self.logs)
 
     def _paths(self, config):
@@ -232,6 +236,7 @@ class PanelController:
 
     def close(self):
         self.moments.close()
+        self.moments_interactions.close()
         self.stop_event.set()
         self.stop()
         if self.worker is not None:
@@ -610,6 +615,8 @@ class PanelController:
             previous = self._moments_identity
             if previous is not None and previous[0] == session and (previous[1] != account or previous[2] is not backend):
                 return None
+            if previous is not None and previous != identity:
+                self._moments_seen.clear()
             self._moments_identity = identity
             return {'session_id': session, 'account': account}
 
@@ -624,6 +631,7 @@ class PanelController:
             service = getattr(app, 'service', None)
         capability = getattr(service, 'moments_capabilities', None)
         supported, reason = False, '当前服务尚未接入朋友圈发布能力'
+        interaction_supported, interaction_reported = False, False
         if callable(capability):
             try:
                 result = capability(expected_session=current['session_id'])
@@ -632,6 +640,9 @@ class PanelController:
                 reason = '当前连接暂时无法确认朋友圈发布能力，请刷新后重试'
             if isinstance(result, dict):
                 supported = result.get('supported') is True
+                interaction_reported = 'interaction_supported' in result
+                interaction_supported = (result.get('interaction_supported') is True and
+                                         callable(getattr(service, 'interact_moments', None)))
                 value = result.get('reason')
                 if isinstance(value, str) and value.strip():
                     # 原生诊断仅提取说明；路径、凭据和异常原文不透传到页面。
@@ -643,8 +654,11 @@ class PanelController:
             supported, reason = False, '当前服务尚未接入朋友圈发布接口'
         if self._moments_session() != current or self.app is not app or app.backend is not backend:
             raise PanelError('微信连接或发布账号已变化，请刷新后重新选择', 409)
-        return dict(current, supported=supported, reason='' if supported else reason, images=True,
-                    max_images=9, visibility=['public', 'private'])
+        response = dict(current, supported=supported, reason='' if supported else reason, images=True,
+                        max_images=9, visibility=['public', 'private'])
+        if interaction_reported:
+            response['interaction_supported'] = interaction_supported
+        return response
 
     def publish_moments(self, data):
         # 已存在的同一请求交回任务模块核对内容；断线后查询/重复点按不会另发。
@@ -663,6 +677,29 @@ class PanelController:
 
     def moments_status(self, identifier):
         return self.moments.status(identifier)
+
+    def _moments_allowed(self, session, sns_id):
+        with self.lock:
+            current = self._moments_session()
+            return current is not None and current['session_id'] == session and sns_id in self._moments_seen
+
+    def interact_moments(self, data):
+        # 已接收的相同编号可查询，不依赖此时是否仍在同一连接。
+        if isinstance(data, dict):
+            try:
+                self.moments_interactions.status(data.get('request_id'))
+            except PanelError as error:
+                if error.status != 404:
+                    raise
+            else:
+                return self.moments_interactions.submit(data)
+        connection = self.moments_connection()
+        if not connection.get('interaction_supported'):
+            raise PanelError('当前连接的朋友圈互动能力尚未启用', 409)
+        return self.moments_interactions.submit(data)
+
+    def moments_interaction_status(self, identifier):
+        return self.moments_interactions.status(identifier)
 
     def read_moments(self, data):
         """仅手动读取当前连接的本地缓存，不保存正文，也不触发微信翻页。"""
@@ -694,8 +731,31 @@ class PanelController:
             # 不转发进程地址、诊断或原生元数据，仅返回页面需要的已验证字段。
             fields = ('sns_id', 'author', 'nickname', 'is_self', 'timestamp', 'time',
                       'private', 'content', 'content_type', 'media_count')
+            interactions = ('raw_like_flag', 'likes', 'comments', 'likes_total', 'comments_total',
+                            'likes_truncated', 'comments_truncated')
+            item_fields = ('username', 'nickname', 'content', 'type', 'timestamp', 'comment_id')
+            def clean_row(row):
+                result_row = {key: row[key] for key in fields}
+                for key in interactions:
+                    if key not in row:
+                        continue
+                    value = row[key]
+                    result_row[key] = ([{field: entry[field] for field in item_fields} for entry in value]
+                                       if key in ('likes', 'comments') else value)
+                return result_row
+            rows = [clean_row(row) for row in result['rows']]
+            with self.lock:
+                if self._moments_session() != current or self.app is not app or app.backend is not backend:
+                    raise PanelError('微信连接已变化，已丢弃旧账号的读取结果', 409)
+                for row in rows:
+                    identifier = row['sns_id']
+                    if isinstance(identifier, str) and re.fullmatch(r'[1-9][0-9]{0,19}', identifier) and int(identifier) <= 0xffffffffffffffff:
+                        self._moments_seen[identifier] = None
+                        self._moments_seen.move_to_end(identifier)
+                while len(self._moments_seen) > 1000:
+                    self._moments_seen.popitem(last=False)
             return dict(current, source='loaded_pc_moments_cache',
-                        rows=[{key: row[key] for key in fields} for row in result['rows']],
+                        rows=rows,
                         loaded_count=result['loaded_count'], truncated=result['truncated'])
         finally:
             self._moments_read_lock.release()
@@ -724,4 +784,28 @@ class PanelController:
         if self._moments_session() != current or self.app is not app or app.backend is not backend:
             return {'status': 'unknown', 'unload_blocked': isinstance(result, dict) and result.get('unload_blocked') is True,
                     'retain_images': isinstance(result, dict) and result.get('retain_images') is True}
+        return result
+
+    def _deliver_moments_interaction(self, payload):
+        current = self._moments_session()
+        if current is None or current['session_id'] != payload['session_id']:
+            return {'status': 'failed', 'phase': 'preflight'}
+        with self.lock:
+            if self._moments_session() != current or not self._moments_allowed(payload['session_id'], payload['sns_id']):
+                return {'status': 'failed', 'phase': 'preflight'}
+            app, backend = self.app, self.app.backend
+            service = getattr(app, 'service', None)
+        try:
+            capability = self.moments_connection()
+        except PanelError:
+            return {'status': 'failed', 'phase': 'preflight'}
+        if (not capability.get('interaction_supported') or capability['account'] != current['account'] or
+                self._moments_session() != current or self.app is not app or app.backend is not backend):
+            return {'status': 'failed', 'phase': 'preflight'}
+        interact = getattr(service, 'interact_moments', None)
+        if not callable(interact):
+            return {'status': 'failed', 'phase': 'preflight'}
+        result = interact(payload, expected_session=payload['session_id'])
+        if self._moments_session() != current or self.app is not app or app.backend is not backend:
+            return {'status': 'unknown', 'unload_blocked': isinstance(result, dict) and result.get('unload_blocked') is True}
         return result

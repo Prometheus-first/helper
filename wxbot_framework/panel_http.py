@@ -109,6 +109,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.publish_moments(data))
                 if path == '/api/moments-read':
                     return self.send(200, controller.read_moments(data))
+                if path == '/api/moments-interact':
+                    return self.send(200, controller.interact_moments(data))
                 if path in ('/api/plugin-source', '/api/plugin-reset'):
                     return self.send(200, controller.save_plugin_source(data, reset=path == '/api/plugin-reset'))
                 if path == '/api/plugin-business':
@@ -146,6 +148,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.moments_connection())
             if path == '/api/moments-status':
                 return self.send(200, controller.moments_status(parse_qs(parsed.query).get('id', [''])[0]))
+            if path == '/api/moments-interaction-status':
+                return self.send(200, controller.moments_interaction_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/logs':
                 after = int(parse_qs(parsed.query).get('after', ['0'])[0])
                 return self.send(200, controller.logs.tail(max(0, after)))

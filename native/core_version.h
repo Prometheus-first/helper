@@ -95,3 +95,16 @@ static uintptr_t core_address(uintptr_t base, uintptr_t legacy) {
     const auto rva = core_rva(legacy);
     return rva ? base + rva : 0;
 }
+
+// SNS interaction was verified only in 4.1.15.56. These are native profile-2
+// RVAs, not legacy targets; never reuse them in profile 1 or an unknown image.
+static uintptr_t core_sns_address(uintptr_t base, uintptr_t rva) {
+    if (!base || InterlockedCompareExchange(&core_profile_id, 0, 0) != 2) return 0;
+    static constexpr uintptr_t verified[] = {
+        0x5737070, 0x8f52418, 0x9a31818, 0xb9ba4b0, 0x95e00d8, 0x9195c08,
+        0x754cd50, 0x754cd70, 0xbb94b20, 0x108aee0, 0x49f2f0,
+        0x30640f0, 0x3065ac0, 0x43b1800, 0x914e2e8, 0x914e378
+    };
+    for (auto candidate : verified) if (candidate == rva) return base + rva;
+    return 0;
+}

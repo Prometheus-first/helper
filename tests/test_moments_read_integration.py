@@ -12,7 +12,13 @@ def sample():
             'rows': [{'sns_id': '12345', 'author': 'wxid_sample', 'nickname': '示例',
                       'is_self': False, 'timestamp': 1700000000, 'time': '2023-11-15T06:13:20+08:00',
                       'private': False, 'content': '示例正文', 'content_type': 1,
-                      'media_count': 2, 'internal_url': 'must-not-leak'}], 'private_field': 'must-not-leak'}
+                      'media_count': 2, 'internal_url': 'must-not-leak', 'raw_like_flag': True,
+                      'likes_total': 1, 'comments_total': 1, 'likes_truncated': False, 'comments_truncated': False,
+                      'likes': [{'username': 'wxid_sample', 'nickname': '示例', 'content': '', 'type': 1,
+                                 'timestamp': 1700000000, 'comment_id': '1', 'internal_url': 'must-not-leak'}],
+                      'comments': [{'username': 'wxid_sample', 'nickname': '示例', 'content': '示例评论',
+                                    'type': 2, 'timestamp': 1700000000, 'comment_id': '2',
+                                    'internal_url': 'must-not-leak'}]}], 'private_field': 'must-not-leak'}
 
 
 class ReadControllerTests(MomentsFixture):
@@ -29,6 +35,9 @@ class ReadControllerTests(MomentsFixture):
         self.assertEqual(result['rows'][0]['content'], '示例正文')
         self.assertNotIn('internal_url', result['rows'][0])
         self.assertNotIn('private_field', result)
+        self.assertEqual(result['rows'][0]['comments'][0]['content'], '示例评论')
+        self.assertNotIn('internal_url', result['rows'][0]['comments'][0])
+        self.assertNotIn('internal_url', result['rows'][0]['likes'][0])
         for bad in ({'session_id': 'old'}, {'session_id': session, 'limit': True},
                     {'session_id': session, 'limit': 51}):
             with self.assertRaises(PanelError):

@@ -23,9 +23,9 @@ hero:
       link: https://github.com/Prometheus-first/helper
 features:
   - icon: 📷
-    title: 发布朋友圈
-    details: 选择运行中的账号，发布文字或图文，预览并确认可见范围。
-    link: /guide/web-panel#发布朋友圈
+    title: 朋友圈
+    details: 发布文字和图文，读取已加载记录及互动，手动点赞或评论。
+    link: /guide/web-panel#朋友圈
   - icon: 💬
     title: 文本与真实艾特
     details: 文件传输助手、好友和群聊使用统一接口，群回复支持真正的成员艾特。

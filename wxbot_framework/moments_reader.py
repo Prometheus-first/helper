@@ -33,6 +33,11 @@ class _Changed(ValueError):
     pass
 
 
+class _InteractionChanged(_Changed):
+    """互动数据一旦变化，放弃整份读取，避免重试时混入其他状态。"""
+    pass
+
+
 class _Budget:
     def __init__(self, cancelled):
         self.cancelled = cancelled
@@ -152,8 +157,51 @@ def _locate(memory, core, nearby, budget):
     return empty
 
 
+def _interactions(memory, item_data, offset, budget, snapshots):
+    """复制有界的互动列表，并记录供整份快照结束前再次核对的内存。"""
+    begin, end, capacity = struct.unpack_from('<QQQ', item_data, offset)
+    if begin == end == capacity == 0:
+        return [], 0, False
+    if not (0x10000 <= begin <= end <= capacity < _ADDRESS_END and
+            (end - begin) % 16 == 0 and (capacity - begin) % 16 == 0 and
+            capacity - begin <= 16 * 10000):
+        raise ValueError('invalid interaction vector')
+    total = (end - begin) // 16
+    count = min(total, 100)
+    pairs = _read(memory, begin, count * 16) if count else b''
+    if count:
+        snapshots.append(('interaction_bytes', begin, pairs, 0))
+    records = []
+    for index in range(count):
+        budget.check()
+        obj, control = struct.unpack_from('<QQ', pairs, index * 16)
+        _pointer(obj)
+        _pointer(control)
+        before = _read(memory, obj, 0x90)
+        try:
+            username = _string(memory, obj + 0x10, 127)
+            validate_account(username)
+            nickname = _string(memory, obj + 0x30, 512)
+            content = _string(memory, obj + 0x50, 8192)
+        except _Changed:
+            raise _InteractionChanged() from None
+        created = struct.unpack_from('<I', before, 0x78)[0]
+        if not 946684800 <= created <= 2147483647:
+            raise ValueError('invalid interaction time')
+        if before != _read(memory, obj, 0x90):
+            raise _InteractionChanged()
+        snapshots.append(('interaction_bytes', obj, before, 0))
+        for position, value, maximum in ((0x10, username, 127), (0x30, nickname, 512),
+                                         (0x50, content, 8192)):
+            snapshots.append(('interaction_text', obj + position, value, maximum))
+        records.append({'username': username, 'nickname': nickname, 'content': content,
+                        'type': struct.unpack_from('<I', before, 0x74)[0],
+                        'timestamp': created, 'comment_id': str(struct.unpack_from('<Q', before, 8)[0])})
+    return records, total, total > count
+
+
 def _decode(memory, candidate, account, core, limit, budget):
-    rows, identifiers = [], set()
+    rows, identifiers, snapshots = [], set(), []
     for index in range(min(limit, candidate['count'])):
         budget.check()
         pair_address = candidate['begin'] + 16 * index
@@ -173,6 +221,11 @@ def _decode(memory, candidate, account, core, limit, budget):
         private = before[0x1B0]
         if private not in (0, 1):
             raise ValueError('invalid visibility')
+        raw_like_flag = before[0xC2]
+        if raw_like_flag not in (0, 1):
+            raise ValueError('invalid like flag')
+        likes, likes_total, likes_truncated = _interactions(memory, before, 0x50, budget, snapshots)
+        comments, comments_total, comments_truncated = _interactions(memory, before, 0x70, budget, snapshots)
         content, content_control = struct.unpack_from('<QQ', before, 0x300)
         content_type, media_count = None, 0
         if content:
@@ -192,15 +245,38 @@ def _decode(memory, candidate, account, core, limit, budget):
                 raise _Changed()
         elif content_control:
             raise ValueError('invalid content shared pointer')
-        if before != _read(memory, item, 0x310) or shared != _read(memory, pair_address, 16):
+        after = _read(memory, item, 0x310)
+        if (before[0x50:0x90] != after[0x50:0x90] or before[0xC2] != after[0xC2]):
+            raise _InteractionChanged()
+        if before != after or shared != _read(memory, pair_address, 16):
             raise _Changed()
+        snapshots.append(('item', item, before, 0))
+        snapshots.append(('bytes', pair_address, shared, 0))
         identifiers.add(identifier)
         rows.append({'sns_id': str(identifier), 'author': username, 'nickname': nickname,
                      'is_self': username == account, 'timestamp': created,
                      'time': datetime.fromtimestamp(created, timezone(timedelta(hours=8))).isoformat(),
                      'private': bool(private), 'content': text, 'content_type': content_type,
-                     'media_count': media_count})
+                     'media_count': media_count, 'raw_like_flag': bool(raw_like_flag),
+                     'likes': likes, 'likes_total': likes_total, 'likes_truncated': likes_truncated,
+                     'comments': comments, 'comments_total': comments_total, 'comments_truncated': comments_truncated})
     budget.check()
+    for kind, address, value, maximum in snapshots:
+        budget.check()
+        try:
+            if kind in ('bytes', 'item', 'interaction_bytes'):
+                current = _read(memory, address, len(value))
+            else:
+                current = _string(memory, address, maximum)
+        except _Changed:
+            if kind == 'interaction_text':
+                raise _InteractionChanged() from None
+            raise
+        if current != value:
+            if kind.startswith('interaction_') or (kind == 'item' and
+                    (current[0x50:0x90] != value[0x50:0x90] or current[0xC2] != value[0xC2])):
+                raise _InteractionChanged()
+            raise _Changed()
     if _source(memory, candidate['address'], core) != candidate:
         raise _Changed()
     return {'source': 'loaded_pc_moments_cache', 'rows': rows,
@@ -307,6 +383,8 @@ def read_loaded_moments(pid: int, expected_account: str, *, limit: int = 20,
             try:
                 result = _decode(memory, candidate, expected_account, core, limit, budget)
                 break
+            except _InteractionChanged:
+                raise MomentsReadError(_CHANGED) from None
             except _Changed:
                 if attempt:
                     raise MomentsReadError(_CHANGED) from None

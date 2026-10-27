@@ -16,6 +16,10 @@ CURRENT = 0x210000
 PAIRS = 0x220000
 ITEM = 0x230000
 CONTENT = 0x240000
+LIKE_PAIRS = 0x250000
+COMMENT_PAIRS = 0x251000
+LIKE_ITEM = 0x254000
+COMMENT_ITEM = 0x255000
 PROFILE = SimpleNamespace(version='4.1.15.56', rva=lambda value: 0xBB92FA0)
 
 
@@ -85,6 +89,95 @@ class ReaderTests(unittest.TestCase):
 
     def run_read(self, **kwargs):
         return reader.read_loaded_moments(123, ACCOUNT, **kwargs)
+
+    def add_interaction(self, *, comment=False):
+        obj = COMMENT_ITEM if comment else LIKE_ITEM
+        pairs = COMMENT_PAIRS if comment else LIKE_PAIRS
+        offset = 0x70 if comment else 0x50
+        self.memory.put(ITEM + offset, struct.pack('<QQQ', pairs, pairs + 16, pairs + 16))
+        self.memory.put(pairs, struct.pack('<QQ', obj, obj + 0x200))
+        self.memory.put(obj + 8, struct.pack('<Q', 18446744073709550002))
+        self.memory.string(obj + 0x10, 'wxid_demo_friend')
+        self.memory.string(obj + 0x30, '模拟昵称')
+        self.memory.string(obj + 0x50, '模拟评论内容，换行\n第二行' if comment else '')
+        self.memory.put(obj + 0x74, struct.pack('<I', 2 if comment else 1))
+        self.memory.put(obj + 0x78, struct.pack('<I', 1700000010))
+
+    def test_interaction_fields_and_empty_vectors(self):
+        row = self.run_read()['rows'][0]
+        self.assertFalse(row['raw_like_flag'])
+        self.assertEqual((row['likes'], row['likes_total'], row['likes_truncated']), ([], 0, False))
+        self.assertEqual((row['comments'], row['comments_total'], row['comments_truncated']), ([], 0, False))
+        self.add_interaction()
+        self.add_interaction(comment=True)
+        self.memory.put(ITEM + 0xC2, b'\x01')
+        row = self.run_read()['rows'][0]
+        self.assertTrue(row['raw_like_flag'])
+        self.assertEqual(row['likes_total'], 1)
+        self.assertEqual(row['comments_total'], 1)
+        self.assertEqual(row['likes'][0], {'username': 'wxid_demo_friend', 'nickname': '模拟昵称',
+                                          'content': '', 'type': 1, 'timestamp': 1700000010,
+                                          'comment_id': '18446744073709550002'})
+        self.assertEqual(row['comments'][0]['content'], '模拟评论内容，换行\n第二行')
+        self.assertEqual(row['comments'][0]['type'], 2)
+        self.assertFalse(row['likes_truncated'])
+
+    def test_interaction_list_is_truncated_to_100(self):
+        self.add_interaction()
+        count = 101
+        self.memory.put(ITEM + 0x50, struct.pack('<QQQ', LIKE_PAIRS, LIKE_PAIRS + count * 16, LIKE_PAIRS + count * 16))
+        self.memory.put(LIKE_PAIRS, struct.pack('<QQ', LIKE_ITEM, LIKE_ITEM + 0x200) * count)
+        row = self.run_read()['rows'][0]
+        self.assertEqual(len(row['likes']), 100)
+        self.assertEqual(row['likes_total'], 101)
+        self.assertTrue(row['likes_truncated'])
+
+    def test_invalid_interaction_headers_or_fields_reject_snapshot(self):
+        fixtures = [
+            (ITEM + 0xC2, b'\x02'),
+            (ITEM + 0x50, struct.pack('<QQQ', LIKE_PAIRS, LIKE_PAIRS + 1, LIKE_PAIRS + 16)),
+            (ITEM + 0x50, struct.pack('<QQQ', 0, 0, 16)),
+            (LIKE_PAIRS, struct.pack('<QQ', 1, LIKE_ITEM + 0x200)),
+            (LIKE_ITEM + 0x78, b'\0' * 4),
+            (LIKE_ITEM + 0x10 + 16, struct.pack('<Q', 128)),
+        ]
+        for address, value in fixtures:
+            with self.subTest(address=address):
+                self.memory = Memory()
+                self.open_memory.return_value = self.memory
+                self.add_interaction()
+                self.memory.put(address, value)
+                with self.assertRaises(reader.MomentsReadError):
+                    self.run_read()
+
+    def test_interaction_pair_change_discards_snapshot(self):
+        self.add_interaction()
+        reads = 0
+        def hook(address, size):
+            nonlocal reads
+            if address == LIKE_PAIRS and size == 16:
+                reads += 1
+                if reads == 2:
+                    return struct.pack('<QQ', LIKE_ITEM + 0x1000, LIKE_ITEM + 0x1200)
+        self.memory.read_hook = hook
+        with self.assertRaisesRegex(reader.MomentsReadError, '正在变化'):
+            self.run_read()
+        self.assertEqual(reads, 2)
+
+    def test_interaction_external_string_change_discards_snapshot(self):
+        self.add_interaction(comment=True)
+        header = self.memory.read(COMMENT_ITEM + 0x50, 32)
+        pointer, _, length, _ = struct.unpack('<QQQQ', header)
+        reads = 0
+        def hook(address, size):
+            nonlocal reads
+            if address == pointer and size == length:
+                reads += 1
+                if reads % 2 == 0:
+                    return b'x' * length
+        self.memory.read_hook = hook
+        with self.assertRaisesRegex(reader.MomentsReadError, '正在变化'):
+            self.run_read()
 
     def test_read_snapshot_and_keep_uint64_identifier_as_string(self):
         result = self.run_read()

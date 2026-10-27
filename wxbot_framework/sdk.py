@@ -294,6 +294,30 @@ class ServiceFacade:
                             'retain_images': isinstance(result, dict) and result.get('retain_images') is True}
             return result
 
+    def interact_moments(self, payload, *, expected_session):
+        """长调用与切号隔离；不会自动重试不确定的结果。"""
+        if not isinstance(payload, dict) or payload.get('session_id') != expected_session:
+            return {'status': 'failed', 'phase': 'preflight'}
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if backend is None or not self._available or backend.session_id != expected_session:
+                return {'status': 'failed', 'phase': 'preflight'}
+            method = getattr(backend, 'interact_moments', None)
+            if not callable(method):
+                return {'status': 'failed', 'phase': 'preflight'}
+        with self._send_lock:
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != expected_session):
+                    return {'status': 'failed', 'phase': 'preflight'}
+            result = method(payload)
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != expected_session):
+                    return {'status': 'unknown',
+                            'unload_blocked': isinstance(result, dict) and result.get('unload_blocked') is True}
+            return result
+
     def read_moments(self, limit=20, *, expected_session):
         """只读任务可随断线取消；结果不跨连接返回，也不进入发送队列。"""
         if type(limit) is not int or not 1 <= limit <= 50:

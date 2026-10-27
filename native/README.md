@@ -21,6 +21,7 @@
 - 当前接收通道为 `WxPollMediaMessageV6`，在 V4 的元数据缓冲区后追加 64 位微信原始消息编号，以十进制字符串传给 Python，V6 在 V5 后追加音频偏移与长度，保留 V1–V5 调用方的缓冲区边界。普通消息与独立系统 XML 入口共同提供撤回关联；新增 Hook 沿用回调计数和正常卸载流程。管理台保留原记录，`anti_recall` 插件控制自动补发。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
 - `moments_send.h` / `moments_transport.py`：微信 4.1.15.56 原生朋友圈发布，已实测仅自己可见的纯文字与双图发布，并由其他账号确认公开纯文字可见；4.1.15.13 暂不支持。图片先复制到微信自身的 InputTemp 缓存，完成回执含有效 SNS ID 才确认成功。取消订阅后沿用原生事件清理函数释放回调引用，活动回调内由原生 Emit 收尾，不绕过 DLL 卸载保护；结果不确定时不自动重发。
+- `moments_interaction_bridge.h` / `moments_interaction_call.h` / `moments_task_lifetime.h` / `moments_interaction_transport.py`：微信 4.1.15.56 手动点赞与普通文字评论。真实帖子由原生查询取得，按账号和操作编号隔离，任务完成及函子析构后再关闭。超时只跟踪原任务，不自动重发。原生评论已核对回执及列表，已点赞跳过已实测，首次点赞发送仍待实测；4.1.15.13 不开放此接口。
 - 好友目录由 `wxbot_framework/contacts.py` 只读获取，包含资料及好友标签关联，当前仅验证 4.1.15.56；结果限于已加载的本地缓存，不发起联网同步。
 
 源码 `text_bridge.cpp` 复用 `selftest_bridge.cpp` 的公共结构、任务调度和清理逻辑，因此两个源文件都要保留。`vendor/` 中只保留编译所需的 MinHook 源码、头文件和许可。

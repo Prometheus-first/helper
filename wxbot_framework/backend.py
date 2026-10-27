@@ -130,6 +130,9 @@ class NativeTextBackend(NativeFileHelperBackend):
     def publish_moments(self, payload):
         return self.raw.publish_moments(payload)
 
+    def interact_moments(self, payload):
+        return self.raw.interact_moments(payload)
+
     def read_moments(self, limit=20, *, cancelled=lambda: False):
         return self.raw.read_moments(limit, cancelled=cancelled)
 

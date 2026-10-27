@@ -549,11 +549,29 @@ class NativeTextService(NativeFileHelperService):
 
     def moments_capabilities(self):
         from moments_transport import moments_capabilities
+        from moments_interaction_transport import interaction_capability
         with self._calls:
             if not self._owns_bridge or self._stop.is_set() or self._channel is None:
                 return {'supported': False, 'reason': '微信尚未连接'}
             self._check_account(force=True)
-            return moments_capabilities(self.pid, bridge_path=self._dll)
+            result = moments_capabilities(self.pid, bridge_path=self._dll)
+            result['interaction_supported'] = result.get('inspect_supported') is True and interaction_capability(self._dll)
+            return result
+
+    def interact_moments(self, payload):
+        from moments_interaction_transport import interact_moments
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                return {'status': 'failed', 'phase': 'preflight'}
+            self._check_account(force=True)
+            account, session = self.self_wxid, self._friend_session_id
+            result = interact_moments(self.pid, account, payload, bridge_path=self._dll)
+            try:
+                self._check_account(force=True)
+                current = account == self.self_wxid and session == self._friend_session_id
+            except (OSError, RuntimeError):
+                current = False
+            return result if current else {'status': 'unknown', 'unload_blocked': result.get('unload_blocked') is True}
 
     def read_moments(self, limit=20, *, cancelled=lambda: False):
         from wxbot_framework.moments_reader import read_loaded_moments

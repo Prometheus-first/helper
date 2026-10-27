@@ -127,6 +127,10 @@ class RobotProxy:
     def moments_connection(self): return self.request('moments-connection')
     def publish_moments(self, data): return self.request('moments-publish', data)
     def read_moments(self, data): return self.request('moments-read', data)
+    def interact_moments(self, data): return self.request('moments-interact', data)
+    def moments_interaction_status(self, identifier):
+        from urllib.parse import urlencode
+        return self.request('moments-interaction-status?' + urlencode({'id': identifier}))
     def moments_status(self, identifier):
         from urllib.parse import urlencode
         return self.request('moments-status?' + urlencode({'id': identifier}))
