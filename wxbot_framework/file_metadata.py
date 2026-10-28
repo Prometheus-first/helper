@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import hmac
 import os
 from pathlib import Path
 import re
@@ -11,12 +12,12 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from .account import validate_account
-from .files import MAX_FILE_BYTES, _check_local_path, _path_value, safe_file_name
+from .files import FILE_CHUNK_BYTES, MAX_FILE_BYTES, _check_local_path, _path_value, safe_file_name
 
 MAX_FILE_XML_BYTES = 16_384
 _FORBIDDEN_DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _MD5 = re.compile(r"[0-9a-fA-F]{32}")
-_DECIMAL = re.compile(r"[0-9]{1,10}")
+_DECIMAL = re.compile(r"[0-9]{1,19}")
 
 
 class FileMetadataError(ValueError):
@@ -157,9 +158,9 @@ class FileStore:
         raise FileExistsError("无法生成不重复的文件名")
 
     def save(self, data: bytes, *, name: str = "file", sequence: int | None = None) -> Path:
-        """保存 1..20 MiB 字节，保留清洗后的原名称；不判断内容格式或打开文件。"""
+        """保存非空字节，保留清洗后的原名称；不判断内容格式或打开文件。"""
         if not isinstance(data, bytes) or not 0 < len(data) <= MAX_FILE_BYTES:
-            raise ValueError("文件数据必须为非空 bytes，且不能超过 20 MiB")
+            raise ValueError("文件数据必须为非空 bytes，且大小在系统支持范围内")
         if sequence is not None and (type(sequence) is not int or not 0 <= sequence <= (1 << 64) - 1):
             raise ValueError("文件消息序号必须为 0 到 2^64-1 的整数")
         name = safe_file_name(name)
@@ -181,6 +182,65 @@ class FileStore:
             os.replace(temporary, destination)
             temporary = None
             return destination
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            if reservation is not None:
+                reservation.unlink(missing_ok=True)
+
+    def save_download(self, source_path, *, name, sequence, expected_size, expected_md5, is_current):
+        """分块校验并原子保存下载结果，取消或校验失败时不留下附件。"""
+        import stat
+        if sequence is not None and (type(sequence) is not int or not 0 <= sequence <= (1 << 64) - 1):
+            raise ValueError("文件消息序号无效")
+        name = safe_file_name(name)
+        source_path = Path(source_path)
+        info = source_path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or source_path.resolve(strict=True) != source_path or
+                not 0 < info.st_size <= MAX_FILE_BYTES or
+                (expected_size is not None and info.st_size != expected_size)):
+            raise ValueError("下载结果不是有效的普通文件")
+        self._prepare_directory()
+        temporary, reservation = None, None
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".file-", suffix=".tmp", dir=self.directory)
+            temporary = Path(temporary_name)
+            try:
+                target = os.fdopen(descriptor, "wb")
+            except BaseException:
+                os.close(descriptor)
+                raise
+            digest, size = hashlib.md5(), 0
+            with target, source_path.open("rb") as source:
+                opened = os.fstat(source.fileno())
+                if (not stat.S_ISREG(opened.st_mode) or opened.st_size != info.st_size or
+                        (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)):
+                    raise ValueError("下载结果发生变化")
+                while True:
+                    if not is_current():
+                        raise ValueError("微信连接已结束")
+                    chunk = source.read(FILE_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > opened.st_size:
+                        raise ValueError("下载结果发生变化")
+                    digest.update(chunk)
+                    target.write(chunk)
+                current = os.fstat(source.fileno())
+                if (size != opened.st_size or current.st_size != opened.st_size or
+                        current.st_mtime_ns != opened.st_mtime_ns or
+                        (expected_size is not None and size != expected_size) or
+                        (expected_md5 and not hmac.compare_digest(digest.hexdigest(), expected_md5))):
+                    raise ValueError("下载文件校验失败")
+                target.flush()
+                os.fsync(target.fileno())
+            if not is_current():
+                raise ValueError("微信连接已结束")
+            destination, reservation = self._reserve_destination(name, sequence)
+            os.replace(temporary, destination)
+            temporary = None
+            return destination, size
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

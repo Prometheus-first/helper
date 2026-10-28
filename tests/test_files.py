@@ -40,18 +40,17 @@ class FileTests(unittest.TestCase):
             with self.subTest(value_type=type(value).__name__), self.assertRaises(ValueError):
                 inspect_file(value)
 
-    def test_zero_rejected_and_twenty_mib_boundary_allowed(self):
+    def test_zero_rejected_and_file_above_old_limit_allowed(self):
         empty = self.root / "empty.txt"
         empty.touch()
         with self.assertRaisesRegex(ValueError, "非空"):
             inspect_file(empty)
         with self.source.open("wb") as output:
-            output.truncate(MAX_FILE_BYTES)
-        self.assertEqual(inspect_file(self.source).size, MAX_FILE_BYTES)
-        with self.source.open("ab") as output:
-            output.write(b"x")
-        with self.assertRaises(ValueError):
-            inspect_file(self.source)
+            output.truncate(21 * 1024 * 1024)
+        self.assertEqual(inspect_file(self.source).size, 21 * 1024 * 1024)
+        with prepare_file(self.source, self.root / "snapshots") as snapshot:
+            self.assertEqual(snapshot.size, 21 * 1024 * 1024)
+            self.assertEqual(snapshot.path.stat().st_size, snapshot.size)
 
     def test_snapshot_retains_name_and_bytes_and_leaves_source_unchanged(self):
         original = self.source.read_bytes()

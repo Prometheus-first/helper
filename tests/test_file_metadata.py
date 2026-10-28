@@ -132,12 +132,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(set(self.store.directory.iterdir()), {first, second})
 
     def test_size_limit_and_empty_invalid_payloads(self):
-        for data in (None, b"", "a", bytearray(b"x"), b"x" * (MAX_FILE_BYTES + 1)):
+        for data in (None, b"", "a", bytearray(b"x")):
             with self.subTest(data_type=type(data).__name__), self.assertRaises(ValueError):
                 self.store.save(data)
         self.assertFalse(self.store.root.exists())
-        result = self.store.save(b"x" * MAX_FILE_BYTES)
-        self.assertEqual(result.stat().st_size, MAX_FILE_BYTES)
+        result = self.store.save(b"x" * (21 * 1024 * 1024))
+        self.assertEqual(result.stat().st_size, 21 * 1024 * 1024)
 
     def test_account_isolation_is_case_sensitive_and_never_uses_id_as_path(self):
         stores = [self.store] + [FileStore(self.store.root, account)

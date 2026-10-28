@@ -1,19 +1,15 @@
 """受控文件接收队列；下载器由调用方提供，不执行或自动打开收到的文件。"""
 from __future__ import annotations
 
-import hashlib
-import hmac
 import math
-import os
 from pathlib import Path
 import queue
 import shutil
-import stat
 import tempfile
 import threading
 
 from .file_metadata import FileMetadata, FileMetadataError, FileStore, parse_file_metadata
-from .files import MAX_FILE_BYTES, _check_local_path, safe_file_name
+from .files import _check_local_path, safe_file_name
 
 
 class FileReceiver:
@@ -137,24 +133,7 @@ class FileReceiver:
                 workspace.exists() and workspace.resolve(strict=True) == workspace):
             shutil.rmtree(workspace)
 
-    @staticmethod
-    def _read_download(destination):
-        information = destination.lstat()
-        if (not stat.S_ISREG(information.st_mode) or destination.resolve(strict=True) != destination or
-                not 0 < information.st_size <= MAX_FILE_BYTES):
-            raise ValueError("文件下载结果必须为范围内的普通文件")
-        with destination.open("rb") as source:
-            opened = os.fstat(source.fileno())
-            if not stat.S_ISREG(opened.st_mode) or not 0 < opened.st_size <= MAX_FILE_BYTES:
-                raise ValueError("文件下载结果必须为范围内的普通文件")
-            body = source.read(MAX_FILE_BYTES + 1)
-            current = os.fstat(source.fileno())
-        if (not 0 < len(body) <= MAX_FILE_BYTES or len(body) != opened.st_size or
-                current.st_size != opened.st_size or current.st_mtime_ns != opened.st_mtime_ns):
-            raise ValueError("文件下载结果无效或在读取期间发生变化")
-        return body
-
-    def _download(self, metadata: FileMetadata):
+    def _download(self, metadata: FileMetadata, data):
         workspace = self._new_workspace()
         try:
             destination = workspace / "file.bin"
@@ -166,12 +145,9 @@ class FileReceiver:
                 raise ValueError("文件下载未成功")
             if not self._active():
                 return None
-            body = self._read_download(destination)
-            if metadata.size is not None and len(body) != metadata.size:
-                raise ValueError("文件大小与声明不符")
-            if metadata.md5 and not hmac.compare_digest(hashlib.md5(body).hexdigest(), metadata.md5):
-                raise ValueError("文件 MD5 与声明不符")
-            return body
+            return self.store.save_download(destination, name=data["file_name"], sequence=data.get("sequence"),
+                                            expected_size=metadata.size, expected_md5=metadata.md5,
+                                            is_current=self._active)
         finally:
             self._remove_workspace(workspace)
 
@@ -186,14 +162,14 @@ class FileReceiver:
         if not self._active():
             return
         try:
-            body = self._download(metadata)
-            if body is None or not self._active():
+            result = self._download(metadata, data)
+            if result is None:
                 return
-            path = self.store.save(body, name=data["file_name"], sequence=data.get("sequence"))
+            path, size = result
             if not self._active():
                 self._remove_saved(path)
                 return
-            data.update(file_status="ready", file_path=str(path), file_size=len(body), file_error="")
+            data.update(file_status="ready", file_path=str(path), file_size=size, file_error="")
             if not self._deliver(data):
                 self._remove_saved(path)
         except Exception:

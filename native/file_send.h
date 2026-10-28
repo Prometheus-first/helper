@@ -22,18 +22,18 @@ static_assert(sizeof(FileWideString) == 32, "Unexpected native wide string ABI")
 
 struct FileTaskLease {
     FileConfig config;
-    std::vector<unsigned char> bytes;
+    HANDLE source = INVALID_HANDLE_VALUE;
+    uint64_t size = 0;
     char name[1024]{};
     explicit FileTaskLease(const FileConfig& value) : config(value) {
         _InterlockedIncrement(&live_tasks);
     }
-    ~FileTaskLease() { _InterlockedDecrement(&live_tasks); }
+    ~FileTaskLease() {
+        if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
+        _InterlockedDecrement(&live_tasks);
+    }
 };
 
-struct FileSendHandle {
-    HANDLE value;
-    ~FileSendHandle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
-};
 static volatile LONG file_send_admission = 0;
 
 static DWORD file_read_source(FileTaskLease& lease) {
@@ -52,21 +52,21 @@ static DWORD file_read_source(FileTaskLease& lease) {
     if (!*name || !std::strcmp(name, ".") || !std::strcmp(name, ".."))
         return ERROR_INVALID_NAME;
     strcpy_s(lease.name, name);
-    FileSendHandle file{CreateFileW(path.characters, GENERIC_READ, FILE_SHARE_READ,
-        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
-    if (file.value == INVALID_HANDLE_VALUE) return GetLastError();
+    // Retain a read handle across the asynchronous callback. Sharing deletion
+    // allows the Python snapshot to be cleaned up after a timeout; denying
+    // write sharing keeps the bytes stable until the copy completes.
+    lease.source = CreateFileW(path.characters, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (lease.source == INVALID_HANDLE_VALUE) return GetLastError();
     BY_HANDLE_FILE_INFORMATION information{};
     LARGE_INTEGER size{};
-    if (GetFileType(file.value) != FILE_TYPE_DISK ||
-        !GetFileInformationByHandle(file.value, &information) ||
-        !GetFileSizeEx(file.value, &size)) return ERROR_INVALID_DATA;
+    if (GetFileType(lease.source) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandle(lease.source, &information) ||
+        !GetFileSizeEx(lease.source, &size)) return ERROR_INVALID_DATA;
     if (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) ||
-        size.QuadPart <= 0 || size.QuadPart > 20 * 1024 * 1024) return ERROR_INVALID_DATA;
-    lease.bytes.resize(static_cast<size_t>(size.QuadPart));
-    DWORD read = 0;
-    if (!ReadFile(file.value, lease.bytes.data(), static_cast<DWORD>(lease.bytes.size()), &read, nullptr))
-        return GetLastError();
-    return read == lease.bytes.size() ? ERROR_SUCCESS : ERROR_READ_FAULT;
+        size.QuadPart <= 0) return ERROR_INVALID_DATA;
+    lease.size = static_cast<uint64_t>(size.QuadPart);
+    return ERROR_SUCCESS;
 }
 
 static const wchar_t* file_wide_data(const FileWideString& value) {
@@ -97,7 +97,7 @@ static void file_write_report(const FileTaskLease& lease, const TestResult& repo
         "\"completion_success\":%s,\"target\":",
         config.send ? "file_send" : "file_probe", sent ? "true" : "false",
         report.stage, report.exception, status, report.native_status, report.native_status_high,
-        static_cast<unsigned long long>(lease.bytes.size()), success ? "true" : "false");
+        static_cast<unsigned long long>(lease.size), success ? "true" : "false");
     write_json_string(log, config.base.target);
     std::fputs(",\"text\":", log);
     write_json_string(log, config.base.base.text);
@@ -177,7 +177,7 @@ static void file_send_on_task(const FileTaskLease& lease) {
             *reinterpret_cast<uint64_t*>(object + 0x118) = 0x600000031ull;
             using CopyWide = void* (__fastcall*)(void*, const FileWideString*);
             reinterpret_cast<CopyWide>(core_address(core_base, 0x9b5d0))(object + 0x120, &prepared);
-            *reinterpret_cast<uint64_t*>(object + 0x1c8) = lease.bytes.size();
+            *reinterpret_cast<uint64_t*>(object + 0x1c8) = lease.size;
             if (!set_native_string(reinterpret_cast<SmallString*>(object + 0x1a8), lease.name) ||
                 !set_native_string(reinterpret_cast<SmallString*>(object + 0xb0), config.base.target)) {
                 status = ERROR_NOT_ENOUGH_MEMORY; __leave;
@@ -187,10 +187,16 @@ static void file_send_on_task(const FileTaskLease& lease) {
                 CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (staged_handle == INVALID_HANDLE_VALUE) { status = GetLastError(); __leave; }
             staged_created = true;
-            DWORD written = 0;
-            if (!WriteFile(staged_handle, lease.bytes.data(), static_cast<DWORD>(lease.bytes.size()),
-                &written, nullptr) || written != lease.bytes.size()) {
-                status = ERROR_WRITE_FAULT; __leave;
+            unsigned char chunk[65536]{};
+            uint64_t copied = 0;
+            while (copied < lease.size) {
+                const DWORD requested = static_cast<DWORD>(std::min<uint64_t>(sizeof(chunk), lease.size - copied));
+                DWORD read = 0, written = 0;
+                if (!ReadFile(lease.source, chunk, requested, &read, nullptr) || read != requested ||
+                    !WriteFile(staged_handle, chunk, read, &written, nullptr) || written != read) {
+                    status = ERROR_WRITE_FAULT; __leave;
+                }
+                copied += read;
             }
             CloseHandle(staged_handle);
             staged_handle = INVALID_HANDLE_VALUE;
@@ -268,8 +274,7 @@ static DWORD file_send_dispatch(void* parameter, bool send) {
     core_base = reinterpret_cast<uintptr_t>(core);
     try {
         auto lease = std::make_shared<FileTaskLease>(config);
-        // Copy before the export returns. A queued callback never borrows Python's
-        // temporary snapshot path, including timeout and shutdown cases.
+        // The queued callback owns the open snapshot handle even after timeout.
         status = file_read_source(*lease);
         if (status) return status;
         std::function<void()> task = [lease]() { file_send_on_task(*lease); };

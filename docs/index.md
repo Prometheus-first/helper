@@ -44,7 +44,7 @@ features:
     link: /guide/features#看图猜成语
   - icon: 📎
     title: 普通文件附件
-    details: 发送本地文件，下载实时到达的附件并按账号隔离保存，单个文件最多 20 MiB。
+    details: 发送本地文件，下载实时到达的附件并按账号隔离保存。
     link: /messages/files
   - icon: 🧩
     title: 功能按插件加载

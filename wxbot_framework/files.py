@@ -12,7 +12,9 @@ import stat
 import tempfile
 from typing import Iterator
 
-MAX_FILE_BYTES = 20 * 1024 * 1024
+# Windows file sizes use a signed 64-bit value; no smaller framework cap.
+MAX_FILE_BYTES = (1 << 63) - 1
+FILE_CHUNK_BYTES = 1024 * 1024
 MAX_FILE_PATH_BYTES = 1023
 _RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
                    *(f"LPT{i}" for i in range(1, 10))}
@@ -90,7 +92,7 @@ def _check_local_path(path: Path) -> None:
             raise ValueError("文件路径不能位于网络驱动器")
 
 
-def _read_file(path) -> tuple[Path, bytes]:
+def _read_file(path, output=None) -> tuple[Path, int]:
     try:
         resolved = _path_value(path).resolve(strict=True)
         _check_local_path(resolved)
@@ -98,31 +100,42 @@ def _read_file(path) -> tuple[Path, bytes]:
         if not stat.S_ISREG(information.st_mode):
             raise ValueError("文件路径必须指向普通文件")
         if not 0 < information.st_size <= MAX_FILE_BYTES:
-            raise ValueError("文件必须非空，且不能超过 20 MiB")
+            raise ValueError("文件必须非空，且大小在系统支持范围内")
         with resolved.open("rb") as source:
             opened = os.fstat(source.fileno())
             if not stat.S_ISREG(opened.st_mode) or not 0 < opened.st_size <= MAX_FILE_BYTES:
-                raise ValueError("文件必须为非空普通文件，且不能超过 20 MiB")
-            data = source.read(MAX_FILE_BYTES + 1)
+                raise ValueError("文件必须为非空普通文件，且大小在系统支持范围内")
+            size = 0
+            if output is not None:
+                while True:
+                    chunk = source.read(FILE_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > opened.st_size:
+                        raise ValueError("文件在读取期间发生变化，请重试")
+                    output.write(chunk)
+            else:
+                size = opened.st_size
             current = os.fstat(source.fileno())
-        if (not 0 < len(data) <= MAX_FILE_BYTES or len(data) != opened.st_size or
+        if (size != opened.st_size or
                 current.st_size != opened.st_size or current.st_mtime_ns != opened.st_mtime_ns):
             raise ValueError("文件在读取期间发生变化，请重试")
-        return resolved, data
+        return resolved, size
     except (OSError, RuntimeError) as error:
         raise ValueError("文件不存在或无法读取") from error
 
 
 def inspect_file(path) -> FileInfo:
-    """读取并校验最多 20 MiB 的非空普通文件；不按扩展名限制文件种类。"""
-    resolved, data = _read_file(path)
-    return FileInfo(resolved, len(data), resolved.name)
+    """校验非空普通文件；不按扩展名或固定大小限制文件。"""
+    resolved, size = _read_file(path)
+    return FileInfo(resolved, size, resolved.name)
 
 
 @contextmanager
 def prepare_file(path, directory) -> Iterator[FileInfo]:
     """生成保留安全文件名的受控快照，退出时仅清理本次临时目录。"""
-    resolved, data = _read_file(path)
+    resolved, _ = _read_file(path)
     # 已存在的本地普通文件拥有合法 basename；发送端保留完整原文件名。
     # safe_file_name 仅用于接收 XML 中无法信任的外部名称。
     name = resolved.name
@@ -141,8 +154,8 @@ def prepare_file(path, directory) -> Iterator[FileInfo]:
         snapshot = owned / name
         _check_local_path(snapshot)
         with snapshot.open("xb") as output:
-            output.write(data)
-        yield FileInfo(snapshot, len(data), name)
+            _, size = _read_file(resolved, output)
+        yield FileInfo(snapshot, size, name)
     finally:
         # 删除前再次确认绝对目录边界；不递归跟随被替换的目录链接。
         if (owned.parent == root and owned.is_absolute() and owned.exists() and

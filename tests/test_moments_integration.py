@@ -308,7 +308,9 @@ class MomentsHTTPTests(MomentsFixture):
         self.assertGreater(len(raw), 65536)
         self.assertEqual(self.http('/api/moments-publish', raw)[0], 200)
         self.assertEqual(self.final()['status'], 'published')
-        self.assertEqual(self.http('/api/send-text', b' ' * 65537)[0], 413)
+        # Text requests no longer have the former 64 KiB body cap; invalid JSON
+        # is still rejected by the parser instead of reaching the sender.
+        self.assertEqual(self.http('/api/send-text', b' ' * 65537)[0], 400)
         self.assertEqual(self.http('/api/moments-publish-extra', b' ' * 65537)[0], 413)
         self.assertEqual(self.http('/api/moments-publish', b'{}', declared_size=29 * 1024 * 1024 + 65537)[0], 413)
 

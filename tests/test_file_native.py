@@ -42,7 +42,7 @@ class FileNativeTests(unittest.TestCase):
         valid = {"destination": str(self.source.parent / "new.txt"), "filekey": "synthetic-file-key",
                  "aeskey": "ab" * 16, "expected_size": 14}
         for changes in ({"expected_size": None}, {"expected_size": True}, {"expected_size": 0},
-                        {"expected_size": 20 * 1024 * 1024 + 1}, {"filekey": ""},
+                        {"expected_size": (1 << 63)}, {"filekey": ""},
                         {"filekey": "abc\n"}, {"aeskey": "invalid"},
                         {"destination": str(self.source)}):
             data = dict(valid, **changes)

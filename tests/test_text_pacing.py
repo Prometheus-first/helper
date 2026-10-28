@@ -85,7 +85,7 @@ class TextPacingTests(unittest.TestCase):
         service.bind(backend)
         cancel = RecordingCancel()
         service._cancel = cancel
-        for text in (None, "", "含\0字符", "字" * 342):
+        for text in (None, "", "含\0字符"):
             with self.subTest(text_type=type(text)), self.assertRaises(ValueError):
                 service.send_text("filehelper", text)
         self.assertEqual(cancel.waits, [])

@@ -18,7 +18,7 @@ static_assert(offsetof(FileDownloadConfig, aeskey) == 2584, "Unexpected file AES
 static_assert(offsetof(FileDownloadConfig, expected_size) == 2656, "Unexpected file size offset");
 static_assert(offsetof(FileDownloadConfig, account) == 2664, "Unexpected file account offset");
 
-static constexpr uint64_t file_download_max_bytes = 20ull * 1024 * 1024;
+static constexpr uint64_t file_download_max_bytes = 0x7fffffffffffffffull;
 static volatile LONG64 file_download_sequence = 0;
 static volatile LONG file_download_admission = 0;
 

@@ -16,6 +16,10 @@ class Backend:
         self.sent = (room, text, members)
         return True
 
+    def send_text(self, room, text):
+        self.continuation = (room, text)
+        return True
+
     def stop(self):
         return {"dll_unloaded": True}
 
@@ -58,9 +62,10 @@ class MentionTests(unittest.TestCase):
             with self.subTest(names=names), self.assertRaises(ValueError):
                 self.service.send_at_text(ROOM, "测试", [MEMBER], display_names=names)
 
-    def test_size_limit_includes_visible_names(self):
-        with self.assertRaises(ValueError):
-            self.service.send_at_text(ROOM, "文" * 341, [MEMBER], display_names=["小明"])
+    def test_long_mentions_keep_labels_in_first_segment(self):
+        self.service.send_at_text(ROOM, "文" * 341, [MEMBER], display_names=["小明"])
+        self.assertEqual(self.backend.sent[1] + self.backend.continuation[1], '@小明\u2005\n' + '文' * 341)
+        self.assertLessEqual(len(self.backend.sent[1].encode('utf-8')), 1023)
 
     def test_pacing_applies_to_mention_text(self):
         with patch.object(type(self.service.text_delay), "seconds_for", return_value=0) as delay:

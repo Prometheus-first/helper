@@ -275,7 +275,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             raise ValueError("文件 CDN AES 参数无效")
         expected_size = download_file.get("expected_size")
         if type(expected_size) is not int or not 1 <= expected_size <= MAX_FILE_BYTES:
-            raise ValueError("文件下载需要 1 到 20 MiB 范围内的声明大小")
+            raise ValueError("文件下载需要非零且在系统支持范围内的声明大小")
         text = str(destination)
     elif download_file is not None:
         raise ValueError("文件下载参数仅用于文件下载操作")

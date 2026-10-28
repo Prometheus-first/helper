@@ -106,6 +106,32 @@ class ReceiverTests(unittest.TestCase):
         self.assertIsNone(event["file_metadata"]["size"])
         self.assertEqual(event["file_metadata"]["md5"], "")
 
+    def test_download_larger_than_old_limit_is_verified_and_saved(self):
+        size = 21 * 1024 * 1024 + 7
+        chunk = b"sample" * 1024
+        digest = hashlib.md5()
+        def downloader(metadata, destination):
+            remaining = size
+            with destination.open("wb") as output:
+                while remaining:
+                    part = chunk[:min(remaining, len(chunk))]
+                    output.write(part)
+                    digest.update(part)
+                    remaining -= len(part)
+            return True
+        expected = hashlib.md5()
+        remaining = size
+        while remaining:
+            part = chunk[:min(remaining, len(chunk))]
+            expected.update(part)
+            remaining -= len(part)
+        receiver = self.receiver(downloader)
+        self.assertTrue(receiver.submit(file_event(size=size, md5=expected.hexdigest())))
+        event = self.delivered.get(timeout=15)
+        self.assertEqual(event['file_status'], 'ready')
+        self.assertEqual(Path(event['file_path']).stat().st_size, size)
+        self.assertEqual(digest.hexdigest(), expected.hexdigest())
+
     def test_size_or_md5_mismatch_is_visible_and_never_committed(self):
         receiver = self.receiver(self.download)
         for event in (file_event(size=len(BODY) + 1), file_event(md5="a" * 32)):
@@ -207,7 +233,7 @@ class ReceiverTests(unittest.TestCase):
             return True
         def oversized(metadata, destination):
             with destination.open("wb") as output:
-                output.truncate(MAX_FILE_BYTES + 1)
+                output.truncate(21 * 1024 * 1024)
             return True
         for downloader in (false, missing, empty, directory, oversized):
             with self.subTest(name=downloader.__name__):
@@ -253,13 +279,13 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(list(self.store.directory.iterdir()), [])
 
     def test_account_change_after_save_removes_undelivered_file(self):
-        original_save = self.store.save
+        original_save = self.store.save_download
         def save(*args, **kwargs):
             result = original_save(*args, **kwargs)
             self.current.clear()
             return result
         receiver = self.receiver(self.download)
-        with patch.object(self.store, "save", side_effect=save):
+        with patch.object(self.store, "save_download", side_effect=save):
             self.assertTrue(receiver.submit(file_event()))
             receiver._queue.join()
         self.assertTrue(self.delivered.empty())

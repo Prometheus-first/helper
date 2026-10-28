@@ -398,6 +398,30 @@ class HTTPTests(PanelFixture):
         self.assertEqual(self.request('/../bot_config.json')[0],404)
         self.assertEqual(self.request('/api/unknown',{})[0],404)
 
+    def test_long_text_request_is_split_and_sent_in_order(self):
+        from wxbot_framework.sdk import ServiceFacade
+        self.controller.start()
+        calls = []
+        backend = SimpleNamespace(session_id='long-http-session', pid=1234, stop=lambda: {},
+                                  send_text=lambda target, text: calls.append(text) or True)
+        service = ServiceFacade(text_delay={'enabled':False})
+        service.bind(backend)
+        self.addCleanup(service.close)
+        self.controller.app.backend = backend
+        self.controller.app.service = service
+        text = '长消息🌸' * 6000
+        body = {'request_id':'long-http-request-0001', 'session_id':backend.session_id,
+                'chat_id':'filehelper', 'content':text, 'at_list':[]}
+        self.assertGreater(len(json.dumps(body).encode()), 65536)
+        self.assertEqual(self.request('/api/send-text', body)[0], 200)
+        for _ in range(200):
+            result=json.loads(self.request('/api/send-status?id='+body['request_id'])[2])
+            if result['status']!='sending': break
+            time.sleep(.005)
+        self.assertEqual(result['status'], 'sent')
+        self.assertEqual(''.join(calls), text)
+        self.assertTrue(all(len(part.encode('utf-8')) <= 1023 for part in calls))
+
 
 class LogTests(unittest.TestCase):
     def test_log_ring_buffer_hides_common_keys_and_obeys_cursor(self):

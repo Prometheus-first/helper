@@ -113,8 +113,8 @@ class ServiceFacade:
         if not isinstance(content, str):
             raise ValueError("文本正文必须是字符串")
         encoded = content.encode("utf-8")
-        if not encoded or len(encoded) > 1023 or b"\0" in encoded:
-            raise ValueError("文本应为 1–1023 个 UTF-8 字节，且不能包含 NUL")
+        if not encoded or b"\0" in encoded:
+            raise ValueError("文本必须非空，且不能包含 NUL")
         with self._lock:
             if self._backend is None or not self._available:
                 raise RuntimeError("微信尚未连接")
@@ -122,25 +122,38 @@ class ServiceFacade:
                 raise RuntimeError("消息所属的微信连接已结束，跳过旧会话回复")
             if _mentions and not callable(getattr(self._backend, "send_at_text", None)):
                 raise CapabilityError("当前后端尚未开放真实群艾特")
+            if len(encoded) > 1023 and not callable(getattr(self._backend, "send_text", None)):
+                raise CapabilityError("当前后端无法发送长文本的后续分段")
             backend, cancel = self._backend, self._cancel
         # 等待不占用连接锁，状态查询、断线清理和退出可以及时进行。
         # 发送锁覆盖等待及原生发送，多个插件不会同时等待后集中发送。
         with self._send_lock:
-            with self._lock:
-                self._check_pending(backend, cancel)
-            seconds = self.text_delay.seconds_for(content)
-            logger.debug("文本发送等待 %.3f 秒（%d 个字符）", seconds, len(content))
-            if cancel.wait(seconds):
-                raise RuntimeError("微信连接已结束，取消待发送文本")
-            with self._lock:
-                self._check_pending(backend, cancel)
-                # 在文本节奏等待之后检查记录版本，清空后不发送旧总结。
-                with delivery_guard() if delivery_guard is not None else nullcontext():
-                    if _mentions:
-                        result = backend.send_at_text(to_wxid, content, _mentions)
-                    else:
-                        result = backend.send_text(to_wxid, content)
-                    return self._sent(result, backend, to_wxid, 1, text=content)
+            # Preserve UTF-8 character boundaries. Only the first segment carries
+            # the actual mention metadata; subsequent parts are ordinary text.
+            start = 0
+            while start < len(encoded):
+                end = min(start + 1023, len(encoded))
+                while end < len(encoded) and encoded[end] & 0xc0 == 0x80:
+                    end -= 1
+                part = encoded[start:end].decode('utf-8')
+                with self._lock:
+                    self._check_pending(backend, cancel)
+                seconds = self.text_delay.seconds_for(part)
+                logger.debug("文本发送等待 %.3f 秒（%d 个字符）", seconds, len(part))
+                if cancel.wait(seconds):
+                    raise RuntimeError("微信连接已结束，取消待发送文本；前面部分可能已发送")
+                with self._lock:
+                    self._check_pending(backend, cancel)
+                    with delivery_guard() if delivery_guard is not None else nullcontext():
+                        if _mentions and start == 0:
+                            result = backend.send_at_text(to_wxid, part, _mentions)
+                        else:
+                            result = backend.send_text(to_wxid, part)
+                        self._sent(result, backend, to_wxid, 1, text=part)
+                if result is False:
+                    return False
+                start = end
+            return result
 
     def send_image(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -400,6 +413,8 @@ class ServiceFacade:
             raise ValueError("艾特显示昵称必须与成员列表一一对应，且每个昵称最多 64 字符")
         # 标签用于显示；真实通知始终使用 members 中的微信 ID。
         labels = " ".join("@" + name + "\u2005" for name in names)
+        if len((labels + "\n").encode("utf-8")) > 1023:
+            raise ValueError("艾特标签过长，请减少艾特成员或缩短昵称")
         return self.send_text(room_wxid, labels + "\n" + content,
                               expected_session=expected_session, _mentions=members, delivery_guard=delivery_guard)
 

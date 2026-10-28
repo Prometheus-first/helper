@@ -81,7 +81,9 @@ class PanelHandler(BaseHTTPRequestHandler):
                 limit = 2 * 1024 * 1024 if path in ('/api/plugin-source', '/api/plugin-reset', '/api/plugin-business') else 65536
                 if path == '/api/moments-publish':
                     limit = 29 * 1024 * 1024
-                if not 1 <= size <= limit:
+                # Text is split downstream; its size is constrained by available
+                # resources instead of a separate fixed message-size limit.
+                if size < 1 or (path != '/api/send-text' and size > limit):
                     # Windows 关闭仍有未读请求体的连接时可能发送 RST，掩盖 413 响应。
                     # 只丢弃略超限的有界请求，限制等待，绝不解析或保存它。
                     if 0 < size - limit <= 65536:

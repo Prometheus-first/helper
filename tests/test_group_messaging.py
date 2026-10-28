@@ -79,12 +79,19 @@ class ComposerTests(PanelFixture):
         self.controller.app.config['chat_allowlist']=['999@chatroom']
         with self.assertRaises(PanelError):self.controller.send_text(self.data())
         self.assertFalse(self.backend.calls)
-    def test_departed_members_and_oversized_labels_do_not_send(self):
-        for i,members,content in ((0,['wxid_departed'],'你好'),(1,[PEER],'文'*341)):
-            data=self.data();data.update(request_id=f'synthetic-invalid-{i}',at_list=members,content=content)
-            self.controller.send_text(data)
-            self.assertEqual(self.wait_job(data['request_id'])['status'],'failed')
+    def test_departed_members_do_not_send(self):
+        data=self.data();data.update(request_id='synthetic-invalid-0',at_list=['wxid_departed'])
+        self.controller.send_text(data)
+        self.assertEqual(self.wait_job(data['request_id'])['status'],'failed')
         self.assertFalse(self.backend.calls)
+
+    def test_long_mention_message_is_split_in_order(self):
+        data=self.data();data.update(at_list=[PEER],content='文'*341)
+        self.controller.send_text(data)
+        self.assertEqual(self.wait_job()['status'],'sent')
+        self.assertEqual(''.join(row[1] for row in self.backend.calls), '@群内称呼\u2005\n' + data['content'])
+        self.assertEqual(self.backend.calls[0][2], (PEER,))
+        self.assertTrue(all(not row[2] for row in self.backend.calls[1:]))
     def test_pending_send_blocks_other_requests_and_expired_session_cancels(self):
         gate=self.backend.gate=threading.Event()
         try:
@@ -96,7 +103,7 @@ class ComposerTests(PanelFixture):
             self.assertFalse(self.backend.calls)
         finally:gate.set()
     def test_invalid_payload_and_private_chat_mention_are_rejected(self):
-        for changes in ({'content':''},{'content':'\0'}, {'content':'a'*1024},{'at_list':[PEER]*2},
+        for changes in ({'content':''},{'content':'\0'}, {'at_list':[PEER]*2},
                         {'at_list':[PEER],'chat_id':PEER},{'at_list':'bad'},{'request_id':'bad'}):
             with self.subTest(changes=changes),self.assertRaises((ValueError,PanelError)):
                 self.controller.send_text(dict(self.data(),**changes))

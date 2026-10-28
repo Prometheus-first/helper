@@ -555,8 +555,12 @@ class PanelController:
             raise PanelError('发送请求编号无效')
         if not isinstance(session, str) or not session or len(session) > 80:
             raise PanelError('请先选择会话并刷新连接', 409)
-        if not isinstance(content, str) or not content.strip() or '\0' in content or len(content.encode('utf-8')) > 1023:
-            raise PanelError('正文应为 1–1023 个 UTF-8 字节，不能包含 NUL')
+        if not isinstance(content, str) or not content.strip() or '\0' in content:
+            raise PanelError('正文不能为空或包含 NUL')
+        try:
+            content.encode('utf-8')
+        except UnicodeEncodeError:
+            raise PanelError('正文包含无效的 Unicode 字符') from None
         if not isinstance(mentions, list):
             raise PanelError('艾特成员必须为列表')
         mentions = validate_mentions(target, mentions) if mentions else ()
