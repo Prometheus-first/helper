@@ -303,6 +303,7 @@ class PanelController:
                 result[name]['api_key_configured'] = bool(value.get('api_key'))
             else:
                 result['groups'] = list(value.get('groups', {}))
+                result['group_names'] = value.get('group_names', {})
                 result['history_enabled'] = value.get('history_enabled', True)
                 result['daily_clear'] = value.get('daily_clear', True)
         return result
@@ -368,7 +369,7 @@ class PanelController:
                     from .tts import FishTTS
                     FishTTS.from_options(validation)
                 changes[paths[name]] = value
-            if any(key in data for key in ('groups', 'history_enabled', 'daily_clear')):
+            if any(key in data for key in ('groups', 'group_names', 'history_enabled', 'daily_clear')):
                 if 'members' not in paths:
                     raise PanelError('请先在主配置设置 members_config_file')
                 members = read_json(paths['members'])
@@ -383,6 +384,24 @@ class PanelController:
                     members['groups'] = {room: members.get('groups', {}).get(room, []) for room in dict.fromkeys(rooms)}
                     if config.get('chat_allowlist'):
                         config['chat_allowlist'] = list(dict.fromkeys(config['chat_allowlist'] + rooms))
+                if 'group_names' in data:
+                    names = data['group_names']
+                    rooms = members.get('groups', {})
+                    if not isinstance(names, dict) or len(names) > 1000:
+                        raise PanelError('群备注格式不正确')
+                    existing = members.get('group_names', {})
+                    if not isinstance(existing, dict):
+                        raise PanelError('已有群备注格式不正确')
+                    updated = dict(existing)
+                    for room, name in names.items():
+                        if room not in rooms or not isinstance(name, str) or len(name) > 64 or any(ord(ch) < 32 for ch in name):
+                            raise PanelError('群备注应属于已配置的群，且不超过 64 个字符')
+                        name = name.strip()
+                        if name:
+                            updated[room] = name
+                        else:
+                            updated.pop(room, None)
+                    members['group_names'] = updated
                 for key in ('history_enabled', 'daily_clear'):
                     if key in data:
                         if type(data[key]) is not bool:

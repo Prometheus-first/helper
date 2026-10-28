@@ -273,6 +273,14 @@ td { padding: 16px 20px; vertical-align: middle; border-top: 1px solid var(--tab
 .settings-section { background: var(--surface); padding: var(--space-6); border: 1px solid var(--rule); border-radius: 12px; margin-bottom: var(--space-6); min-width: 0; }
 .settings-section > h2 + .section-description { margin-top: var(--space-1); }
 .scope-section { max-width: 900px; }
+.group-name-list { margin-top: var(--space-5); }
+.group-name-list:empty { display: none; }
+.group-name-heading { font-size: 13px; font-weight: 600; margin: 0 0 var(--space-2); }
+.group-name-hint { color: var(--muted); font-size: 12px; margin: 0 0 var(--space-2); }
+.group-name-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 1fr); align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+.group-name-row label { margin: 0; font: 12px/1.6 var(--font-data); color: var(--muted); overflow-wrap: anywhere; }
+.group-name-row input { margin: 0; }
+@media (max-width: 600px) { .group-name-row { grid-template-columns: 1fr; gap: var(--space-1); } }
 label { display: block; font-size: 13px; color: var(--ink); margin-top: var(--space-5); }
 input:not([type="checkbox"]), textarea, select { display: block; width: 100%; min-height: 40px; border: 1px solid var(--field-border); border-radius: var(--radius-control); padding: 9px 12px; background: var(--surface); color: var(--ink); margin-top: var(--space-2); font-size: 13px; }
 input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 1; }

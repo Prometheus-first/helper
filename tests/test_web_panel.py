@@ -217,6 +217,28 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['groups']['123@chatroom'], data['groups']['123@chatroom'])
         self.assertEqual(self.controller.store.load()['chat_allowlist'], ['filehelper','123@chatroom','456@chatroom'])
 
+    def test_group_names_round_trip_without_losing_other_settings(self):
+        path = self.root/'members_config.json'
+        data = read_json(path)
+        data['groups'] = {'123@chatroom': [{'key':'test_person','name':'测试玩家'}], '456@chatroom': []}
+        data['group_names'] = {'123@chatroom': '旧名称', '456@chatroom': '另一个群'}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        self.controller.save_configuration({'groups':['123@chatroom'], 'group_names':{'123@chatroom':'  测试群  '}})
+        saved = read_json(path)
+        self.assertEqual(saved['groups']['123@chatroom'], data['groups']['123@chatroom'])
+        self.assertEqual(saved['group_names'], {'123@chatroom':'测试群', '456@chatroom':'另一个群'})
+        self.assertEqual(self.controller.configuration()['group_names'], saved['group_names'])
+        self.controller.save_configuration({'group_names':{'123@chatroom':''}})
+        self.assertNotIn('123@chatroom', read_json(path)['group_names'])
+
+    def test_invalid_group_names_do_not_modify_configuration(self):
+        path = self.root/'members_config.json'
+        original = path.read_bytes()
+        for names in ([], {'not-in-config@chatroom':'备注'}, {'123@chatroom':'x'*65}, {'123@chatroom':'含\n换行'}):
+            with self.subTest(names=names), self.assertRaises(PanelError):
+                self.controller.save_configuration({'groups':['123@chatroom'], 'group_names':names})
+            self.assertEqual(path.read_bytes(), original)
+
     def test_compatible_llm_options_round_trip_without_changing_saved_key(self):
         path = self.root/'llm_config.json'
         original = read_json(path)

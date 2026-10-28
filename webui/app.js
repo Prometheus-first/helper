@@ -36,6 +36,7 @@ let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
 let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
+let groupNameDraft = new Map(), discoveredGroups = [];
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
@@ -197,6 +198,8 @@ async function loadConfig() {
   if (requested !== robot) return;
   config = loaded;
   fill($('#groups-form'), {...config, groups:config.groups?.join('\n')||''});
+  groupNameDraft = new Map(Object.entries(config.group_names || {}));
+  renderGroupNames(); renderDiscoveredGroups();
   fill($('#scope-form'), {chat_allowlist:config.chat_allowlist.join('\n')});
   for (const name of ['llm','tts']) {
     const form = $('#'+name+'-form');
@@ -207,6 +210,26 @@ async function loadConfig() {
   fill($('#delay-form'), config.text_send_delay);
 }
 const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
+function renderGroupNames() {
+  const rooms = lines($('#group-ids').value);
+  const supported = !!config && Object.hasOwn(config, 'group_names');
+  $('#group-name-list').innerHTML = rooms.length ? '<h3 class="group-name-heading">群聊备注</h3>' +
+    (supported ? '' : '<p class="group-name-hint">请重启管理台后编辑群备注。</p>') + rooms.map((room, index) =>
+    `<div class="group-name-row"><label for="group-name-${index}">${escape(room)}</label><input id="group-name-${index}" data-group-name="${escape(room)}" value="${escape(groupNameDraft.get(room) || '')}" maxlength="64" placeholder="填写备注" autocomplete="off" ${supported ? '' : 'disabled'}></div>`).join('') : '';
+}
+function renderDiscoveredGroups() {
+  const node = $('#discovered-chats');
+  node.className = discoveredGroups.length ? '' : 'empty';
+  node.innerHTML = discoveredGroups.map(c => {
+    const name = config?.group_names?.[c.chat_id] || c.name || '';
+    return `<div class="chat-row"><div>${escape(name || c.chat_id)}${name ? `<small>${escape(c.chat_id)}</small>` : ''}</div><button class="secondary small" data-room="${escape(c.chat_id)}">填入列表</button></div>`;
+  }).join('') || '暂无已接收消息的群。';
+}
+$('#group-ids').addEventListener('input', renderGroupNames);
+$('#group-name-list').addEventListener('input', event => {
+  const input = event.target.closest('[data-group-name]');
+  if (input) groupNameDraft.set(input.dataset.groupName, input.value);
+});
 async function save(data, message) { await api('config',data); await loadConfig(); toast(message||'配置已保存，下次启动生效'); }
 $('#start-selected').onclick = () => action(()=>launchAccounts(loggedAccounts.filter(row=>selectedAccounts.has(accountKey(row))&&row.selectable&&!activeStates.includes(row.state))));
 $('#refresh-accounts').onclick=()=>loadAccounts();
@@ -341,7 +364,7 @@ $('#reset-plugin-source').onclick=()=>{$('#plugin-reset-confirm').classList.remo
 $('#cancel-plugin-reset').onclick=()=>{$('#plugin-reset-confirm').classList.add('hidden');$('#reset-plugin-source').focus();};
 $('#confirm-plugin-reset').onclick=()=>action(()=>submitPluginSource(true));
 $('#plugin-form').onsubmit=event=>{event.preventDefault();if(!$('#save-plugin-source').disabled)action(()=>submitPluginSource());};
-$('#groups-form').onsubmit=e=>{e.preventDefault();action(()=>save({groups:lines(e.target.elements.groups.value),history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked}));};
+$('#groups-form').onsubmit=e=>{e.preventDefault();const groups=lines(e.target.elements.groups.value);const data={groups,history_enabled:e.target.elements.history_enabled.checked,daily_clear:e.target.elements.daily_clear.checked};if(config&&Object.hasOwn(config,'group_names'))data.group_names=Object.fromEntries(groups.map(room=>[room,groupNameDraft.get(room)||'']));action(()=>save(data));};
 $('#scope-form').onsubmit=e=>{e.preventDefault();action(()=>save({chat_allowlist:lines(e.target.elements.chat_allowlist.value)}));};
 for (const name of ['llm','tts']) $('#'+name+'-form').onsubmit=e=>{
   e.preventDefault();
@@ -358,10 +381,10 @@ for (const name of ['llm','tts']) $('#'+name+'-form').onsubmit=e=>{
 };
 $('#delay-form').onsubmit=e=>{e.preventDefault();const f=e.target.elements;action(()=>save({text_send_delay:{enabled:f.enabled.checked,characters_per_group:Number(f.characters_per_group.value),min_seconds:Number(f.min_seconds.value),max_seconds:Number(f.max_seconds.value)}}));};
 $('#discover-chats').onclick=()=>action(async()=>{
-  const {chats}=await api('chats');const rooms=chats.filter(c=>c.is_group||c.chat_id?.endsWith('@chatroom'));
-  $('#discovered-chats').className=rooms.length?'':'empty';$('#discovered-chats').innerHTML=rooms.map(c=>`<div class="chat-row"><div>${escape(c.name||c.chat_id)}<small>${escape(c.chat_id)}</small></div><button class="secondary small" data-room="${escape(c.chat_id)}">填入列表</button></div>`).join('')||'暂无已接收消息的群。';
+  const {chats}=await api('chats');discoveredGroups=chats.filter(c=>c.is_group||c.chat_id?.endsWith('@chatroom'));
+  renderDiscoveredGroups();
 });
-$('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');toast('已填入，停止机器人后保存群聊配置');};
+$('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');renderGroupNames();toast('已填入，停止机器人后保存群聊配置');};
 
 const roleLabels = {owner:'群主', admin:'群管理员', member:'普通群友', unknown:'身份未知'};
 function sendFeedback(text, error=false) {
@@ -397,7 +420,7 @@ async function loadSendChats() {
     if(requested!==robot||generation!==sendGeneration)return;
     const previous=$('#send-chat').value, rows=[...chats];
     if(!rows.some(row=>row.chat_id==='filehelper'))rows.unshift({chat_id:'filehelper',name:'文件传输助手'});
-    $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>`<option value="${escape(row.chat_id)}">${escape(row.name||row.chat_id)}${row.name?' · '+escape(row.chat_id):''}</option>`).join('');
+    $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>{const name=config?.group_names?.[row.chat_id]||row.name||'';return `<option value="${escape(row.chat_id)}">${escape(name||row.chat_id)}${name?' · '+escape(row.chat_id):''}</option>`;}).join('');
     if(rows.some(row=>row.chat_id===previous))$('#send-chat').value=previous;
     sendSession=connection.session_id;sendFeedback('');
   } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
@@ -628,7 +651,7 @@ async function switchRobot(identifier){
   $('#robot-select').value=robot;
   state=null;config=null;logs=[];logCursor=0;selectedPlugin='';renderLogs();
   renderState();renderAccounts();
-  $('#discovered-chats').className='empty';$('#discovered-chats').textContent='暂无已接收消息的群。';
+  groupNameDraft=new Map(); discoveredGroups=[]; $('#group-ids').value=''; renderGroupNames(); renderDiscoveredGroups();
   await loadConfig();await poll();navigate();
 }
 $('#robot-select').onchange=event=>{
