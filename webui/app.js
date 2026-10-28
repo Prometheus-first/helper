@@ -36,6 +36,7 @@ let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
 let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
+let sendChatsAttempted = false;
 let groupNameDraft = new Map(), discoveredGroups = [];
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 const contactPageSize=50;
@@ -82,6 +83,7 @@ function navigate() {
   if (document.body.classList.contains('nav-open')) { setNavigation(false); $('#workspace').focus({preventScroll:true}); }
   window.scrollTo(0, 0);
   moments.render();
+  if(name==='groups' && state?.connected && !sendChatsAttempted && !sendLoading)loadSendChats();
 }
 function renderRobotOptions() {
   const names={stopped:'已停止',starting:'启动中',running:'等待连接',stopping:'停止中',error:'异常'};
@@ -409,23 +411,28 @@ function renderSendMembers() {
 }
 function resetComposer() {
   sendGeneration++;sendMembers=[];mentionSelection.clear();sendSession='';sendLoading=false;pendingSend=null;
+  sendChatsAttempted=false;
   $('#send-chat').innerHTML='<option value="">选择会话</option>';$('#send-content').value='';$('#member-search').value='';
   $('#send-group').classList.add('hidden');sendFeedback('');renderSendMembers();
 }
 async function loadSendChats() {
   const requested=robot,generation=++sendGeneration;
+  let loaded=false;
+  sendChatsAttempted=true;
   sendLoading=true;sendSession='';sendFeedback('正在读取会话…');renderSendState();
   try {
-    const [{chats},connection]=await Promise.all([api('chats',undefined,requested),api('send-connection',undefined,requested)]);
+    const [{chats},connection,settings]=await Promise.all([api('chats',undefined,requested),api('send-connection',undefined,requested),api('config',undefined,requested)]);
     if(requested!==robot||generation!==sendGeneration)return;
     const previous=$('#send-chat').value, rows=[...chats];
+    const known=new Set(rows.map(row=>row.chat_id));
+    for(const room of settings.groups||[])if(!known.has(room)){rows.push({chat_id:room,is_group:true});known.add(room);}
     if(!rows.some(row=>row.chat_id==='filehelper'))rows.unshift({chat_id:'filehelper',name:'文件传输助手'});
-    $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>{const name=config?.group_names?.[row.chat_id]||row.name||'';return `<option value="${escape(row.chat_id)}">${escape(name||row.chat_id)}${name?' · '+escape(row.chat_id):''}</option>`;}).join('');
+    $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>{const name=settings.group_names?.[row.chat_id]||row.name||'';return `<option value="${escape(row.chat_id)}">${escape(name||row.chat_id)}${name?' · '+escape(row.chat_id):''}</option>`;}).join('');
     if(rows.some(row=>row.chat_id===previous))$('#send-chat').value=previous;
-    sendSession=connection.session_id;sendFeedback('');
+    sendSession=connection.session_id;sendFeedback('');loaded=true;
   } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
   finally {if(requested===robot&&generation===sendGeneration){sendLoading=false;renderSendState();}}
-  if(requested===robot&&generation===sendGeneration)await selectSendChat();
+  if(loaded&&requested===robot&&generation===sendGeneration)await selectSendChat();
 }
 async function selectSendChat() {
   const room=$('#send-chat').value,requested=robot,generation=++sendGeneration;
@@ -434,9 +441,21 @@ async function selectSendChat() {
   if(!room){renderSendState();return;}
   sendSession='';sendLoading=true;sendFeedback('正在读取…');renderSendState();
   try {
-    const data=await api(room.endsWith('@chatroom')?'group-members?room='+encodeURIComponent(room):'send-connection',undefined,requested);
+    const connection=await api('send-connection',undefined,requested);
     if(requested!==robot||generation!==sendGeneration)return;
-    sendSession=data.session_id;sendMembers=data.members||[];sendFeedback('');renderSendMembers();
+    if(room.endsWith('@chatroom')) {
+      try {
+        const data=await api('group-members?room='+encodeURIComponent(room),undefined,requested);
+        if(requested!==robot||generation!==sendGeneration)return;
+        if(data.session_id!==connection.session_id)throw new Error('微信连接已变化，请刷新会话');
+        sendMembers=data.members||[];
+      } catch(error) {
+        if(requested!==robot||generation!==sendGeneration)return;
+        if(error.status!==409||error.message!=='群成员缓存尚未就绪，请在微信打开该群后重试')throw error;
+        sendSession=connection.session_id;sendFeedback('群成员尚未加载，可发送文字；在微信打开群聊后刷新成员。');renderSendMembers();return;
+      }
+    }
+    sendSession=connection.session_id;sendFeedback('');renderSendMembers();
   } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
   finally {if(requested===robot&&generation===sendGeneration){sendLoading=false;renderSendState();}}
 }
@@ -624,7 +643,9 @@ async function poll(){
     const [next,tail]=await Promise.all([api('state'),api('logs?after='+logCursor)]);
     if(requested!==robot||generation!==messageGeneration)return;
     state=next;serviceAvailable=true;
+    if(!next.connected)sendChatsAttempted=false;
     $('#service-banner').classList.add('hidden');renderState();
+    if(next.connected && location.hash==='#groups' && !sendChatsAttempted && !sendLoading)loadSendChats();
     if(tail.cursor<logCursor)logs=[];logCursor=tail.cursor;
     if(tail.rows.length){logs=[...logs,...tail.rows].slice(-1000);renderLogs();}
     await pollMessages(requested,generation);
