@@ -66,15 +66,15 @@ class NativeProfileTests(unittest.TestCase):
         ram = updated_memory(AccountMemory(), TEXT_42011)
         self.assertIs(profile_for_fingerprint(TEXT_42011.size, TEXT_42011.sha256), TEXT_42011)
         self.assertEqual(read_current_account(ram.read, BASE), SELF)
-        self.assertNotIn(0x8FA2538, TEXT_42011.rvas)
+        self.assertEqual(TEXT_42011.rva(0x8FA2538), 0x9280A38)
         self.assertEqual(TEXT_42011.emoticon_cache_mask, b'')
 
-    def test_42011_group_cache_remains_usable_without_contact_cache(self):
+    def test_42011_group_cache_and_contact_name(self):
         ram = updated_memory(GroupMemory(), TEXT_42011)
         rows = read_group_members(ram.read, BASE, ROOM, expected_account=SELF)
         self.assertIsNotNone(rows)
         self.assertIn(SELF, {row['wxid'] for row in rows})
-        self.assertIsNone(read_contact_name(ram.read, BASE, PEER, expected_account=SELF))
+        self.assertEqual(read_contact_name(ram.read, BASE, PEER, expected_account=SELF), 'DefaultName')
 
     def test_only_exact_size_and_hash_pair_selects_a_known_build(self):
         for profile in CORE_PROFILES:

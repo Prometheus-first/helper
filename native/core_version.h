@@ -74,6 +74,11 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x8dfb4b8: return 0x90d2148;
             case 0x97ca198: return 0x9af3868;
             case 0x88ad0: return 0x88ad0;
+            case 0x754330: return 0x77c4f0;
+            case 0x7544b0: return 0x77c670;
+            case 0x1a26440: return 0x1a6a4c0;
+            case 0x3866510: return 0x3957ed0;
+            case 0x8d9f958: return 0x9074e98;
             default: return 0;
         }
     }

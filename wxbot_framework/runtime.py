@@ -91,8 +91,9 @@ class BotApplication:
             self._last_connection_error = ""
             if callable(getattr(candidate, "group_members", None)):
                 from .group_events import GroupMembershipTracker
-                account = self.config.get("wechat_account")
-                if account:
+                account = (self.config.get("wechat_account") or
+                           getattr(getattr(candidate, "raw", None), "self_wxid", None))
+                if isinstance(account, str) and account:
                     self._group_tracker = GroupMembershipTracker(account, candidate.session_id)
             self._next_group_poll = 0
             while True:

@@ -400,8 +400,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         if build is None:
             raise RuntimeError("微信核心 DLL 指纹不匹配，拒绝加载")
         if build.get('wechat_version') == '4.2.0.11':
-            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file') or
-                any(value is not None for value in (emoticon_path, group_operation, friend_request)))
+            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend') or
+                any(value is not None for value in (emoticon_path, group_operation)))
             if unsupported:
                 raise RuntimeError('微信 4.2.0.11 此功能尚未适配')
         if mode == "--remove" and dll.name.lower() not in loaded_modules:

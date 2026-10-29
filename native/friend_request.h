@@ -1,7 +1,7 @@
 #pragma once
 #include <memory>
 
-// Weixin 4.1.15.13 only. The ordinary client path is:
+// Version-checked VerifyUser service. The original client path is:
 // 1780cd0 -> 754330 (VerifyUser service) -> 1a26440 -> 1a17980,
 // where 1a26440 supplies VerifyUser opcode 3 and waits for its response.
 // The credentials are borrowed only during that synchronous service call.

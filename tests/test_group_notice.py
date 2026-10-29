@@ -161,6 +161,22 @@ class GroupMonitorIntegrationTests(unittest.TestCase):
         self.app.plugins.dispatch.assert_called_once()
         self.backend.group_members.assert_called_with(ROOM)
 
+    def test_unbound_configuration_uses_the_connected_account(self):
+        self.app._disconnect()
+        self.app.config['wechat_account'] = None
+        self.backend.raw.self_wxid = ACCOUNT
+        self.app._connect()
+        self.assertIsNotNone(self.app._group_tracker)
+        self.assertEqual(self.app._group_tracker.account, ACCOUNT)
+
+    def test_unbound_unavailable_account_does_not_break_connection(self):
+        self.app._disconnect()
+        self.app.config['wechat_account'] = None
+        self.backend.raw.self_wxid = None
+        self.app._connect()
+        self.assertTrue(self.app._connection_ready)
+        self.assertIsNone(self.app._group_tracker)
+
     def test_failed_or_empty_snapshots_never_report_mass_leaves(self):
         self.poll({ACCOUNT:'机器人', FIRST:'成员甲'})
         self.poll(None)

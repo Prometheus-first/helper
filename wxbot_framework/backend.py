@@ -23,8 +23,9 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
                                            "emoticon.send", "emoticon.extract"})
 
 TEXT_42011_CAPABILITIES = CAPABILITIES | frozenset({
-    "friend.text.receive", "friend.text.send", "group.text.receive", "group.text.send",
-    "group.text.mention", "group.members.read", "message.recall",
+    "friend.text.receive", "friend.text.send", "friend.request.receive", "friend.request.accept",
+    "group.text.receive", "group.text.send",
+    "group.text.mention", "group.members.read", "group.events", "message.recall",
     "image.receive", "image.send", "file.receive", "file.send",
     "friend.file.receive", "friend.file.send", "group.file.receive", "group.file.send",
     "voice.receive", "voice.send", "friend.voice.send", "group.voice.send"})

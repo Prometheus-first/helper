@@ -8,9 +8,14 @@ NATIVE = Path(__file__).resolve().parents[1] / 'native'
 if str(NATIVE) not in sys.path:
     sys.path.insert(0, str(NATIVE))
 from text_service import NativeTextService
+from wxbot_framework.backend import TEXT_42011_CAPABILITIES
 
 
 class MomentsCapabilitiesTests(unittest.TestCase):
+    def test_group_events_are_available_on_42011(self):
+        self.assertIn('group.events', TEXT_42011_CAPABILITIES)
+        self.assertIn('friend.request.receive', TEXT_42011_CAPABILITIES)
+        self.assertIn('friend.request.accept', TEXT_42011_CAPABILITIES)
     def test_42011_does_not_advertise_unverified_interaction(self):
         service = NativeTextService(pid=123)
         service._owns_bridge = True

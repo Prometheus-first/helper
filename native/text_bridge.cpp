@@ -412,10 +412,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
         MH_RemoveHook(target); MH_Uninitialize(); return 600 + status;
     }
     receive_hook_created = true;
-    if (InterlockedCompareExchange(&core_profile_id, 0, 0) != 3) {
-        const DWORD friend_status = friend_receive_start();
-        if (friend_status != ERROR_SUCCESS) return friend_status;
-    }
+    const DWORD friend_status = friend_receive_start();
+    if (friend_status != ERROR_SUCCESS) return friend_status;
     return recall_receive_start();
 }
 
