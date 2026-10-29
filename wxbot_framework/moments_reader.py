@@ -15,6 +15,10 @@ from .account import APP_GLOBAL_RVA, read_current_account, validate_account
 
 _SOURCE_VTABLE = 0x9819B28
 _SOURCE_SECONDARY_VTABLE = 0x9819BA8
+_SOURCE_TABLES = {
+    '4.1.15.56': (_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE),
+    '4.2.0.11': (0x99342A8, 0x9934328),
+}
 _ADDRESS_END = 0x800000000000
 _SCAN_BYTES = 512 * 1024 * 1024
 _CHUNK_BYTES = 1024 * 1024
@@ -104,9 +108,9 @@ def _vector(memory, current):
     return raw, begin, (end - begin) // 16
 
 
-def _source(memory, address, core):
-    if (_q(memory, address) != core + _SOURCE_VTABLE or
-            _q(memory, address + 0x10) != core + _SOURCE_SECONDARY_VTABLE or
+def _source(memory, address, core, tables=(_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE)):
+    if (_q(memory, address) != core + tables[0] or
+            _q(memory, address + 0x10) != core + tables[1] or
             _read(memory, address + 0x1D0, 4) != b'\0' * 4):
         return None
     shared = _read(memory, address + 0x1A0, 16)
@@ -118,10 +122,10 @@ def _source(memory, address, core):
             'vector': raw, 'begin': begin, 'count': count}
 
 
-def _locate(memory, core, nearby, budget):
+def _locate(memory, core, nearby, budget, tables=(_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE)):
     regions = memory.regions(budget)
     regions.sort(key=lambda row: abs(row[0] - nearby))
-    signature = struct.pack('<Q', core + _SOURCE_VTABLE)
+    signature = struct.pack('<Q', core + tables[0])
     empty = None
     for base, size in regions:
         # One signature's overlap makes an 8-byte vtable spanning a chunk visible.
@@ -146,7 +150,7 @@ def _locate(memory, core, nearby, budget):
                 if address % 8:
                     continue
                 try:
-                    candidate = _source(memory, address, core)
+                    candidate = _source(memory, address, core, tables)
                 except (OSError, ValueError, struct.error):
                     continue
                 if candidate:
@@ -200,7 +204,8 @@ def _interactions(memory, item_data, offset, budget, snapshots):
     return records, total, total > count
 
 
-def _decode(memory, candidate, account, core, limit, budget):
+def _decode(memory, candidate, account, core, limit, budget,
+            tables=(_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE)):
     rows, identifiers, snapshots = [], set(), []
     for index in range(min(limit, candidate['count'])):
         budget.check()
@@ -212,6 +217,11 @@ def _decode(memory, candidate, account, core, limit, budget):
         before = _read(memory, item, 0x310)
         identifier = struct.unpack_from('<Q', before)[0]
         username = _string(memory, item + 0x190, 127)
+        # 微信可能在列表中插入公众号广告；它不是个人动态，跳过而不暴露数据。
+        if username.startswith('gh_'):
+            snapshots.append(('item', item, before, 0))
+            snapshots.append(('bytes', pair_address, shared, 0))
+            continue
         validate_account(username)
         created = struct.unpack_from('<I', before, 0x1B4)[0]
         if not identifier or identifier in identifiers or not 946684800 <= created <= 2147483647:
@@ -277,7 +287,7 @@ def _decode(memory, candidate, account, core, limit, budget):
                     (current[0x50:0x90] != value[0x50:0x90] or current[0xC2] != value[0xC2])):
                 raise _InteractionChanged()
             raise _Changed()
-    if _source(memory, candidate['address'], core) != candidate:
+    if _source(memory, candidate['address'], core, tables) != candidate:
         raise _Changed()
     return {'source': 'loaded_pc_moments_cache', 'rows': rows,
             'loaded_count': candidate['count'], 'truncated': len(rows) < candidate['count']}
@@ -338,14 +348,26 @@ class _Memory:
 
 def _target(pid):
     # Delayed imports keep decoder tests portable and do not load any bridge DLL.
-    from native.moments_transport import _core_profile, _native
+    import hashlib
+    from native.moments_transport import _core_profile, _local_path, _native
+    from .native_profiles import profile_for_fingerprint
     module = _native().modules(pid).get('weixin.dll')
     if not module:
         raise MomentsReadError('未找到目标电脑微信，请刷新账号后重试')
     core, path = module
     profile = _core_profile(Path(path))
-    if profile is None or profile.version != '4.1.15.56':
-        raise MomentsReadError('朋友圈读取仅适配已核对核心指纹的微信 4.1.15.56')
+    if profile is None:
+        try:
+            core_file = _local_path(Path(path), suffix={'.dll'})
+            digest = hashlib.sha256()
+            with core_file.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            profile = profile_for_fingerprint(core_file.stat().st_size, digest.hexdigest())
+        except (OSError, ValueError):
+            profile = None
+    if profile is None or profile.version not in _SOURCE_TABLES:
+        raise MomentsReadError('当前微信核心指纹的朋友圈读取尚未适配')
     return core, profile
 
 
@@ -368,27 +390,28 @@ def read_loaded_moments(pid: int, expected_account: str, *, limit: int = 20,
     try:
         budget.check()
         core, profile = _target(pid)
+        tables = _SOURCE_TABLES[profile.version]
         budget.check()
         memory = _Memory(pid)
         if read_current_account(memory.read, core) != expected_account:
             raise MomentsReadError(_IDENTITY)
         nearby = _q(memory, core + profile.rva(APP_GLOBAL_RVA))
         _pointer(nearby)
-        candidate = _locate(memory, core, nearby, budget)
+        candidate = _locate(memory, core, nearby, budget, tables)
         if candidate is None:
             raise MomentsReadError(_UNLOADED)
         result = None
         for attempt in range(2):
             budget.check()
             try:
-                result = _decode(memory, candidate, expected_account, core, limit, budget)
+                result = _decode(memory, candidate, expected_account, core, limit, budget, tables)
                 break
             except _InteractionChanged:
                 raise MomentsReadError(_CHANGED) from None
             except _Changed:
                 if attempt:
                     raise MomentsReadError(_CHANGED) from None
-                candidate = _source(memory, candidate['address'], core)
+                candidate = _source(memory, candidate['address'], core, tables)
                 if candidate is None:
                     raise MomentsReadError(_CHANGED) from None
         if read_current_account(memory.read, core) != expected_account:

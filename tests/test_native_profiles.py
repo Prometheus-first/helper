@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import struct
 import unittest
+from types import MappingProxyType
 
 from test_account import AccountMemory, BASE, APP, CONTEXT, SELF
 from test_contacts import ContactMemory, PEER, CONTACT
@@ -12,17 +13,17 @@ from wxbot_framework.account import read_current_account, read_current_profile
 from wxbot_framework.contacts import read_contact_name
 from wxbot_framework.group_members import read_group_members
 from wxbot_framework.emoticon_account import read_emoticon_cache_key
-from wxbot_framework.native_profiles import CORE_PROFILES, profile_for_fingerprint, select_memory_profile
+from wxbot_framework.native_profiles import CORE_PROFILES, CoreProfile, profile_for_fingerprint, select_memory_profile
 
-OLD, NEW = CORE_PROFILES
+OLD, NEW, TEXT_42011 = CORE_PROFILES
 
 
-def updated_memory(ram):
+def updated_memory(ram, profile=NEW):
     """将独立旧版测试夹具的核心地址/虚表引用迁移到新版，保留堆对象字段。"""
-    values = {BASE + old: BASE + new for old, new in NEW.rvas.items()}
+    values = {BASE + old: BASE + new for old, new in profile.rvas.items()}
 
     def address(a):
-        for old, new in NEW.rvas.items():
+        for old, new in profile.rvas.items():
             if BASE + old <= a < BASE + old + 0x100:
                 return a + new - old
         return a
@@ -49,6 +50,32 @@ def updated_memory(ram):
 
 
 class NativeProfileTests(unittest.TestCase):
+    def test_discovery_only_profile_never_enables_native_bridge(self):
+        partial = CoreProfile('test-only', 1, '0' * 64,
+                              MappingProxyType({key:value + 0x10000000 for key,value in TEXT_42011.rvas.items()}), b'')
+        ram = updated_memory(AccountMemory(), partial)
+        self.assertIsNone(profile_for_fingerprint(partial.size, partial.sha256))
+        self.assertIsNone(select_memory_profile(ram.read, BASE))
+        self.assertIsNone(read_current_account(ram.read, BASE))
+        self.assertIs(select_memory_profile(ram.read, BASE, profiles=(partial,)), partial)
+        self.assertEqual(read_current_account(ram.read, BASE, profiles=(partial,)), SELF)
+        ram.write(BASE + partial.rva(0x36F930), b'\0' * 5)
+        self.assertIsNone(read_current_account(ram.read, BASE, profiles=(partial,)))
+
+    def test_42011_profile_is_text_and_group_only(self):
+        ram = updated_memory(AccountMemory(), TEXT_42011)
+        self.assertIs(profile_for_fingerprint(TEXT_42011.size, TEXT_42011.sha256), TEXT_42011)
+        self.assertEqual(read_current_account(ram.read, BASE), SELF)
+        self.assertNotIn(0x8FA2538, TEXT_42011.rvas)
+        self.assertEqual(TEXT_42011.emoticon_cache_mask, b'')
+
+    def test_42011_group_cache_remains_usable_without_contact_cache(self):
+        ram = updated_memory(GroupMemory(), TEXT_42011)
+        rows = read_group_members(ram.read, BASE, ROOM, expected_account=SELF)
+        self.assertIsNotNone(rows)
+        self.assertIn(SELF, {row['wxid'] for row in rows})
+        self.assertIsNone(read_contact_name(ram.read, BASE, PEER, expected_account=SELF))
+
     def test_only_exact_size_and_hash_pair_selects_a_known_build(self):
         for profile in CORE_PROFILES:
             self.assertIs(profile_for_fingerprint(profile.size, profile.sha256), profile)

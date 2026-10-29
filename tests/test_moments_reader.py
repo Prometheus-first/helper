@@ -90,6 +90,18 @@ class ReaderTests(unittest.TestCase):
     def run_read(self, **kwargs):
         return reader.read_loaded_moments(123, ACCOUNT, **kwargs)
 
+    def test_42011_source_tables_and_official_account_are_handled(self):
+        profile = SimpleNamespace(version='4.2.0.11', rva=lambda value: 0xBB92FA0)
+        self.target.return_value = (CORE, profile)
+        primary, secondary = reader._SOURCE_TABLES[profile.version]
+        self.memory.put(SOURCE, struct.pack('<Q', CORE + primary))
+        self.memory.put(SOURCE + 0x10, struct.pack('<Q', CORE + secondary))
+        self.assertEqual(len(self.run_read()['rows']), 1)
+        self.memory.string(ITEM + 0x190, 'gh_offline_test')
+        result = self.run_read()
+        self.assertEqual(result['rows'], [])
+        self.assertEqual(result['loaded_count'], 1)
+
     def add_interaction(self, *, comment=False):
         obj = COMMENT_ITEM if comment else LIKE_ITEM
         pairs = COMMENT_PAIRS if comment else LIKE_PAIRS
@@ -417,7 +429,7 @@ class TargetTests(unittest.TestCase):
         with patch('native.moments_transport._native', return_value=SimpleNamespace(
                 modules=lambda pid: {'weixin.dll': (CORE, 'C:/offline/Weixin.dll')})), \
                 patch('native.moments_transport._core_profile', return_value=SimpleNamespace(version='4.1.15.13')):
-            with self.assertRaisesRegex(reader.MomentsReadError, '4.1.15.56'):
+            with self.assertRaisesRegex(reader.MomentsReadError, '核心指纹'):
                 reader._target(123)
 
     def test_native_exception_text_is_not_exposed(self):

@@ -312,9 +312,9 @@ static void copy_voice_message(const unsigned char* message, const char* sender,
     if (!read_pb_string(message, 0x20, metadata, sizeof(metadata))) metadata[0] = 0;
     const char* payload = nullptr;
     uint32_t length = 0;
-    // 4.1.15.56 a7dcc0@a7e39c..a7e4d8 copies ImgBuf to voice bytes (+98).
+    // 4.1.15.56 and 4.2.0.11 copy ImgBuf to voice bytes (+98).
     // +28 is a status DWORD; the optional SKBuiltinBuffer_t pointer is at +30.
-    if (InterlockedCompareExchange(&core_profile_id, 0, 0) == 2) {
+    if (InterlockedCompareExchange(&core_profile_id, 0, 0) >= 2) {
         const auto buffer = *reinterpret_cast<const unsigned char* const*>(message + 0x30);
         if (buffer) {
             const uint32_t declared = *reinterpret_cast<const uint32_t*>(buffer + 0x10);
@@ -412,8 +412,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
         MH_RemoveHook(target); MH_Uninitialize(); return 600 + status;
     }
     receive_hook_created = true;
-    const DWORD friend_status = friend_receive_start();
-    if (friend_status != ERROR_SUCCESS) return friend_status;
+    if (InterlockedCompareExchange(&core_profile_id, 0, 0) != 3) {
+        const DWORD friend_status = friend_receive_start();
+        if (friend_status != ERROR_SUCCESS) return friend_status;
+    }
     return recall_receive_start();
 }
 

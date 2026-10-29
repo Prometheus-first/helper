@@ -58,7 +58,7 @@ class InteractionTransportTests(unittest.TestCase):
         self.payload = {'sns_id': '123456789012345678', 'action': 'comment', 'content': '离线评论'}
         modules = {'weixin.dll': (0x200000, 'offline-core.dll'), BRIDGE.name.lower(): (BASE, str(BRIDGE))}
         patches = [patch.object(transport, 'interaction_capability', return_value=True),
-                   patch.object(transport, '_core_profile', return_value=object()),
+                   patch.object(transport, '_core_profile', return_value=SimpleNamespace(version='4.1.15.56')),
                    patch.object(transport, '_native', return_value=SimpleNamespace(modules=lambda _: modules)),
                    patch.object(transport, '_exports', return_value=(EXPORTS, None)),
                    patch.object(transport, '_Channel', return_value=self.channel),
@@ -70,6 +70,11 @@ class InteractionTransportTests(unittest.TestCase):
 
     def run_call(self, **kwargs):
         return transport.interact_moments(42, ACCOUNT, self.payload, bridge_path=BRIDGE, **kwargs)
+
+    def test_unverified_42011_interaction_is_rejected_before_call(self):
+        self.mocks[1].return_value = SimpleNamespace(version='4.2.0.11')
+        self.assertEqual(self.run_call()['status'], 'failed')
+        self.assertEqual(self.channel.calls, [])
 
     def test_completed_once_and_cleanup_uses_same_operation_token(self):
         self.assertEqual(self.run_call(), {'status': 'completed', 'unload_blocked': False})

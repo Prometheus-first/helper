@@ -50,8 +50,11 @@ constexpr size_t kFinishedEvent = 0x2a8;
 // 新 RVA 已属于 4.1.15.56，不经过旧版本 core_rva 的 legacy switch。
 // 已有公共入口继续使用 core_address，绝不回退到旧版本地址。
 static uintptr_t address(uintptr_t rva) {
-    return InterlockedCompareExchange(&core_profile_id, 0, 0) == 2 && core_base
-        ? core_base + rva : 0;
+    return core_moments_address(core_base, rva);
+}
+
+static size_t model_field(size_t offset) {
+    return offset + (InterlockedCompareExchange(&core_profile_id, 0, 0) == 3 ? 0x10 : 0);
 }
 
 struct VectorView { void* begin; void* end; void* capacity; };
@@ -263,17 +266,17 @@ static bool check_model(Lease* lease) {
     auto model = static_cast<unsigned char*>(lease->model.object);
     if (!model || !lease->model.control ||
         *static_cast<const uintptr_t*>(lease->model.control) != address(kModelControlTable) ||
-        *reinterpret_cast<uint32_t*>(model + 0x30) != (lease->config.image_count ? 1u : 2u) ||
-        *reinterpret_cast<uint32_t*>(model + 0x248) != lease->config.visibility) return false;
-    const auto text = reinterpret_cast<SmallString*>(model + 0x60);
+        *reinterpret_cast<uint32_t*>(model + model_field(0x30)) != (lease->config.image_count ? 1u : 2u) ||
+        *reinterpret_cast<uint32_t*>(model + model_field(0x248)) != lease->config.visibility) return false;
+    const auto text = reinterpret_cast<SmallString*>(model + model_field(0x60));
     const char* body = text->capacity > 15 ? *reinterpret_cast<char* const*>(text->data) : text->data;
     if (text->length != lease->text_bytes || text->capacity < text->length || !body ||
         std::memcmp(body, lease->config.text, lease->text_bytes)) return false;
-    const auto vector = reinterpret_cast<const VectorView*>(model + 0x118);
+    const auto vector = reinterpret_cast<const VectorView*>(model + model_field(0x118));
     if (reinterpret_cast<uintptr_t>(vector->end) - reinterpret_cast<uintptr_t>(vector->begin) !=
         16ull * lease->config.image_count ||
         reinterpret_cast<uintptr_t>(vector->capacity) < reinterpret_cast<uintptr_t>(vector->end)) return false;
-    return read_string(reinterpret_cast<SmallString*>(model + 0x40), lease->client_id, sizeof(lease->client_id));
+    return read_string(reinterpret_cast<SmallString*>(model + model_field(0x40)), lease->client_id, sizeof(lease->client_id));
 }
 
 // 该函数只有平凡局部变量，避免 MSVC C2712（SEH 与 C++ 自动析构混用）。
@@ -398,7 +401,7 @@ static DWORD prepare_native(Lease* lease) {
         }
         using Allocate = void* (__fastcall*)(size_t);
         auto block = static_cast<unsigned char*>(reinterpret_cast<Allocate>(
-            core_address(core_base, 0x74ab89c))(0x2b8));
+            core_address(core_base, 0x74ab89c))(model_field(0x2b8)));
         if (!block) return ERROR_NOT_ENOUGH_MEMORY;
         lease->raw_model_allocation = block;
         *reinterpret_cast<uintptr_t*>(block) = address(kModelControlTable);
@@ -409,14 +412,14 @@ static DWORD prepare_native(Lease* lease) {
         lease->model = {block + 0x10, block};
         lease->raw_model_allocation = nullptr;
         auto model = block + 0x10;
-        auto text = reinterpret_cast<SmallString*>(model + 0x60);
+        auto text = reinterpret_cast<SmallString*>(model + model_field(0x60));
         if (text->length || text->capacity != 15) return ERROR_INVALID_DATA;
         // 88ad0 原生字符串 ctor，确认支持 >=4096 的对齐分配及释放元数据。
         using ConstructString = SmallString* (__fastcall*)(SmallString*, const char*);
         reinterpret_cast<ConstructString>(core_address(core_base, 0x88ad0))(text, lease->config.text);
-        *reinterpret_cast<uint32_t*>(model + 0x30) = lease->config.image_count ? 1 : 2;
-        *reinterpret_cast<uint32_t*>(model + 0x248) = lease->config.visibility;
-        if (!lease->config.image_count) *reinterpret_cast<uint32_t*>(model + 0x84) = 2;
+        *reinterpret_cast<uint32_t*>(model + model_field(0x30)) = lease->config.image_count ? 1 : 2;
+        *reinterpret_cast<uint32_t*>(model + model_field(0x248)) = lease->config.visibility;
+        if (!lease->config.image_count) *reinterpret_cast<uint32_t*>(model + model_field(0x84)) = 2;
         lease->report.stage = 161;
         for (uint32_t index = 0; index < lease->config.image_count; ++index) {
             const DWORD staged = stage_media_input(lease, index);
@@ -442,7 +445,7 @@ static DWORD prepare_native(Lease* lease) {
         if (lease->config.image_count) {
             using AssignVector = void (__fastcall*)(void*, const SharedMessage*, size_t);
             reinterpret_cast<AssignVector>(address(kAssignMediaVector))(
-                model + 0x118, lease->media, lease->config.image_count);
+                model + model_field(0x118), lease->media, lease->config.image_count);
         }
         if (!check_model(lease) || !emoticon_account_matches(lease->app, lease->config.self_wxid))
             return ERROR_INVALID_DATA;
@@ -605,10 +608,10 @@ static DWORD snapshot_native(Lease* lease, const SharedMessage* event, Snapshot*
             // 同时核对 event 回传模型的 client_id，不能只信任外层事件标签。
             char returned_id[256]{};
             const auto data = static_cast<const unsigned char*>(model->object);
-            if (!read_string(reinterpret_cast<const SmallString*>(data + 0x40), returned_id,
+            if (!read_string(reinterpret_cast<const SmallString*>(data + model_field(0x40)), returned_id,
                              sizeof(returned_id)) || std::strcmp(returned_id, lease->client_id))
                 return ERROR_INVALID_DATA;
-            const auto sns = reinterpret_cast<const SharedMessage*>(data + 0x280);
+            const auto sns = reinterpret_cast<const SharedMessage*>(data + model_field(0x280));
             if (sns->object && sns->control)
                 snapshot->sns_id = *static_cast<const uint64_t*>(sns->object);
         }
@@ -784,7 +787,9 @@ static DWORD dispatch(void* parameter, bool execute) {
     status = validate_config(*config);
     if (status) return status;
     const HMODULE core = GetModuleHandleW(L"Weixin.dll");
-    if (!core || !core_fingerprint(core) || InterlockedCompareExchange(&core_profile_id, 0, 0) != 2)
+    if (!core || !core_fingerprint(core) ||
+        (InterlockedCompareExchange(&core_profile_id, 0, 0) != 2 &&
+         InterlockedCompareExchange(&core_profile_id, 0, 0) != 3))
         return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     if (!anchors_match()) return ERROR_REVISION_MISMATCH;

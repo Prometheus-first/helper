@@ -396,8 +396,14 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         core = loaded_modules.get("weixin.dll")
         if not core: raise RuntimeError("微信核心模块尚未加载")
         baseline = json.loads((ROOT / "native/compatibility.json").read_text(encoding="utf-8"))
-        if compatible_core(core[1], baseline) is None:
+        build = compatible_core(core[1], baseline)
+        if build is None:
             raise RuntimeError("微信核心 DLL 指纹不匹配，拒绝加载")
+        if build.get('wechat_version') == '4.2.0.11':
+            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file') or
+                any(value is not None for value in (emoticon_path, group_operation, friend_request)))
+            if unsupported:
+                raise RuntimeError('微信 4.2.0.11 此功能尚未适配')
         if mode == "--remove" and dll.name.lower() not in loaded_modules:
             return {"mode": mode, "pid": pid, "code": 0, "dll_unloaded": True, "already_unloaded": True}
         other = DLL if generic else TEXT_DLL

@@ -58,11 +58,35 @@ class BotApplication:
             self._last_connection_error, self._last_connection_log = text, now
 
     def _connect(self):
+        # 收信线程可能在 start() 返回前收到消息。先暂存，直到按实际微信版本
+        # 更新插件能力；不能让旧版本的插件在新版本能力收缩期间处理消息。
+        gate_lock, pending = threading.Lock(), []
+        ready, discarded = False, False
+        def emit_when_ready(message):
+            with gate_lock:
+                if discarded:
+                    return
+                if not ready:
+                    if len(pending) < 128:
+                        pending.append(message)
+                    else:
+                        logger.warning('连接初始化期间消息过多，已丢弃超出缓冲区的消息')
+                    return
+            self._emit(message)
         try:
             candidate = self.backend_factory()
             self.backend = candidate
             self.service.bind(candidate)
-            candidate.start(self._emit)
+            candidate.start(emit_when_ready)
+            capabilities = getattr(candidate, 'capabilities', None)
+            if isinstance(capabilities, (set, frozenset)) and frozenset(capabilities) != self.plugins.capabilities:
+                self.plugins.capabilities = frozenset(capabilities)
+                # reload() 在新版本无法准备插件时会保留旧实例；先关闭不兼容实例，
+                # 避免旧连接的能力集合在新连接下继续运行。
+                for name, record in tuple(self.plugins.records.items()):
+                    if record.spec.requires - self.plugins.capabilities:
+                        self.plugins.disable(name, persist=False)
+                self.plugins.reload()
             self._connection_ready = True
             self._last_connection_error = ""
             if callable(getattr(candidate, "group_members", None)):
@@ -71,9 +95,21 @@ class BotApplication:
                 if account:
                     self._group_tracker = GroupMembershipTracker(account, candidate.session_id)
             self._next_group_poll = 0
+            while True:
+                with gate_lock:
+                    if not pending:
+                        ready = True
+                        break
+                    batch = pending[:]
+                    pending.clear()
+                for message in batch:
+                    self._emit(message)
             logger.info("微信已连接，PID=%s；收发范围：%s", candidate.pid,
                         getattr(candidate, "scope", "文本"))
         except Exception as error:
+            with gate_lock:
+                discarded = True
+                pending.clear()
             self._connection_ready = False
             self._log_connection_error(error)
             self._disconnect()

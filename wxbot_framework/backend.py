@@ -22,6 +22,13 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
                                            "voice.receive", "voice.send", "friend.voice.send", "group.voice.send",
                                            "emoticon.send", "emoticon.extract"})
 
+TEXT_42011_CAPABILITIES = CAPABILITIES | frozenset({
+    "friend.text.receive", "friend.text.send", "group.text.receive", "group.text.send",
+    "group.text.mention", "group.members.read", "message.recall",
+    "image.receive", "image.send", "file.receive", "file.send",
+    "friend.file.receive", "friend.file.send", "group.file.receive", "group.file.send",
+    "voice.receive", "voice.send", "friend.voice.send", "group.voice.send"})
+
 
 class NativeFileHelperBackend:
     scope = "文件传输助手文本"
@@ -58,7 +65,15 @@ class NativeFileHelperBackend:
 
 
 class NativeTextBackend(NativeFileHelperBackend):
-    scope = "文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理"
+    @property
+    def scope(self):
+        if self.raw.wechat_version == '4.2.0.11':
+            return '文本、语音、图片及文件收发，群艾特、文字撤回和群成员缓存'
+        return '文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理'
+
+    @property
+    def capabilities(self):
+        return TEXT_42011_CAPABILITIES if self.raw.wechat_version == '4.2.0.11' else TEXT_CAPABILITIES
 
     def __init__(self, root, config, *, data_root=None):
         data_root = Path(data_root or root)

@@ -25,7 +25,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 
 运行条件：Windows 10/11 x64、64 位 Python（已验证 3.13）、Microsoft Visual C++ x64 运行库。
 
-**当前适配微信 4.1.15.13 / 4.1.15.56 的指定构建。** 程序按核心 DLL 指纹校验，未知构建会拒绝加载。日常使用仓库内的两个桥接 DLL，无需 Visual Studio、Ghidra 或重新编译。各接口的实测范围见 [native/README.md](native/README.md)。
+**当前适配微信 4.1.15.13 / 4.1.15.56 / 4.2.0.11 的指定构建。** 4.2.0.11 已验证文本、图片、文件、语音、朋友圈读取和发布；联系人扫描、表情包、好友申请、群管理及朋友圈点赞评论等尚未适配。程序按核心 DLL 指纹校验，未知构建会拒绝加载。日常使用仓库内的两个桥接 DLL，无需 Visual Studio、Ghidra 或重新编译。各接口的实测范围见 [native/README.md](native/README.md)。
 
 ```powershell
 python -m pip install -r requirements.txt

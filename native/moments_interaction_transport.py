@@ -127,8 +127,9 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
     from wxbot_framework.account import read_current_account
     mods = _native().modules(pid)
     loaded, core = mods.get(Path(bridge_path).name.lower()), mods.get('weixin.dll')
+    profile = _core_profile(core[1]) if core else None
     if (not loaded or not core or Path(loaded[1]).resolve() != Path(bridge_path).resolve() or
-            _core_profile(core[1]) is None):
+            profile is None or profile.version != '4.1.15.56'):
         return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
     exports, _ = _exports(bridge_path)
     channel = _Channel(pid)

@@ -311,7 +311,7 @@ def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
         return None
     try:
         profile = select_memory_profile(read_memory, core_base)
-        if profile is None:
+        if profile is None or CONTACT_CACHE_VTABLE_RVA not in profile.rvas:
             return None
         rva = profile.rva
         def read(address, length):

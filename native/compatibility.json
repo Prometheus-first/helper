@@ -15,6 +15,12 @@
       "architecture": "x64",
       "size": 204305968,
       "sha256": "e0428a7b691853de496532523c2c09aa095f90941c37c9f4cfb3f137f3c66556"
+    },
+    {
+      "wechat_version": "4.2.0.11",
+      "architecture": "x64",
+      "size": 205929008,
+      "sha256": "745cdf2955fa5128cdb00c056c97571156a5f107406a9bb15ac0754f3246b201"
     }
   ]
 }

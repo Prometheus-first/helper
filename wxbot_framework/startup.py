@@ -27,7 +27,10 @@ def scan_logged_accounts(root):
             # 微信在枚举期间退出、或当前进程无读取权限时不参与选择。
             continue
         if profile:
-            accounts.append({"pid": pid, "wxid": profile["wxid"], "name": profile["name"]})
+            row = {"pid": pid, "wxid": profile["wxid"], "name": profile["name"]}
+            if profile.get('bridge_supported') is False:
+                row.update(bridge_supported=False, wechat_version=profile.get('wechat_version', ''))
+            accounts.append(row)
     return sorted(accounts, key=lambda row: row["pid"])
 
 
@@ -53,6 +56,9 @@ def ensure_account_binding(root, store, *, scan=None, input_fn=None, output=prin
         if timeout and clock() - started >= timeout:
             raise TimeoutError("等待账号绑定超时；请登录微信后重新启动")
         rows = candidates()
+        if rows and all(row.get('bridge_supported') is False for row in rows):
+            raise RuntimeError('当前微信版本仅支持账号识别，消息桥接尚未适配，暂不能启动机器人')
+        rows = [row for row in rows if row.get('bridge_supported') is not False]
         if not rows:
             now = clock()
             if last_wait is None or now - last_wait >= 30:

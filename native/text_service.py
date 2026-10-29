@@ -5,6 +5,8 @@ import logging
 import time
 import uuid
 import ctypes as c
+import hashlib
+from functools import lru_cache
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from wxbot_framework.mentions import parse_at_members
 from run_selftest import TEXT_DLL, K, check, modules, wechat_candidates, run
 from wxbot_framework.text import TextRouter, validate_target, validate_mentions
 from wxbot_framework.account import read_current_account, read_current_profile, select_account_process, validate_account
+from wxbot_framework.native_profiles import ACCOUNT_DISCOVERY_PROFILES, select_memory_profile
 from wxbot_framework.contacts import read_contact_name
 
 logger = logging.getLogger("NativeText")
@@ -23,9 +26,9 @@ def run_text(mode, **options):
     return run(mode, bridge_path=TEXT_DLL, **options)
 
 
-def _inspect_identity(pid, reader):
+def _inspect_identity(pid, reader, *, expected_core=None):
     core = modules(pid).get("weixin.dll")
-    if not core:
+    if not core or (expected_core is not None and core != expected_core):
         return None
     process = check(K.OpenProcess(0x410, False, pid), "只读核对微信账号")
     try:
@@ -44,15 +47,45 @@ def inspect_account(pid):
     return _inspect_identity(pid, read_current_account)
 
 
+@lru_cache(maxsize=8)
+def _discovery_profile_for_file(path, size, modified_ns):
+    candidates = [profile for profile in ACCOUNT_DISCOVERY_PROFILES if profile.size == size]
+    if not candidates:
+        return None
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(block)
+    stat = Path(path).stat()
+    if stat.st_size != size or stat.st_mtime_ns != modified_ns:
+        return None
+    return next((profile for profile in candidates if profile.sha256 == digest.hexdigest()), None)
+
+
 def inspect_profile(pid):
     """首次绑定只读取 wxid 和微信名，名称暂不可读时仍可使用 wxid。"""
+    core = modules(pid).get('weixin.dll')
+    if not core:
+        return None
+    path = Path(core[1])
+    stat = path.stat()
+    partial = _discovery_profile_for_file(str(path), stat.st_size, stat.st_mtime_ns)
     def read_profile(read, base):
         profile = read_current_profile(read, base)
         if profile:
             return profile
         account = read_current_account(read, base)
-        return {"wxid": account, "name": ""} if account else None
-    return _inspect_identity(pid, read_profile)
+        if account:
+            return {"wxid": account, "name": ""}
+        if partial:
+            found = read_current_profile(read, base, profiles=(partial,))
+            if not found:
+                account = read_current_account(read, base, profiles=(partial,))
+                found = {"wxid": account, "name": ""} if account else None
+            if found:
+                return {**found, 'bridge_supported': False, 'wechat_version': partial.version}
+        return None
+    return _inspect_identity(pid, read_profile, expected_core=core)
 
 
 def find_account_process(account=None):
@@ -98,6 +131,7 @@ class NativeTextService(NativeFileHelperService):
         self.last_send_result = None
         self._friend_requests = None
         self._friend_session_id = ""
+        self.wechat_version = None
 
     @property
     def self_wxid(self):
@@ -113,7 +147,10 @@ class NativeTextService(NativeFileHelperService):
             # 手动指定 PID 时也先只读核对，避免向其他账号加载 DLL。
             raise RuntimeError("目标进程登录的不是绑定的机器人账号，等待正确账号登录")
         result = super().start()
-        logger.info("当前登录微信ID=%s；好友和群聊文本、图片、文件已就绪", self.self_wxid)
+        if self.wechat_version == '4.2.0.11':
+            logger.info("当前登录微信ID=%s；4.2.0.11 文本、语音、图片及文件收发已就绪", self.self_wxid)
+        else:
+            logger.info("当前登录微信ID=%s；好友和群聊文本、图片、文件已就绪", self.self_wxid)
         return result
 
     def _read_account(self):
@@ -125,6 +162,11 @@ class NativeTextService(NativeFileHelperService):
             raise RuntimeError("微信尚未完成登录，自动等待当前账号就绪")
         if self.preferred_account and account != self.preferred_account:
             raise RuntimeError("目标进程登录的不是绑定的机器人账号，等待正确账号登录")
+        if self._channel is not None:
+            profile = select_memory_profile(self._channel.read_memory, self._channel.core_base)
+            if profile is None:
+                raise RuntimeError('微信版本布局尚未确认')
+            self.wechat_version = profile.version
         self.router.set_account(account)
         from wxbot_framework.friend_requests import PendingFriendRequests
         self._friend_session_id = uuid.uuid4().hex
@@ -555,7 +597,9 @@ class NativeTextService(NativeFileHelperService):
                 return {'supported': False, 'reason': '微信尚未连接'}
             self._check_account(force=True)
             result = moments_capabilities(self.pid, bridge_path=self._dll)
-            result['interaction_supported'] = result.get('inspect_supported') is True and interaction_capability(self._dll)
+            result['interaction_supported'] = (self.wechat_version == '4.1.15.56' and
+                                               result.get('inspect_supported') is True and
+                                               interaction_capability(self._dll))
             return result
 
     def interact_moments(self, payload):

@@ -77,6 +77,31 @@ VERIFIED_BUILDS = {
                    0x6AB0A378, 0xC0AE000),
     "4.1.15.56": (204305968, "e0428a7b691853de496532523c2c09aa095f90941c37c9f4cfb3f137f3c66556",
                    0x6AD083C8, 0xC34F000),
+    "4.2.0.11": (205929008, "745cdf2955fa5128cdb00c056c97571156a5f107406a9bb15ac0754f3246b201",
+                   0x6AE0A8D1, 0xC4DC000),
+}
+VERIFIED_TEXT_42011 = {
+    0x2010:0x2010, 0x45d10:0x45d10, 0x47220:0x47220, 0x47310:0x47310,
+    0x2fb010:0x311990, 0x6f4c70:0x71c4e0, 0x178f100:0x17cf210,
+    0x17b9010:0x17f9410, 0x229e790:0x23abce0, 0x54b02f0:0x571fd20,
+    0x8e53588:0x912c258, 0x74ab89c:0x76a43bc, 0x74ab8e0:0x76a4400,
+    0x7a60:0x7a60, 0x857a0:0x857a0, 0x9b5d0:0x9b5e0, 0x9f4b0:0x9f4c0,
+    0x36c740:0x384730, 0x389830:0x3a1880, 0x57fe90:0x59c5b0, 0x6f4d90:0x71c600,
+    0x2bab360:0x2cc5ca0, 0x22d8390:0x23e5d10, 0x3d9d990:0x3ec5540,
+    0x6be0020:0x6e52af0, 0x8e53718:0x912c3e8, 0x9af9078:0x9e26fd8,
+    0xb912690:0xbd0ce30, 0x8d804e8:0x9054b98, 0x8dfe2f8:0x90d4f88,
+    0x8edb0:0x8edb0, 0x10e390:0x115010, 0x356dd0:0x36edc0, 0xe5c720:0xea3e60,
+    0x2ba5330:0x2cbfc70, 0x2ba7940:0x2cc2270, 0x5240720:0x54becb0,
+    0x8dfb4b8:0x90d2148, 0x97ca198:0x9af3868,
+    0x88ad0:0x88ad0,
+}
+
+VERIFIED_MOMENTS_42011 = {
+    0x44776d0:0x4538550, 0x9391028:0x949aaa8, 0x108aee0:0x10a7f20,
+    0x306ade0:0x312de40, 0x2236900:0x22ce660, 0xf10a00:0xf32bd0,
+    0x4a8950:0x4ad740, 0x4a8850:0x4ad640, 0x4a8cc0:0x4adab0,
+    0x19e0c40:0x1a0ef00, 0x311640:0x3139d0, 0x90b60:0x90b60,
+    0x754bd18:0x76a43f8, 0x754cd48:0x76a5428, 0x754cd70:0x76a5450,
 }
 
 
@@ -98,10 +123,15 @@ def pure_compatibility_function():
 
 
 class NativeVersionBridgeTests(unittest.TestCase):
+    def test_42011_moments_publishing_mapping_is_exact(self):
+        block = source('core_version.h').split('static uintptr_t core_moments_address', 1)[1]
+        rows = re.findall(r'case\s+(0x[0-9a-f]+):\s*mapped\s*=\s*(0x[0-9a-f]+);', block)
+        self.assertEqual(len(rows), len(VERIFIED_MOMENTS_42011))
+        self.assertEqual({int(old, 16): int(new, 16) for old, new in rows}, VERIFIED_MOMENTS_42011)
     def test_public_compatibility_metadata_pins_both_exact_builds(self):
         baseline = json.loads(source("compatibility.json"))
         rows = baseline["profiles"]
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 3)
         self.assertEqual({row["wechat_version"] for row in rows}, set(VERIFIED_BUILDS))
         for row in rows:
             size, digest, _, _ = VERIFIED_BUILDS[row["wechat_version"]]
@@ -110,10 +140,10 @@ class NativeVersionBridgeTests(unittest.TestCase):
 
     def test_native_fingerprint_table_matches_independent_artifact_identity(self):
         text = source("core_version.h")
-        rows = re.findall(r"\{([12]),\s*(\d+)ull,\s*(0x[0-9a-f]+),\s*(0x[0-9a-f]+),\s*\{([^}]+)\}\}", text)
-        self.assertEqual(len(rows), 2)
+        rows = re.findall(r"\{([123]),\s*(\d+)ull,\s*(0x[0-9a-f]+),\s*(0x[0-9a-f]+),\s*\{([^}]+)\}\}", text)
+        self.assertEqual(len(rows), 3)
         for build_id, size, stamp, image_size, digest_bytes in rows:
-            expected = VERIFIED_BUILDS["4.1.15.13" if build_id == "1" else "4.1.15.56"]
+            expected = VERIFIED_BUILDS[{"1":"4.1.15.13", "2":"4.1.15.56", "3":"4.2.0.11"}[build_id]]
             digest = bytes(int(value, 16) for value in re.findall(r"0x[0-9a-f]+", digest_bytes)).hex()
             self.assertEqual((int(size), digest, int(stamp, 16), int(image_size, 16)), expected)
 
@@ -144,10 +174,14 @@ class NativeVersionBridgeTests(unittest.TestCase):
                 self.assertIsNone(verify("unused.dll", baseline))
 
     def test_native_mapping_is_exact_verified_set_and_has_no_duplicate_case(self):
-        rows = re.findall(r"case\s+(0x[0-9a-f]+):\s*return\s+(0x[0-9a-f]+);", source("core_version.h"))
-        self.assertEqual(len(rows), len(VERIFIED_RVAS))
-        self.assertEqual(len({old for old, _ in rows}), len(rows))
-        self.assertEqual({int(old, 16): int(new, 16) for old, new in rows}, VERIFIED_RVAS)
+        text = source('core_version.h')
+        new_block = text.split('if (profile == 3)', 1)[1].split('if (profile != 2)', 1)[0]
+        old_block = text.split('if (profile != 2)', 1)[1].split('static uintptr_t core_address', 1)[0]
+        for block, expected in ((new_block, VERIFIED_TEXT_42011), (old_block, VERIFIED_RVAS)):
+            rows = re.findall(r"case\s+(0x[0-9a-f]+):\s*return\s+(0x[0-9a-f]+);", block)
+            self.assertEqual(len(rows), len(expected))
+            self.assertEqual(len({old for old, _ in rows}), len(rows))
+            self.assertEqual({int(old, 16): int(new, 16) for old, new in rows}, expected)
         self.assertEqual(len(VERIFIED_RVAS), 55)
 
     def test_all_production_module_relative_references_use_verified_profile_resolver(self):
@@ -216,6 +250,25 @@ class NativeUnknownBuildPreflightTests(unittest.TestCase):
                 wrote.assert_not_called()
                 called.assert_not_called()
                 closed.assert_called_once_with(123)
+
+    def test_42011_unsupported_operation_is_rejected_before_injection(self):
+        native = self.native
+        def client_path(process, flags, output, length):
+            output.value = r'C:\synthetic\Weixin.exe'
+            return 1
+        version = SimpleNamespace(FileVersionMS=(4 << 16) | 2, FileVersionLS=(0 << 16) | 11)
+        with patch.object(native.K, 'OpenProcess', return_value=123), \
+             patch.object(native.K, 'QueryFullProcessImageNameW', side_effect=client_path), \
+             patch.object(native.K, 'CloseHandle', return_value=1), \
+             patch.object(native.K, 'VirtualAllocEx', side_effect=AssertionError('must not allocate')) as allocated, \
+             patch.object(native, 'remote_call', side_effect=AssertionError('must not inject')) as called, \
+             patch.object(native, 'modules', return_value={'weixin.dll':(0x180000000, r'C:\synthetic\Weixin.dll')}), \
+             patch.object(native, 'compatible_core', return_value={'wechat_version':'4.2.0.11'}), \
+             patch.object(native.pefile, 'PE', return_value=SimpleNamespace(VS_FIXEDFILEINFO=[version])):
+            with self.assertRaisesRegex(RuntimeError, '尚未适配'):
+                native.run('--probe-at', pid=999999, bridge_path=native.TEXT_DLL)
+            allocated.assert_not_called()
+            called.assert_not_called()
 
 
 if __name__ == "__main__":

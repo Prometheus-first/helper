@@ -48,7 +48,7 @@ def select_account_process(candidates, preferred_account=None):
     raise RuntimeError("等待微信账号完成登录")
 
 
-def read_current_account(read_memory, core_base):
+def read_current_account(read_memory, core_base, *, profiles=None):
     """返回稳定的当前账号 ID；未登录、读取中发生切换时返回 None。
 
     read_memory(address, length) 必须返回完整字节串，只读取已确认的对象链。
@@ -64,7 +64,7 @@ def read_current_account(read_memory, core_base):
         return struct.unpack("<Q", read(address, 8))[0]
 
     try:
-        profile = select_memory_profile(read_memory, core_base)
+        profile = select_memory_profile(read_memory, core_base, profiles=profiles)
         if profile is None:
             return None
         rva = profile.rva
@@ -100,13 +100,13 @@ def read_current_account(read_memory, core_base):
         return None
 
 
-def read_current_profile(read_memory, core_base):
+def read_current_profile(read_memory, core_base, *, profiles=None):
     """只读当前账号 ID 和微信名；不读取电话等其他资料，不建立群内绑定。"""
-    account = read_current_account(read_memory, core_base)
+    account = read_current_account(read_memory, core_base, profiles=profiles)
     if not account:
         return None
     try:
-        profile = select_memory_profile(read_memory, core_base)
+        profile = select_memory_profile(read_memory, core_base, profiles=profiles)
         if profile is None:
             return None
         def read(address, length):
@@ -129,7 +129,7 @@ def read_current_profile(read_memory, core_base):
         if (read(address, 32) != header or read(buffer, length) != body or
                 struct.unpack("<Q", read(core_base + profile.rva(APP_GLOBAL_RVA), 8))[0] != app or
                 struct.unpack("<Q", read(app + 0x68, 8))[0] != context or
-                read_current_account(read_memory, core_base) != account):
+                read_current_account(read_memory, core_base, profiles=profiles) != account):
             return None
         return {"wxid": account, "name": name.strip()}
     except (OSError, ValueError, struct.error):
