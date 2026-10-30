@@ -153,6 +153,15 @@ class DailySummaryTests(unittest.TestCase):
         self.assertNotIn(CAT, json.dumps(data))
         self.assertIn("1条", self.backend.sent[-1][1])
 
+    def test_scheduled_group_summary_reuses_current_group_records(self):
+        self.store.record(self.message('今天聊了晚饭'))
+        self.ctx.session_id = 'test'
+        self.plugin.scheduled_group_summary({'chat_id':ROOM}, self.ctx)
+        self.assertEqual(self.backend.sent[-1][0], ROOM)
+        self.assertIn('今日群聊总结', self.backend.sent[-1][1])
+        with self.assertRaises(ValueError):
+            self.plugin.scheduled_group_summary({'chat_id':'unknown@chatroom'}, self.ctx)
+
     def test_unknown_member_and_no_chat_do_not_call_model(self):
         self.plugin.on_message(self.message("/总结 未绑定"), self.ctx)
         self.assertIn("请本人先发送 /绑定", self.backend.sent[-1][1])

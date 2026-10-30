@@ -19,6 +19,7 @@
     <a href="#overview" data-page="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/></svg>运行概览</a>
     <a href="#plugins" data-page="plugins"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><rect x="14" y="14" width="6.5" height="6.5" rx="1"/></svg>插件管理<span id="nav-plugin-count" class="nav-count">—</span></a>
     <a href="#groups" data-page="groups"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7.5" r="3"/><path d="M3.5 20v-3.5a5.5 5.5 0 0 1 11 0V20M16 4.5a3 3 0 0 1 0 6M17 13a5 5 0 0 1 3.5 4.8V20"/></svg>群聊与会话</a>
+    <a href="#tasks" data-page="tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>定时任务</a>
     <a href="#contacts" data-page="contacts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="15.5" height="17" rx="2"/><path d="M3.5 7h3M3.5 12h3M3.5 17h3M10 17v-1a3.5 3.5 0 0 1 7 0v1"/><circle cx="13.5" cy="9" r="2.5"/></svg>联系人</a>
     <a href="#moments" data-page="moments"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>朋友圈</a>
     <a href="#models" data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>模型与语音</a>
@@ -69,6 +70,21 @@
     </section>
     <div class="settings-columns"><form id="groups-form" class="settings-section"><div class="section-heading"><div><h2>支持的群聊</h2></div></div><label for="group-ids">群 ID（每行一个）</label><textarea id="group-ids" name="groups" rows="7" placeholder="12345678@chatroom" spellcheck="false"></textarea><div id="group-name-list" class="group-name-list" aria-label="群聊备注"></div><div class="check-row"><label><input type="checkbox" name="history_enabled">记录当天文字</label><label><input type="checkbox" name="daily_clear">每天零点清理旧记录</label></div><div class="form-footer"><span class="save-hint">停止后保存，下次启动生效</span><button class="primary" type="submit">保存群聊配置</button></div></form><section class="settings-section discovered-section"><h2>已发现的群</h2><div id="discovered-chats" class="empty">暂无已接收消息的群。</div></section></div>
     <form id="scope-form" class="settings-section scope-section"><div class="section-heading"><div><h2>收发会话白名单</h2></div></div><label for="scope-ids">会话 ID（每行一个）</label><textarea id="scope-ids" name="chat_allowlist" rows="4" placeholder="留空允许全部会话" spellcheck="false"></textarea><details class="help-details"><summary>白名单与群配置的关系</summary><p>白名单非空时，支持群会自动加入。屏蔽群需从两处移除。</p></details><div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存白名单</button></div></form>
+  </section>
+  <section class="page hidden" id="page-tasks" aria-labelledby="tasks-heading">
+    <div class="page-heading"><h1 id="tasks-heading">定时任务</h1></div>
+    <form id="task-form" class="settings-section">
+      <h2 id="task-form-heading">新建任务</h2>
+      <input type="hidden" name="id">
+      <label>任务名称<input name="name" maxlength="100" required placeholder="例如：早安提醒"></label>
+      <label>任务类型<select name="action_id" id="task-action" required><option value="">正在读取任务类型…</option></select></label>
+      <datalist id="task-chat-options"></datalist>
+      <div id="task-parameters"></div>
+      <div class="field-pair"><label>执行方式<select name="kind"><option value="interval">按间隔</option><option value="daily">每天指定时间</option></select></label><label id="task-interval-label">间隔（分钟）<input name="interval_minutes" type="number" min="1" max="525600" step="1" value="5"></label><label id="task-time-label" class="hidden">每天时间<input name="daily_time" type="time" value="09:00"></label></div>
+      <label class="inline"><input name="enabled" type="checkbox" checked>启用任务</label>
+      <div class="form-footer"><span class="note">按电脑本地时间执行；离线期间错过的任务不会补发。</span><div><button id="task-cancel" class="text-button hidden" type="button">取消编辑</button><button id="task-save" class="primary" type="submit">保存任务</button></div></div>
+    </form>
+    <section class="section" aria-labelledby="task-list-heading"><div class="section-heading"><h2 id="task-list-heading">任务列表</h2><button id="task-refresh" class="secondary small" type="button">刷新</button></div><p id="task-status" class="account-error" role="status" aria-live="polite"></p><div class="table-container"><table class="task-table"><thead><tr><th>任务与会话</th><th>执行时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="task-list"><tr><td colspan="4" class="table-empty">暂无任务。</td></tr></tbody></table></div></section>
   </section>
   <section class="page hidden" id="page-contacts" aria-labelledby="contacts-heading">
     <div class="page-heading"><h1 id="contacts-heading">联系人 <span id="contact-count" class="count"></span></h1><button id="scan-contacts" class="primary" type="button" disabled>扫描联系人</button></div>

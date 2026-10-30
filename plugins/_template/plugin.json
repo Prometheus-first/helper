@@ -2,5 +2,20 @@
   "api": "v1",
   "description": "插件开发模板",
   "message_types": [1],
-  "requires": ["text.receive", "text.send"]
+  "requires": ["text.receive", "text.send"],
+  "business": [
+    {"function": "Plugin.on_message", "label": "消息回复"},
+    {"function": "Plugin.scheduled_greeting", "label": "定时问候"}
+  ],
+  "scheduled_actions": [
+    {
+      "id": "greeting",
+      "label": "发送问候",
+      "method": "scheduled_greeting",
+      "fields": [
+        {"name": "chat_id", "label": "会话 ID", "type": "chat", "required": true},
+        {"name": "text", "label": "问候内容", "type": "textarea", "required": true}
+      ]
+    }
+  ]
 }

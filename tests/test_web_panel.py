@@ -352,6 +352,35 @@ class HTTPTests(PanelFixture):
         for path in ('/app.js','/style.css'):
             self.assertEqual(self.request(path,token=False)[0],200)
 
+    def test_scheduled_tasks_http_create_list_and_delete(self):
+        self.controller.store.bind_account(self.accounts[0]['wxid'])
+        payload = {'name':'测试任务', 'chat_id':'filehelper', 'content':'测试',
+                   'kind':'interval', 'interval_seconds':300}
+        self.assertEqual(self.request('/api/scheduled-tasks', payload, token=False)[0], 403)
+        status, _, body = self.request('/api/scheduled-tasks', payload)
+        self.assertEqual(status, 200)
+        task = json.loads(body)['task']
+        self.assertEqual(json.loads(self.request('/api/scheduled-tasks')[2])['tasks'][0]['id'], task['id'])
+        self.assertEqual(self.request('/api/scheduled-tasks/delete', {'id':task['id']})[0], 200)
+        self.assertEqual(json.loads(self.request('/api/scheduled-tasks')[2])['tasks'], [])
+
+    def test_http_discovers_and_persists_declared_plugin_action(self):
+        self.controller.store.bind_account(self.accounts[0]['wxid'])
+        manifest = {'scheduled_actions':[{'id':'demo', 'label':'执行示例', 'method':'do_demo',
+                    'fields':[{'name':'count', 'label':'次数', 'type':'integer', 'required':True}]}]}
+        (self.root/'plugins/echo/plugin.json').write_text(json.dumps(manifest), encoding='utf-8')
+        actions = json.loads(self.request('/api/scheduled-actions')[2])['actions']
+        self.assertIn('plugin.echo.demo', [item['id'] for item in actions])
+        payload = {'name':'测试', 'kind':'daily', 'daily_time':'10:30', 'action_id':'plugin.echo.demo',
+                   'params':{'count':2}}
+        status, _, body = self.request('/api/scheduled-tasks', payload)
+        self.assertEqual(status, 200)
+        task = json.loads(body)['task']
+        self.assertEqual(task['params'], {'count':2})
+        (self.root/'plugins/echo/plugin.json').write_text('{}', encoding='utf-8')
+        self.assertEqual(self.request('/api/scheduled-tasks/toggle', {'id':task['id'], 'enabled':False})[0], 200)
+        self.assertFalse(json.loads(self.request('/api/scheduled-tasks')[2])['tasks'][0]['enabled'])
+
     def test_api_rejects_missing_token_cross_origin_and_rebound_host(self):
         self.assertEqual(self.request('/api/config',token=False)[0],403)
         self.assertEqual(self.request('/api/config',origin='https://attacker.invalid')[0],403)

@@ -470,6 +470,15 @@ dialog .form-footer { justify-content: flex-end; }
 .account-pid { font: 12px var(--font-data); color: var(--muted); }
 .account-action { text-align: right; }
 .account-error { color: var(--danger); font-size: 13px; margin-top: var(--space-2); overflow-wrap: anywhere; }
+.task-table td { vertical-align: top; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .task-table thead { display: none; }
+  .task-table tbody, .task-table tr { display: block; }
+  .task-table tr { padding: var(--space-4); border-top: 1px solid var(--rule); }
+  .task-table tr:first-child { border-top: 0; }
+  .task-table td { display: block; border: 0; padding: var(--space-2) 0; }
+  .task-table .plugin-actions { justify-content: flex-start; flex-wrap: wrap; }
+}
 .batch-result { margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--rule); border-radius: var(--radius-control); background: var(--surface); font-size: 13px; }
 @media (max-width: 600px) {
   .account-picker .section-heading { flex-wrap: wrap; gap: var(--space-3); }

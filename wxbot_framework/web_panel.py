@@ -26,6 +26,8 @@ from .plugin_business import view as business_view, merge as merge_business
 from .runtime import BotApplication
 from .startup import scan_logged_accounts
 from .text import validate_target, validate_mentions
+from .scheduled_tasks import ScheduledTasks
+from .scheduled_actions import discover_actions
 
 __all__ = ['LogBuffer', 'PanelController', 'PanelError', 'PanelHandler', 'PanelServer',
            'atomic_json', 'read_json', 'redact']
@@ -98,6 +100,7 @@ class PanelController:
         self.logs = LogBuffer()
         self.messages = MessageBuffer(sanitize=redact)
         self.send_jobs = {}
+        self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
         self._moments_identity = None
         self._moments_read_lock = threading.Lock()
         self._moments_seen = OrderedDict()
@@ -208,6 +211,10 @@ class PanelController:
                 self.worker = threading.Thread(target=run, name='ManagedBot', daemon=False)
                 self.worker.start()
                 self.state = 'running'
+                try:
+                    self.scheduled_tasks.start()
+                except Exception:
+                    logging.getLogger('WebPanel').exception('定时任务启动失败')
             except Exception:
                 lease.close()
                 raise
@@ -235,6 +242,7 @@ class PanelController:
         self.start()
 
     def close(self):
+        self.scheduled_tasks.close()
         self.moments.close()
         self.moments_interactions.close()
         self.stop_event.set()
@@ -538,6 +546,37 @@ class PanelController:
                 raise PanelError('微信联系人缓存尚未就绪，请稍后重试', 409)
             return dict(snapshot, session_id=session)
         return self._call(query)
+
+    def list_scheduled_tasks(self):
+        self.scheduled_tasks.start()
+        account = self.store.load().get('wechat_account')
+        return {'tasks': [row for row in self.scheduled_tasks.list()['tasks'] if row.get('account') == account]}
+
+    def scheduled_action_types(self):
+        return {'actions': discover_actions(self.root, self.plugin_sources)}
+
+    def execute_scheduled_plugin(self, action_id, params, session, account, valid):
+        with self.lock:
+            app = self.app
+            if (self.state != 'running' or app is None or not app._connection_ready or
+                    app.config.get('wechat_account') != account or app.stop_event.is_set()):
+                raise PanelError('机器人或账号已停止', 409)
+            allowed = list(app.config.get('chat_allowlist', []))
+        def still_current():
+            with self.lock:
+                current = (self.app is app and self.state == 'running' and app._connection_ready and
+                           not app.stop_event.is_set() and getattr(app.backend, 'session_id', None) == session)
+            return bool(current and valid())
+        return app.plugins.run_scheduled(action_id, params, session, allowed, still_current)
+
+    def save_scheduled_task(self, data):
+        return self.scheduled_tasks.save(data)
+
+    def delete_scheduled_task(self, data):
+        return self.scheduled_tasks.delete(data)
+
+    def toggle_scheduled_task(self, data):
+        return self.scheduled_tasks.toggle(data)
 
     def send_status(self, identifier):
         with self.lock:

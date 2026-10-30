@@ -107,6 +107,12 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.start_selected(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
+                if path == '/api/scheduled-tasks':
+                    return self.send(200, controller.save_scheduled_task(data))
+                if path == '/api/scheduled-tasks/delete':
+                    return self.send(200, controller.delete_scheduled_task(data))
+                if path == '/api/scheduled-tasks/toggle':
+                    return self.send(200, controller.toggle_scheduled_task(data))
                 if path == '/api/moments-publish':
                     return self.send(200, controller.publish_moments(data))
                 if path == '/api/moments-read':
@@ -128,6 +134,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, {'ok': True})
             if path == '/api/state':
                 return self.send(200, controller.snapshot())
+            if path == '/api/scheduled-tasks':
+                return self.send(200, controller.list_scheduled_tasks())
+            if path == '/api/scheduled-actions':
+                return self.send(200, controller.scheduled_action_types())
             if path == '/api/config':
                 return self.send(200, controller.configuration())
             if path == '/api/plugin-source':

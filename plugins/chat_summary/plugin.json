@@ -7,6 +7,14 @@
     "group.text.receive",
     "group.text.send"
   ],
+  "scheduled_actions": [
+    {
+      "id": "group_summary",
+      "label": "总结群聊",
+      "method": "scheduled_group_summary",
+      "fields": [{"name": "chat_id", "label": "群 ID", "type": "chat", "required": true}]
+    }
+  ],
   "business": [
     {
       "function": "Plugin.reply_summary",

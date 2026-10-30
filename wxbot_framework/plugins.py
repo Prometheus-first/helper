@@ -17,8 +17,37 @@ from .config import validate_name
 from .sdk import PluginContext, LegacyService
 from .speech import SpeechController
 from .plugin_sources import PluginSources
+from .scheduled_actions import actions_from_manifest, validate_params
 
 logger = logging.getLogger("Plugins")
+
+
+class ScheduledService:
+    """将定时回调绑定到触发时的微信连接和收发白名单。"""
+    METHODS = {'send_text', 'send_image', 'send_file', 'send_voice', 'send_emoticon',
+               'send_at_text', 'export_emoticons', 'group_members', 'group_member_name',
+               'group_member_role', 'contacts', 'accept_friend'}
+    SENDS = {'send_text', 'send_image', 'send_file', 'send_voice', 'send_emoticon', 'send_at_text'}
+
+    def __init__(self, service, session, allowlist, valid):
+        self._service, self._session, self._allowlist = service, session, frozenset(allowlist)
+        self._valid = valid
+
+    def __getattr__(self, name):
+        if name not in self.METHODS:
+            raise AttributeError(name)
+        method = getattr(self._service, name)
+        def call(*args, **kwargs):
+            if not self._valid():
+                raise RuntimeError('定时任务已取消或停止')
+            requested = kwargs.get('expected_session')
+            if requested is not None and requested != self._session:
+                raise RuntimeError('定时任务所属的微信连接已变化')
+            if name in self.SENDS and self._allowlist and (not args or args[0] not in self._allowlist):
+                raise RuntimeError('目标不在收发白名单中')
+            kwargs['expected_session'] = self._session
+            return method(*args, **kwargs)
+        return call
 
 
 @dataclass(frozen=True)
@@ -271,6 +300,40 @@ class PluginManager:
         for record in records:
             if (only is None or record.spec.name == only) and message.type in record.spec.message_types:
                 record.enqueue(message)
+
+    def run_scheduled(self, action_id, params, session, allowlist, valid=lambda: True):
+        parts = action_id.split('.') if isinstance(action_id, str) else []
+        if len(parts) != 3 or parts[0] != 'plugin':
+            raise ValueError('定时动作不存在')
+        name = validate_name(parts[1])
+        with self._lock:
+            record = self.records.get(name)
+        if record is None:
+            raise RuntimeError('对应插件未启用或未加载')
+        # 和普通回调串行；重载/停用时不能同时执行两个实例。
+        if not record.callback_lock.acquire(timeout=2):
+            raise RuntimeError('插件正忙，跳过定时动作')
+        try:
+            if not record.active or not self.service.session_is_current(session) or not valid():
+                raise RuntimeError('插件或微信连接已停止')
+            manifest_path = record.spec.path.parent / 'plugin.json'
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+            action = next((item for item in actions_from_manifest(name, manifest) if item['id'] == action_id), None)
+            if action is None:
+                raise ValueError('插件已不提供这个定时动作')
+            values = validate_params(action, params)
+            callback = getattr(record.instance, action['method'], None)
+            if not callable(callback):
+                raise ValueError('插件定时动作没有对应方法')
+            context = copy.copy(record.context)
+            context._service = ScheduledService(self.service, session, allowlist, valid)
+            context.session_id = session
+            result = callback(values, context)
+            if result is False:
+                raise RuntimeError('插件报告任务未完成')
+            return result
+        finally:
+            record.callback_lock.release()
 
     def status(self):
         specs = self.discover()

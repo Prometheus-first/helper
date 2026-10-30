@@ -114,6 +114,34 @@ class FrameworkTests(unittest.TestCase):
                                            "native_sender": "self_test", "native_receiver": "filehelper",
                                            "sequence": sequence}, self.backend.session_id)
 
+    def test_scheduled_plugin_action_session_allowlist_and_disable(self):
+        manifest = {'api':'v1', 'requires':['text.send'], 'scheduled_actions':[
+            {'id':'greet', 'label':'定时问候', 'method':'greet', 'fields':[
+                {'name':'chat_id', 'label':'会话', 'type':'chat', 'required':True},
+                {'name':'text', 'label':'内容', 'type':'text', 'required':True}]}]}
+        self.create_plugin('scheduled_test',
+            'class Plugin:\n def on_message(self, m, c): pass\n'
+            ' def greet(self, p, c): return c.send_text(p["chat_id"], p["text"])\n', manifest=manifest)
+        self.manager.load_one('scheduled_test')
+        action = 'plugin.scheduled_test.greet'
+        params = {'chat_id':'filehelper', 'text':'定时测试'}
+        self.manager.run_scheduled(action, params, self.backend.session_id, ['filehelper'])
+        self.assertEqual(self.backend.sent, [('filehelper', '定时测试')])
+        with self.assertRaises(RuntimeError):
+            self.manager.run_scheduled(action, params, 'old_session', ['filehelper'])
+        with self.assertRaises(RuntimeError):
+            self.manager.run_scheduled(action, params, self.backend.session_id, ['different_chat'])
+        with self.assertRaises(RuntimeError):
+            self.manager.run_scheduled(action, params, self.backend.session_id, [], lambda: False)
+        with self.assertRaises(ValueError):
+            self.manager.run_scheduled('plugin.scheduled_test.on_message', params, self.backend.session_id, [])
+        with self.assertRaises(ValueError):
+            self.manager.run_scheduled(action, {**params, 'extra':'invalid'}, self.backend.session_id, [])
+        self.manager.disable('scheduled_test')
+        with self.assertRaises(RuntimeError):
+            self.manager.run_scheduled(action, params, self.backend.session_id, [])
+        self.assertEqual(len(self.backend.sent), 1)
+
     def test_new_and_legacy_plugins_receive_unicode_snapshot(self):
         self.manager.reload()
         source = {"msg": "echo 中文 🌸\n第二行", "from_wxid": "filehelper"}
