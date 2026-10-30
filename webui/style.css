@@ -216,6 +216,10 @@ main:focus { outline: none; }
 .section { margin-top: var(--space-8); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
 .section-heading p { margin-top: var(--space-1); font-size: 13px; }
+.wechat-login { margin-bottom: var(--space-4); padding: var(--space-4) var(--space-5); border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); }
+.wechat-login-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.wechat-login p { color: var(--muted); font-size: 13px; margin-top: var(--space-2); }
+.wechat-login-qr { display: block; width: min(220px, 100%); height: auto; margin-top: var(--space-4); background: #fff; }
 .count { font-size: 12px; font-weight: 400; margin-left: var(--space-2); color: var(--quiet); font-variant-numeric: tabular-nums; }
 .table-container { width: 100%; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; text-align: left; table-layout: fixed; }
@@ -482,7 +486,7 @@ dialog .form-footer { justify-content: flex-end; }
 .batch-result { margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--rule); border-radius: var(--radius-control); background: var(--surface); font-size: 13px; }
 @media (max-width: 600px) {
   .account-picker .section-heading { flex-wrap: wrap; gap: var(--space-3); }
-  .account-controls { width: 100%; gap: var(--space-2); }
+  .account-controls { width: 100%; gap: var(--space-2); flex-wrap: wrap; }
   .account-controls .count { margin-right: auto; }
   .account-table thead { display: none; }
   .account-table tbody { display: block; }

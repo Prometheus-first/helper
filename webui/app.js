@@ -35,6 +35,7 @@ let robot = sessionStorage.getItem('helper-robot') || 'default', robotRows = [],
 let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
+let loginAttempt = '', loginGeneration = 0, loginTimer = null, loginStarting = false;
 let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
 let sendChatsAttempted = false;
 let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskLoading=false, taskLastFetch=0, taskSignature='';
@@ -49,7 +50,7 @@ const pluginNames = {anti_recall:['文字防撤回'], anti_recall_image:['图片
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, body, identifier = robot) {
-  const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
+  const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
   const response = await fetch('/api/' + path + scope, {method: body === undefined ? 'GET' : 'POST', cache:'no-store',
     headers:{'X-Helper-Token':token, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
     ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -190,6 +191,54 @@ async function launchAccounts(rows) {
     await loadConfig();
   }finally{batchStarting=false;renderAccounts();}
 }
+async function closeWechatLogin() {
+  const attempt=loginAttempt; loginGeneration++; loginAttempt=''; loginStarting=false;
+  clearTimeout(loginTimer); $('#wechat-login-qr').removeAttribute('src');
+  $('#wechat-login-qr').classList.add('hidden'); $('#wechat-login-panel').classList.add('hidden');
+  $('#login-wechat').disabled=false;
+  if(attempt){try{await api('wechat-login/cancel',{attempt_id:attempt});}catch{}}
+}
+async function pollWechatLogin(attempt,generation) {
+  if(generation!==loginGeneration || attempt!==loginAttempt)return;
+  try {
+    const result=await api('wechat-login/status?attempt_id='+encodeURIComponent(attempt));
+    if(generation!==loginGeneration || attempt!==loginAttempt)return;
+    const image=$('#wechat-login-qr'), status=$('#wechat-login-status');
+    if(result.status==='qr_available'){
+      image.src='data:image/png;base64,'+result.qrcode_base64; image.classList.remove('hidden');
+      status.textContent='请使用手机微信扫码，并在手机确认登录。';
+    }else{
+      image.removeAttribute('src');image.classList.add('hidden');
+      status.textContent=result.status==='logged_in'?'已登录，可在上方选择账号。':
+        result.status==='exited'?'微信进程已退出，请在微信中重新打开登录窗口。':
+        result.status==='starting'?'正在启动微信…':'等待二维码，请保持微信登录窗口打开且未最小化。';
+    }
+    if(result.status==='logged_in'){
+      loginAttempt='';$('#login-wechat').disabled=false;
+      try{await api('wechat-login/cancel',{attempt_id:attempt});await loadRobots();await loadAccounts();}catch{}
+      return;
+    }
+    if(result.status==='exited'){loginAttempt='';$('#login-wechat').disabled=false;try{await api('wechat-login/cancel',{attempt_id:attempt});}catch{}return;}
+    loginTimer=setTimeout(()=>pollWechatLogin(attempt,generation),2000);
+  } catch(error) {
+    if(generation!==loginGeneration)return;
+    $('#wechat-login-qr').removeAttribute('src');$('#wechat-login-qr').classList.add('hidden');
+    $('#wechat-login-status').textContent=error.message;$('#login-wechat').disabled=false;
+    const old=loginAttempt;loginAttempt='';if(old){try{await api('wechat-login/cancel',{attempt_id:old});}catch{}}
+  }
+}
+$('#login-wechat').onclick=async()=>{
+  if(loginStarting || loginAttempt)return;
+  loginStarting=true;const generation=++loginGeneration;$('#login-wechat').disabled=true;
+  $('#wechat-login-panel').classList.remove('hidden');$('#wechat-login-status').textContent='正在启动微信…';
+  try{
+    const result=await api('wechat-login/start',{});
+    if(generation!==loginGeneration){try{await api('wechat-login/cancel',{attempt_id:result.attempt_id});}catch{}return;}
+    loginAttempt=result.attempt_id;await pollWechatLogin(loginAttempt,generation);
+  }catch(error){if(generation===loginGeneration){$('#wechat-login-status').textContent=error.message;$('#login-wechat').disabled=false;}}
+  finally{loginStarting=false;}
+};
+$('#close-wechat-login').onclick=closeWechatLogin;
 function fill(form, values) {
   if (!values) return;
   for (const input of form.elements) {

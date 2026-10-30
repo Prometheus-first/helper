@@ -169,6 +169,7 @@ class RobotHub:
         self.workers, self.factory = {}, worker_factory
         self.scan = scan
         self.lock = threading.RLock()
+        self._wechat_login = None
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         if not self.registry.exists():
             atomic_json(self.registry, {'robots': []})
@@ -251,6 +252,15 @@ class RobotHub:
             result.append({**row, 'robot_id': profile.get('id'), 'state': profile.get('state', 'stopped'),
                            'connected': profile.get('connected', False), 'selectable': not reason, 'reason': reason})
         return {'accounts': result}
+
+    def wechat_login(self):
+        with self.lock:
+            if self.stop_event.is_set():
+                raise PanelError('管理服务正在退出', 409)
+            if self._wechat_login is None:
+                from .wechat_login import WechatLoginManager
+                self._wechat_login = WechatLoginManager(self.root)
+            return self._wechat_login
 
     def prepare_account(self, data):
         with self.lock:
@@ -369,6 +379,9 @@ class RobotHub:
         self.stop_event.set()
         with self.lock:
             workers = list(self.workers.values())
+            login = self._wechat_login
+        if login is not None:
+            login.close()
         threads = [threading.Thread(target=worker.close) for worker in workers]
         for thread in threads: thread.start()
         for thread in threads: thread.join()

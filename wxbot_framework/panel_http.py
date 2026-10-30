@@ -69,7 +69,9 @@ class PanelHandler(BaseHTTPRequestHandler):
                 kind = {'html': 'text/html', 'css': 'text/css', 'js': 'application/javascript'}[name.rsplit('.', 1)[1]]
                 return self.send(200, raw, kind + '; charset=utf-8')
             hub = controller if hasattr(controller, 'robot') else None
-            global_routes = ('/api/robots', '/api/accounts', '/api/accounts/prepare', '/api/accounts/start')
+            global_routes = ('/api/robots', '/api/accounts', '/api/accounts/prepare', '/api/accounts/start',
+                             '/api/wechat-login/start', '/api/wechat-login/attach',
+                             '/api/wechat-login/status', '/api/wechat-login/cancel')
             if hub is not None and path not in global_routes:
                 robot_id = parse_qs(parsed.query).get('robot', ['default'])[0]
                 controller = hub.robot(robot_id)
@@ -105,6 +107,12 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.prepare_account(data))
                 if path == '/api/accounts/start' and hub is not None:
                     return self.send(200, hub.start_selected(data))
+                if path == '/api/wechat-login/start' and hub is not None:
+                    return self.send(200, hub.wechat_login().start(data))
+                if path == '/api/wechat-login/attach' and hub is not None:
+                    return self.send(200, hub.wechat_login().attach(data))
+                if path == '/api/wechat-login/cancel' and hub is not None:
+                    return self.send(200, hub.wechat_login().cancel(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
                 if path == '/api/scheduled-tasks':
@@ -146,6 +154,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.plugin_business(parse_qs(parsed.query).get('name', [''])[0]))
             if path == '/api/accounts':
                 return self.send(200, hub.logged_accounts() if hub is not None else {'accounts': controller.accounts()})
+            if path == '/api/wechat-login/status' and hub is not None:
+                return self.send(200, hub.wechat_login().status(parse_qs(parsed.query).get('attempt_id', [''])[0]))
             if path == '/api/chats':
                 return self.send(200, {'chats': controller.chats()})
             if path == '/api/group-members':

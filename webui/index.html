@@ -37,7 +37,12 @@
   <section class="page" id="page-overview" aria-labelledby="overview-heading">
     <div class="page-heading"><div><h1 id="overview-heading">运行概览</h1></div></div>
     <section class="account-picker" aria-labelledby="accounts-heading">
-      <div class="section-heading"><h2 id="accounts-heading">已登录微信 <span id="account-total" class="count">—</span></h2><div class="account-controls"><span id="account-selection-count" class="count">已选 0</span><button id="refresh-accounts" class="secondary">刷新账号</button><button id="start-selected" class="primary" disabled>启动所选</button></div></div>
+      <div class="section-heading"><h2 id="accounts-heading">已登录微信 <span id="account-total" class="count">—</span></h2><div class="account-controls"><span id="account-selection-count" class="count">已选 0</span><button id="login-wechat" class="secondary" type="button">登录微信</button><button id="refresh-accounts" class="secondary">刷新账号</button><button id="start-selected" class="primary" disabled>启动所选</button></div></div>
+      <section id="wechat-login-panel" class="wechat-login hidden" aria-labelledby="wechat-login-heading">
+        <div class="wechat-login-top"><h3 id="wechat-login-heading">登录微信</h3><button id="close-wechat-login" class="text-button small" type="button">关闭</button></div>
+        <p id="wechat-login-status" role="status" aria-live="polite">正在启动微信…</p>
+        <img id="wechat-login-qr" class="wechat-login-qr hidden" alt="微信登录二维码，请用手机微信扫描">
+      </section>
       <div class="table-container"><table class="account-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">微信账号</th><th scope="col">进程</th><th scope="col">状态</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="account-list"><tr><td colspan="5" class="table-empty">正在识别账号…</td></tr></tbody></table></div>
       <p id="account-error" class="account-error hidden" role="status"></p>
       <div id="batch-result" class="batch-result hidden" role="status" aria-live="polite"></div>
