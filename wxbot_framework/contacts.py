@@ -300,7 +300,7 @@ def read_contact_directory(read_memory, core_base, *, expected_account):
         return None
 
 
-def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
+def _read_friend_cache_name(read_memory, core_base, wxid, *, expected_account=None):
     """按实际成员 ID 读取微信名。缺失、切换、重建缓存时返回 None，不猜名字。
 
     仅遍历已核对的缓存对象，不调用微信函数、不扫描整个进程、不读取群昵称或备注。
@@ -398,3 +398,39 @@ def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
         return None
     except (OSError, ValueError, struct.error):
         return None
+
+
+def _read_group_contact_cache_name(read_memory, core_base, wxid, *, expected_account=None):
+    """读取 4.2.0.11 已验证的群成员／非好友 LRU，不触发网络请求。"""
+    account = read_current_account(read_memory, core_base)
+    if not account or (expected_account is not None and account != expected_account):
+        return None
+    try:
+        profile = select_memory_profile(read_memory, core_base)
+        if profile is None or profile.version != '4.2.0.11':
+            return None
+        # 与群缓存使用相同的 LRU 链表及哈希索引布局；仅按真实 ID 查找。
+        from .group_members import _StableReader, _find_room
+        directory = _DirectoryReader(read_memory)
+        _, cache = _directory_cache(directory, core_base, profile.rva)
+        reader = _StableReader(read_memory)
+        contact = _find_room(reader, cache + 0xD0, wxid)  # LRU 起点为 cache + 0x108
+        if not contact or reader.string(contact + 8, 127, encoding='ascii') != wxid:
+            return None
+        name = reader.string(contact + 0xD8, 256, empty=True).strip()
+        if not name or len(name) > 64 or any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+            return None
+        reader.verify()
+        directory.verify()
+        if read_current_account(read_memory, core_base) != account:
+            return None
+        return name
+    except (OSError, ValueError, ContactDirectoryError, struct.error):
+        return None
+
+
+def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):
+    """按成员 ID 查询微信名；好友缓存优先，缺失时查询已验证的群成员缓存。"""
+    validate_account(wxid)
+    return (_read_friend_cache_name(read_memory, core_base, wxid, expected_account=expected_account)
+            or _read_group_contact_cache_name(read_memory, core_base, wxid, expected_account=expected_account))

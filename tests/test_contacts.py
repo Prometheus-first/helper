@@ -1,6 +1,8 @@
 """默认微信名读取和缓存变化验证，不连接微信。"""
 import struct
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from test_account import AccountMemory, BASE, CONTEXT, SELF
 from wxbot_framework.account import CONTEXT_VTABLE_RVA, IDENTITY_GETTER_RVA
@@ -96,3 +98,55 @@ class ContactTests(unittest.TestCase):
         for name in ('', '错误\n昵称', 'x' * 65):
             ram = ContactMemory(name)
             self.assertIsNone(read_contact_name(ram.read, BASE, PEER))
+
+
+class GroupContactCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.ram = ContactMemory('新群友')
+        self.ram.q(CACHE + 0xD8, 0)  # 不在好友缓存中
+        head, entry, sentinel, buckets, node = [0x800000000 + i * 0x1000 for i in range(5)]
+        for address in (head, entry, sentinel, buckets, node):
+            self.ram.add(address, 0x100)
+        self.ram.write(CACHE + 0x108, struct.pack('<10Q', head, 1, 0, sentinel, 1,
+            buckets, buckets + 32, buckets + 32, 1, 2))
+        self.ram.write(head, struct.pack('<QQ', entry, entry))
+        self.ram.write(entry, struct.pack('<QQ', head, head))
+        self.ram.s(entry + 0x10, PEER, STRINGS + 384)
+        self.ram.q(entry + 0x30, CONTACT)
+        for offset in (0, 16):
+            self.ram.write(buckets + offset, struct.pack('<QQ', sentinel, sentinel))
+        hashed = 0xCBF29CE484222325
+        for byte in PEER.encode('ascii'):
+            hashed = ((hashed ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        self.ram.write(buckets + (hashed & 1) * 16, struct.pack('<QQ', node, node))
+        self.ram.s(node + 0x10, PEER, STRINGS + 512)
+        self.ram.q(node + 0x30, entry)
+        profile = SimpleNamespace(version='4.2.0.11', rva=lambda value: value,
+                                  rvas={CONTACT_CACHE_VTABLE_RVA: CONTACT_CACHE_VTABLE_RVA})
+        self.profile = patch('wxbot_framework.contacts.select_memory_profile', return_value=profile)
+        self.profile.start()
+        self.addCleanup(self.profile.stop)
+
+    def test_nonfriend_name_is_read_by_verified_member_id(self):
+        self.assertEqual(read_contact_name(self.ram.read, BASE, PEER, expected_account=SELF), '新群友')
+        self.assertIsNone(read_contact_name(self.ram.read, BASE, 'wxid_missing', expected_account=SELF))
+        self.assertIsNone(read_contact_name(self.ram.read, BASE, PEER, expected_account='wxid_other'))
+
+    def test_changed_snapshot_and_mismatched_identity_are_rejected(self):
+        changed = False
+        def changing(address, length):
+            nonlocal changed
+            result = self.ram.read(address, length)
+            if address == CONTACT + 0xD8 and not changed:
+                changed = True
+                self.ram.s(CONTACT + 0xD8, '其他名字', STRINGS + 256)
+            return result
+        self.assertIsNone(read_contact_name(changing, BASE, PEER, expected_account=SELF))
+        self.ram.s(CONTACT + 8, 'wxid_wrong', STRINGS + 128)
+        self.assertIsNone(read_contact_name(self.ram.read, BASE, PEER, expected_account=SELF))
+
+    def test_unknown_version_never_reads_nonfriend_cache(self):
+        with patch('wxbot_framework.contacts.select_memory_profile',
+                   return_value=SimpleNamespace(version='unknown', rva=lambda value: value,
+                                                rvas={CONTACT_CACHE_VTABLE_RVA: CONTACT_CACHE_VTABLE_RVA})):
+            self.assertIsNone(read_contact_name(self.ram.read, BASE, PEER, expected_account=SELF))
