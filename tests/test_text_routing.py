@@ -84,6 +84,29 @@ class TextRoutingTests(unittest.TestCase):
         own.text = (FRIEND + ":\n意气风发").encode("utf-8")
         self.assertEqual(service._map_message(own)["sender_id"], FRIEND)
 
+    def test_native_long_text_retains_private_group_mentions_and_id(self):
+        if str(NATIVE) not in sys.path:
+            sys.path.insert(0, str(NATIVE))
+        from text_service import NativeTextService
+        from filehelper_service import ReceivedMediaMessageV6
+        service = NativeTextService(pid=123)
+        service.router.set_account(SELF)
+        body = '长消息🌸\n' + '\n'.join(f'abc{index:012d}' for index in range(240))
+        self.assertGreater(len(body.encode('utf-8')), 1023)
+        for sender, raw, chat in ((FRIEND, body, FRIEND), (GROUP, FRIEND + ':\n' + body, GROUP)):
+            source = f'<msgsource><atuserlist>{SELF}</atuserlist></msgsource>'
+            message = ReceivedMediaMessageV6(type=1, sender=sender.encode(), receiver=SELF.encode(),
+                reserved=4, image_xml=raw.encode('utf-8'), mention_source=source.encode(),
+                native_message_id=1234567890123)
+            mapped = service._map_message(message)
+            self.assertEqual((mapped['chat_id'], mapped['sender_id'], mapped['msg']), (chat, FRIEND, body))
+            self.assertEqual(mapped['native_message_id'], '1234567890123')
+            self.assertEqual(mapped['is_at_self'], sender == GROUP)
+        unavailable = ReceivedMediaMessageV6(type=1, sender=FRIEND.encode(), receiver=SELF.encode(), reserved=8)
+        with self.assertLogs('NativeText', 'WARNING') as logs:
+            self.assertIsNone(service._map_message(unavailable))
+        self.assertIn('超过接收上限或不可读取', '\n'.join(logs.output))
+
     def test_account_change_stops_old_connection(self):
         self.identify()
         with self.assertRaises(RuntimeError):
@@ -120,7 +143,7 @@ class TextRoutingTests(unittest.TestCase):
             exports = {item.name for item in pe.DIRECTORY_ENTRY_EXPORT.symbols}
             self.assertEqual(pe.FILE_HEADER.Machine, 0x8664)
             self.assertTrue({b"WxSendText", b"WxSendAtText", b"WxStartTextReceiver", b"WxPollTextMessage", b"WxPollTextMessageV2",
-                             b"WxWaitForTasks", b"WxRemoveSelfTest"}.issubset(exports))
+                             b"WxPollMediaMessageV7", b"WxWaitForTasks", b"WxRemoveSelfTest"}.issubset(exports))
 
 
 if __name__ == "__main__":

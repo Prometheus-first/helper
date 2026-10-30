@@ -74,6 +74,53 @@ int main() {
     assert(WxPollMediaMessageV4(current.get()) == 0);
     assert(current->present && (current->reserved & 1) && !current->image_xml[0]);
 
+    // Feed a complete synthetic AddMsg batch through the actual text hook copy.
+    // Long text uses V7's payload field while V6 keeps its prior behavior.
+    {
+        unsigned char text_raw[0x78]{};
+        const char* room = "123456789@chatroom";
+        SmallString from = voice_borrow(room, std::strlen(room));
+        SmallString to = voice_borrow(receiver, std::strlen(receiver));
+        Wrapper from_wrapper{nullptr, &from}, to_wrapper{nullptr, &to}, body_wrapper{};
+        auto from_ptr = &from_wrapper, to_ptr = &to_wrapper, body_ptr = &body_wrapper;
+        std::memcpy(text_raw + 8, &from_ptr, sizeof(from_ptr));
+        std::memcpy(text_raw + 0x18, &to_ptr, sizeof(to_ptr));
+        std::memcpy(text_raw + 0x20, &body_ptr, sizeof(body_ptr));
+        *reinterpret_cast<uint32_t*>(text_raw + 0x14) = 1;
+        *reinterpret_cast<uint64_t*>(text_raw + 0x50) = 123456789012345ULL;
+        const uintptr_t batch[] = {reinterpret_cast<uintptr_t>(text_raw),
+                                   reinterpret_cast<uintptr_t>(text_raw + sizeof(text_raw))};
+        for (size_t length : {size_t(1023), size_t(1024), size_t(4000), size_t(262143)}) {
+            std::string text = "wxid_fixture_sender:\n" + std::string(length - 21, 'a');
+            assert(text.size() == length);
+            SmallString content = voice_borrow(text.c_str(), text.size());
+            body_wrapper.string = &content;
+            sample_all_text(batch, sizeof(text_raw));
+            assert(WxPollMediaMessageV7(current.get()) == 0 && current->present);
+            assert(current->native_message_id == 123456789012345ULL);
+            assert(std::strcmp(current->sender, room) == 0 && std::strcmp(current->receiver, receiver) == 0);
+            if (length < 1024) {
+                assert(current->reserved == 0 && std::string(current->text) == text);
+            } else {
+                assert((current->reserved & RECEIVE_LONG_TEXT) && std::string(current->image_xml) == text);
+                assert(!current->text[0]);
+                sample_all_text(batch, sizeof(text_raw));
+                assert(WxPollMediaMessageV6(current.get()) == 0 && !current->present);
+            }
+        }
+        std::string oversized(262144, 'x');
+        SmallString too_large = voice_borrow(oversized.c_str(), oversized.size());
+        body_wrapper.string = &too_large;
+        sample_all_text(batch, sizeof(text_raw));
+        assert(WxPollMediaMessageV7(current.get()) == 0 && current->present);
+        assert(current->reserved & RECEIVE_TEXT_UNAVAILABLE);
+        std::string nul_text(1024, 'x'); nul_text[500] = '\0';
+        SmallString with_nul = voice_borrow(nul_text.c_str(), nul_text.size());
+        body_wrapper.string = &with_nul;
+        sample_all_text(batch, sizeof(text_raw));
+        assert(WxPollMediaMessageV7(current.get()) == 0 && (current->reserved & RECEIVE_TEXT_UNAVAILABLE));
+    }
+
     // V6 carries binary voice after the XML's NUL; legacy V5 writes its exact
     // original boundary. This is a structural fixture, not playable audio.
     std::string voice("\x02#!SILK_V3", 10);

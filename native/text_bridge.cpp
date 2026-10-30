@@ -290,6 +290,33 @@ struct ReceiveStatistics {
 static ReceiveStatistics receive_statistics{};
 static_assert(sizeof(ReceiveStatistics) == 64, "Unexpected receive statistics ABI");
 
+// V7 使用原有媒体载荷区携带长文本，避免改变结构大小和每条消息的队列容量。
+static constexpr uint32_t RECEIVE_LONG_TEXT = 4;
+static constexpr uint32_t RECEIVE_TEXT_UNAVAILABLE = 8;
+
+static void copy_long_text(const unsigned char* message, const char* sender,
+                           const char* receiver, const char* source, uint64_t message_id) {
+    const auto wrapper = *reinterpret_cast<const unsigned char* const*>(message + 0x20);
+    const auto string = wrapper ? *reinterpret_cast<const SmallString* const*>(wrapper + 8) : nullptr;
+    if (!string || string->length < 1024 || string->length >= 262144 ||
+        string->capacity < string->length || string->capacity > 1024 * 1024) {
+        enqueue_received(sender, receiver, "", source, 1, nullptr, RECEIVE_TEXT_UNAVAILABLE, message_id);
+        return;
+    }
+    const size_t length = static_cast<size_t>(string->length);
+    char* content = static_cast<char*>(HeapAlloc(GetProcessHeap(), 0, length + 1));
+    if (!content) {
+        enqueue_received(sender, receiver, "", source, 1, nullptr, RECEIVE_TEXT_UNAVAILABLE, message_id);
+        return;
+    }
+    __try {
+        if (read_pb_string(message, 0x20, content, length + 1) && std::strlen(content) == length)
+            enqueue_received(sender, receiver, "", source, 1, content, RECEIVE_LONG_TEXT, message_id);
+        else
+            enqueue_received(sender, receiver, "", source, 1, nullptr, RECEIVE_TEXT_UNAVAILABLE, message_id);
+    } __finally { HeapFree(GetProcessHeap(), 0, content); }
+}
+
 static void copy_app_message(const unsigned char* message, const char* sender,
                              const char* receiver, const char* source) {
     char* content = static_cast<char*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 262144));
@@ -373,6 +400,8 @@ static void sample_all_text(const uintptr_t* batch, size_t stride) {
                 }
             } else if (read_pb_string(message, 0x20, text, sizeof(text))) {
                 enqueue_received(sender, receiver, text, source, 1, nullptr, 0, message_id);
+            } else {
+                copy_long_text(message, sender, receiver, source, message_id);
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -417,11 +446,21 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
     return recall_receive_start();
 }
 
+static void scrub_extended_text(ReceivedMessage* message) {
+    // 旧调用者无法解释新的载荷标志；保留此前不投递长文本的行为。
+    if (message->type == 1 && (message->reserved & (RECEIVE_LONG_TEXT | RECEIVE_TEXT_UNAVAILABLE))) {
+        message->present = 0;
+        SecureZeroMemory(message->image_xml, sizeof(message->image_xml));
+        message->reserved = 0;
+    }
+}
+
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollTextMessage(void* parameter) {
     // 保留旧接口的 1312 字节边界，旧调用者不会被 V2 写越界。
     if (!parameter) return ERROR_INVALID_PARAMETER;
     ReceivedMessage message{};
     const DWORD code = poll_received(&message);
+    scrub_extended_text(&message);
     std::memcpy(parameter, &message, 1312);
     *static_cast<uint32_t*>(parameter) = 1312;
     return code;
@@ -431,6 +470,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollTextMessageV2(void* paramete
     if (!parameter) return ERROR_INVALID_PARAMETER;
     ReceivedMessage message{};
     const DWORD code = poll_received(&message);
+    scrub_extended_text(&message);
     std::memcpy(parameter, &message, 5408);
     *static_cast<uint32_t*>(parameter) = 5408;
     return code;
@@ -448,6 +488,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV3(void* paramet
     auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!message) return ERROR_NOT_ENOUGH_MEMORY;
     const DWORD code = poll_received(message.get());
+    scrub_extended_text(message.get());
     scrub_legacy_voice(message.get());
     if (std::strlen(message->image_xml) >= 16384) {
         SecureZeroMemory(message->image_xml, 16384);
@@ -463,6 +504,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV4(void* paramet
     auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!message) return ERROR_NOT_ENOUGH_MEMORY;
     const DWORD code = poll_received(message.get());
+    scrub_extended_text(message.get());
     scrub_legacy_voice(message.get());
     std::memcpy(parameter, message.get(), 267552);
     *static_cast<uint32_t*>(parameter) = 267552;
@@ -474,6 +516,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV5(void* paramet
     auto message = std::unique_ptr<ReceivedMessage>(new (std::nothrow) ReceivedMessage{});
     if (!message) return ERROR_NOT_ENOUGH_MEMORY;
     const DWORD code = poll_received(message.get());
+    scrub_extended_text(message.get());
     scrub_legacy_voice(message.get());
     std::memcpy(parameter, message.get(), 267560);
     *static_cast<uint32_t*>(parameter) = 267560;
@@ -481,6 +524,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV5(void* paramet
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV6(void* parameter) {
+    if (!parameter) return ERROR_INVALID_PARAMETER;
+    const DWORD code = poll_received(static_cast<ReceivedMessage*>(parameter));
+    scrub_extended_text(static_cast<ReceivedMessage*>(parameter));
+    return code;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI WxPollMediaMessageV7(void* parameter) {
     return poll_received(static_cast<ReceivedMessage*>(parameter));
 }
 

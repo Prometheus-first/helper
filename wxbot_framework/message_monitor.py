@@ -1,5 +1,6 @@
 """管理台的有界消息缓存；仅保存显示字段，不保存媒体、原始 XML 或下载凭证。"""
 from collections import deque, OrderedDict
+import json
 import threading
 import time
 import uuid
@@ -43,7 +44,7 @@ class MessageBuffer:
         group = bool(message.is_group or message.chat_id.endswith('@chatroom'))
         sender = message.sender_id or (account if message.is_self else '' if group else message.chat_id)
         if message.type == 1:
-            content = self._text(message.text)
+            content = self.sanitize(message.text) if isinstance(message.text, str) else ''
         elif message.type == 49:
             name = self._text(data.get('file_name'), 256).replace('\\', '/').rsplit('/', 1)[-1]
             if data.get('app_type') == 19:
@@ -185,9 +186,18 @@ class MessageBuffer:
             available = list(self.rows)
             # 新页面先显示最近 200 条；已有页面按顺序补齐，不跳过未读批次。
             initial = not after or reset
-            rows = available[-200:] if initial else sorted(
+            candidates = sorted(available[-200:], key=lambda row:row['revision']) if initial else sorted(
                 (row for row in available if row['revision'] > after), key=lambda row:row['revision'])[:200]
-            cursor = self.sequence if initial or not rows else rows[-1]['revision']
+            # 消息正文不截断；按实际 JSON 字节分页，避免超过子进程 4 MiB 响应限制。
+            budget = 3 * 1024 * 1024
+            rows, used = [], 0
+            for row in candidates:
+                size = len(json.dumps(row, ensure_ascii=False).encode('utf-8')) + 1
+                if rows and used + size > budget:
+                    break
+                rows.append(row)
+                used += size
+            cursor = rows[-1]['revision'] if rows else self.sequence
             return {'rows': [dict(row) for row in rows], 'cursor': cursor, 'latest': self.sequence,
                     'stream_id': self.stream_id, 'reset': reset,
                     'dropped': bool(after and available and after < available[0]['id'] - 1)}

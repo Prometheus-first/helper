@@ -101,7 +101,7 @@ def find_account_process(account=None):
 
 class NativeTextService(NativeFileHelperService):
     _dll = TEXT_DLL
-    _poll_export = b"WxPollMediaMessageV6"
+    _poll_export = b"WxPollMediaMessageV7"
     _message_type = ReceivedMediaMessageV6
     _run = staticmethod(run_text)
 
@@ -374,7 +374,11 @@ class NativeTextService(NativeFileHelperService):
             return None
         previous = self.self_wxid
         previous_unparsed = self.router.unparsed_groups
-        body = (getattr(message, "image_xml", b"") if message.type != 1 else message.text).decode("utf-8", errors="replace")
+        flags = getattr(message, 'reserved', 0)
+        if message.type == 1 and flags & 8:
+            logger.warning('文本超过接收上限或不可读取，已跳过；会话 ID=%s', message.sender.decode('utf-8', errors='replace'))
+            return None
+        body = (getattr(message, "image_xml", b"") if message.type != 1 or flags & 4 else message.text).decode("utf-8", errors="replace")
         data = self.router.convert(message.sender.decode("utf-8"), message.receiver.decode("utf-8"),
                                    body, sequence=message.sequence, msg_type=message.type,
                                    thread_id=message.thread_id)

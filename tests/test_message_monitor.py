@@ -32,6 +32,49 @@ class BufferTests(unittest.TestCase):
         self.assertTrue(row['is_group'])
         self.assertRegex(row['time'], r'^\d\d:\d\d:\d\d$')
 
+    def test_long_text_is_complete_in_monitor_and_secrets_are_redacted(self):
+        from wxbot_framework.panel_common import redact_full
+        buffer = MessageBuffer(sanitize=redact_full)
+        body = '消息🌸\n' * 700
+        buffer.append(Message(body, ROOM, FRIEND, is_group=True))
+        self.assertEqual(buffer.tail()['rows'][0]['content'], body)
+        longer = '中' * 10000 + 'sk-' + 'example_redaction_not_a_real_key_123456' + '末尾'
+        buffer.append(Message(longer, ROOM, FRIEND, is_group=True))
+        shown = buffer.tail()['rows'][-1]['content']
+        self.assertEqual(shown, '中' * 10000 + '[密钥已隐藏]末尾')
+
+    def test_full_monitor_batch_fits_worker_transport_with_supplementary_characters(self):
+        buffer = MessageBuffer()
+        for _ in range(200):
+            buffer.append(Message('🌸' * 5000, ROOM, FRIEND, is_group=True), account=ACCOUNT)
+        payload = json.dumps(buffer.tail(), ensure_ascii=False).encode('utf-8')
+        self.assertLess(len(payload), 4 * 1024 * 1024)
+
+    def test_long_message_batches_preserve_full_text_and_cursor_order(self):
+        buffer = MessageBuffer()
+        body = '🌸' * 30000 + '末尾'
+        buffer.append(Message('起点', ROOM, FRIEND, is_group=True))
+        cursor = buffer.tail()['cursor']
+        for number in range(50):
+            buffer.append(Message(f'{number}:' + body, ROOM, FRIEND, is_group=True))
+        received = []
+        while cursor < buffer.sequence:
+            batch = buffer.tail(cursor)
+            self.assertLess(len(json.dumps(batch, ensure_ascii=False).encode('utf-8')), 4 * 1024 * 1024)
+            self.assertTrue(batch['rows'])
+            received.extend(row['content'] for row in batch['rows'])
+            cursor = batch['cursor']
+        self.assertEqual(received, [f'{number}:' + body for number in range(50)])
+        initial = buffer.tail()
+        self.assertLess(len(json.dumps(initial, ensure_ascii=False).encode('utf-8')), 4 * 1024 * 1024)
+        initial_received = [row['content'] for row in initial['rows']]
+        cursor = initial['cursor']
+        while cursor < buffer.sequence:
+            batch = buffer.tail(cursor)
+            initial_received.extend(row['content'] for row in batch['rows'])
+            cursor = batch['cursor']
+        self.assertEqual(initial_received, ['起点'] + [f'{number}:' + body for number in range(50)])
+
     def test_media_never_exposes_raw_xml_paths_or_download_credentials(self):
         buffer = MessageBuffer(sanitize=redact)
         secret = '<msg aeskey="private-download-token">C:/private/media</msg>'

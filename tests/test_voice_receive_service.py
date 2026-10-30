@@ -41,7 +41,7 @@ class VoiceReceiveServiceTests(unittest.TestCase):
         self.assertEqual(c.sizeof(ReceivedMediaMessageV6), 267568)
         self.assertEqual(ReceivedMediaMessageV6.voice_offset.offset, 267560)
         self.assertEqual(ReceivedMediaMessageV6.native_message_id.offset, 267552)
-        self.assertEqual(NativeTextService._poll_export, b'WxPollMediaMessageV6')
+        self.assertEqual(NativeTextService._poll_export, b'WxPollMediaMessageV7')
 
     def test_binary_nuls_are_preserved_and_xml_is_not_exposed(self):
         raw = self.incoming()

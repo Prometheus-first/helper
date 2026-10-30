@@ -16,7 +16,7 @@ import time
 
 from .config import ConfigStore, account_is_unbound, initialize_configs, validate_name
 from .locking import InstanceLock
-from .panel_common import PanelError as PanelError, redact as redact
+from .panel_common import PanelError as PanelError, redact as redact, redact_full
 from .panel_http import PanelHandler as PanelHandler, PanelServer as PanelServer
 from .message_monitor import MessageBuffer
 from .moments import MomentsPublisher
@@ -98,7 +98,7 @@ class PanelController:
         self.state, self.error, self.started = 'stopped', '', None
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         self.logs = LogBuffer()
-        self.messages = MessageBuffer(sanitize=redact)
+        self.messages = MessageBuffer(sanitize=redact_full)
         self.send_jobs = {}
         self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
         self._moments_identity = None

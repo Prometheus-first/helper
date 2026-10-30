@@ -20,7 +20,7 @@
 - `friend_request.h`：`WxInspectFriendRequest` / `WxAcceptFriendRequest`，核对账号并等待微信原生验证结果；申请凭据不写报告。
 - `group_management.h`：原生邀请好友进群及创建群聊，创建成功时读取服务器返回的群 ID；未进行真实群管理操作测试。
 - 群系统消息 `10000/10002` 不作为普通聊天正文；完整群成员和真实群昵称由 `wxbot_framework/group_members.py` 只读获取，`group_events.py` 负责变动确认与去重。
-- 当前接收通道为 `WxPollMediaMessageV6`，在 V4 的元数据缓冲区后追加 64 位微信原始消息编号，以十进制字符串传给 Python，V6 在 V5 后追加音频偏移与长度，保留 V1–V5 调用方的缓冲区边界。普通消息与独立系统 XML 入口共同提供撤回关联；新增 Hook 沿用回调计数和正常卸载流程。管理台保留原记录，`anti_recall` 插件控制自动补发。
+- 当前接收通道为 `WxPollMediaMessageV7`，结构大小与 V6 相同，长文本借用媒体载荷区；普通文本最多 262143 个 UTF-8 字节，超过上限或不可读取时报告警告。旧版 V1–V6 接收入口保留原有结构边界。微信原始消息编号和 V6 音频字段继续保留；普通消息与独立系统 XML 入口共同提供撤回关联。管理台保留原记录，`anti_recall` 插件控制自动补发。
 - `build/selftest_bridge.dll`：兼容文件传输助手后端。
 - `moments_send.h` / `moments_transport.py`：微信 4.1.15.56 和 4.2.0.11 的原生朋友圈发布；仅自己可见的文字和图片均已实测，4.1.15.56 的公开纯文字另由其他账号确认可见。4.1.15.13 暂不支持。图片先复制到微信自身的 InputTemp 缓存，完成回执含有效 SNS ID 才确认成功。取消订阅后沿用原生事件清理函数释放回调引用，活动回调内由原生 Emit 收尾，不绕过 DLL 卸载保护；结果不确定时不自动重发。
 - `moments_interaction_bridge.h` / `moments_interaction_call.h` / `moments_task_lifetime.h` / `moments_interaction_transport.py`：微信 4.1.15.56 手动点赞与普通文字评论。真实帖子由原生查询取得，按账号和操作编号隔离，任务完成及函子析构后再关闭。超时只跟踪原任务，不自动重发。原生评论已核对回执及列表，已点赞跳过已实测，首次点赞发送仍待实测；4.1.15.13 不开放此接口。
