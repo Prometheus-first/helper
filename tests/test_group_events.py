@@ -90,6 +90,7 @@ class ParserTests(unittest.TestCase):
         cases = (('“邀请人”邀请“被邀请者”加入了群聊', "join", "被邀请者"),
                  ('"小艾"通过扫描"分享者"分享的二维码加入群聊', "join", "小艾"),
                  ('"示例群友"通过扫描你分享的二维码加入群聊', "join", "示例群友"),
+                 ('"新同学"与群里其他人都不是朋友关系，请注意隐私安全', "join", "新同学"),
                  ('「新成员」加入了群聊', "join", "新成员"),
                  ('"小艾"退出了群聊', "leave", "小艾"),
                  ('你将"小艾"移出了群聊', "leave", "小艾"),
@@ -107,6 +108,7 @@ class ParserTests(unittest.TestCase):
                 self.assertEqual(self.parse('"小艾"加入了群聊', msg_type=msg_type), ())
         for text in ("小艾加入了群聊", "有人说：小艾退出了群聊", '我说"小艾"加入了群聊',
                      '"小艾"加入了群聊，大家鼓掌', '$quoted_999$加入了群聊',
+                     '有人说"小艾"与群里其他人都不是朋友关系，请注意隐私安全',
                      '"小艾"修改了群名', "你加入了群聊", '你被"群主"移出群聊'):
             with self.subTest(text=text):
                 self.assertEqual(self.parse(text, msg_type=10000), ())

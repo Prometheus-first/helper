@@ -33,6 +33,7 @@ _PATTERNS = (
 )
 _TEMPLATE_QUOTES = str.maketrans("", "", '\"\'“”「」『』 \t\r\n')
 _QUOTED_NAME = re.compile(r'["“「『]([^"”」』\r\n]{1,256})["”」』]')
+_PRIVACY_NAME_HINT = re.compile(rf"{_PLACEHOLDER}与群里其他人都不是朋友关系[，,]请注意隐私安全")
 
 
 class GroupEventError(ValueError):
@@ -112,7 +113,10 @@ def _text_events(content, room_id, self_id):
         names.append(_name(match.group(1)))
         return f"$quoted_{len(names) - 1}$"
     template = _QUOTED_NAME.sub(replace, content)
-    classified = _classify(template)
+    # 非好友加入时，隐私提示可能先于成员资料到达。它仅提供名字，
+    # 不能独立触发通知，仍须通过连续名单快照确认唯一的成员变化。
+    privacy_hint = _PRIVACY_NAME_HINT.fullmatch(template.translate(_TEMPLATE_QUOTES))
+    classified = ("join", privacy_hint.group("target")) if privacy_hint else _classify(template)
     if not classified:
         return ()
     kind, role = classified

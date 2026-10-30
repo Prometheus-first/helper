@@ -227,6 +227,30 @@ class GroupMonitorIntegrationTests(unittest.TestCase):
         plugin.on_message(message, ctx)
         self.backend.send_text.assert_called_once_with(ROOM, '欢迎 示例群友 加入群聊！')
 
+    def test_privacy_notice_supplies_name_only_after_confirmed_membership(self):
+        self.poll({ACCOUNT:'机器人', FIRST:'成员甲'})
+        self.app._emit(Message('', ROOM, type=10000, is_group=True, session_id='first', sequence=44,
+            data={'system_content':'"新同学"与群里其他人都不是朋友关系，请注意隐私安全'}))
+        self.app.plugins.dispatch.assert_not_called()
+        changed = {ACCOUNT:'机器人', FIRST:'成员甲', SECOND:''}
+        self.poll(changed)
+        self.app.plugins.dispatch.assert_not_called()
+        self.poll(changed)
+        message = self.app.plugins.dispatch.call_args.args[0]
+        self.assertEqual(message.data['group_event']['member_id'], SECOND)
+        self.assertEqual(message.data['group_event']['nickname'], '新同学')
+
+    def test_privacy_notice_does_not_assign_names_to_ambiguous_joins(self):
+        self.poll({ACCOUNT:'机器人'})
+        self.app._emit(Message('', ROOM, type=10000, is_group=True, session_id='first', sequence=45,
+            data={'system_content':'"新同学"与群里其他人都不是朋友关系，请注意隐私安全'}))
+        changed = {ACCOUNT:'机器人', FIRST:'', SECOND:''}
+        self.poll(changed)
+        self.poll(changed)
+        events = [call.args[0].data['group_event'] for call in self.app.plugins.dispatch.call_args_list]
+        self.assertEqual(len(events), 2)
+        self.assertTrue(all(not event['nickname'] for event in events))
+
     def test_disconnect_resets_baseline(self):
         self.poll({ACCOUNT:'机器人', FIRST:'成员甲'})
         self.app._disconnect()
