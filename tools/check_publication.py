@@ -7,7 +7,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ALLOWED_DLLS = {'native/build_text/text_bridge.dll', 'native/build/selftest_bridge.dll'}
+ALLOWED_DLLS = {'native/build_text/text_bridge.dll', 'native/build/selftest_bridge.dll',
+                'native/build_article/article_bridge.dll'}
 SECRET_PATTERNS = {
     'possible_api_key': re.compile(r'(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}'),
     'possible_github_token': re.compile(r'(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,})'),

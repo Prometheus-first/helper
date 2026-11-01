@@ -48,7 +48,10 @@ assert MomentsConfig.image_paths.offset == 1704 and MomentsConfig.text.offset ==
 
 
 def _native():
-    import run_selftest
+    if __package__:
+        from . import run_selftest
+    else:
+        import run_selftest
     return run_selftest
 
 

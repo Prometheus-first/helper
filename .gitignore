@@ -24,7 +24,7 @@ __pycache__/
 .venv/
 venv/
 
-# Build output; only the two required bridges are distributed
+# Build output; only the required bridges are distributed
 native/.build/
 *.obj
 *.lib
@@ -34,6 +34,7 @@ native/.build/
 *.dll
 !native/build/selftest_bridge.dll
 !native/build_text/text_bridge.dll
+!native/build_article/article_bridge.dll
 *.zip
 *.7z
 *.rar

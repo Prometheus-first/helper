@@ -1,3 +1,73 @@
+.articles-identity { margin: 0 0 var(--space-4); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.articles-toolbar { display: flex; align-items: flex-end; gap: var(--space-3); max-width: 740px; }
+.articles-toolbar > label { flex: 1; margin: 0; min-width: 0; }
+.articles-toolbar input { margin-bottom: 0; }
+.articles-toolbar > button { flex: none; }
+.articles-manual summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.articles-manual[open] .articles-toolbar { margin-top: var(--space-3); }
+.articles-help { margin: var(--space-3) 0 var(--space-2); color: var(--muted); font-size: 13px; }
+.articles-status { min-height: 20px; margin: var(--space-2) 0 var(--space-4); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.articles-status.account-error { color: var(--danger); }
+.articles-library { margin-top: var(--space-6); }
+.articles-library h2 { font-size: 18px; }
+.articles-library .articles-publisher-search { max-width: 360px; margin: var(--space-4) 0; }
+.articles-publisher-search input { padding-left: var(--space-3); }
+.articles-publisher-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-4); list-style: none; padding: 0; margin: 0; }
+.article-publisher-item { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: flex-start; padding: var(--space-5); text-align: left; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; color: var(--ink); }
+.article-publisher-item:hover { background: var(--row-hover); border-color: var(--secondary-hover-border); }
+.article-publisher-name { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.article-publisher-kind { margin-top: var(--space-3); font-size: 12px; color: var(--muted); font-weight: 400; }
+.article-publisher-meta { margin-top: var(--space-4); color: var(--muted); font-size: 13px; font-weight: 400; }
+.article-publisher-open { margin-top: var(--space-4); font-size: 13px; }
+.articles-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-5); color: var(--muted); }
+.articles-breadcrumb > button:last-child { margin-left: auto; }
+.articles-breadcrumb strong { color: var(--ink); font-size: 18px; overflow-wrap: anywhere; }
+#article-status:empty { display: none; }
+.articles-columns { display: grid; grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); gap: var(--space-6); align-items: start; margin-top: var(--space-5); }
+.articles-directory, .articles-reader { min-width: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; }
+.articles-directory { padding: var(--space-5) 0 0; }
+.articles-directory > .section-heading, .articles-directory > .search { margin: 0 var(--space-4) var(--space-4); }
+.articles-directory h2 { font-size: 15px; }
+.articles-directory .search { display: flex; min-width: 0; width: auto; }
+.articles-directory .search input { padding-left: var(--space-3); }
+.articles-list { list-style: none; padding: 0; margin: 0; max-height: 72vh; overflow: auto; overscroll-behavior: contain; }
+.article-list-item { display: block; width: 100%; padding: var(--space-4); border-top: 1px solid var(--rule); border-radius: 0; background: transparent; color: var(--ink); text-align: left; }
+.article-list-item:hover { background: var(--row-hover); }
+.article-list-item[aria-pressed="true"] { background: var(--selected-row); box-shadow: inset 3px 0 var(--accent); }
+.article-list-title { display: block; font-size: 14px; font-weight: 600; line-height: 1.7; overflow-wrap: anywhere; }
+.article-list-meta { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: var(--space-1); overflow-wrap: anywhere; }
+.articles-reader { padding: var(--space-6); }
+.articles-empty { margin: 0; padding: var(--space-5) var(--space-4); color: var(--muted); font-size: 13px; }
+.article-heading h2 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
+.article-meta { margin: var(--space-2) 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.article-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-5); }
+.article-preview { line-height: 1.9; overflow-wrap: anywhere; }
+.article-preview p { white-space: pre-wrap; margin: var(--space-4) 0; }
+.article-preview h1, .article-preview h2, .article-preview h3, .article-preview h4, .article-preview h5, .article-preview h6 { line-height: 1.6; margin: var(--space-6) 0 var(--space-3); }
+.article-preview h1 { font-size: 24px; }
+.article-preview h2 { font-size: 21px; }
+.article-preview h3 { font-size: 18px; }
+.article-preview h4, .article-preview h5, .article-preview h6 { font-size: 15px; }
+.article-media { display: block; margin: var(--space-4) 0; }
+.article-media img { display: block; max-width: 100%; height: auto; border-radius: var(--radius-control); }
+.article-image-caption { display: block; color: var(--muted); font-size: 12px; margin-top: var(--space-2); }
+.article-source { border-top: 1px solid var(--rule); margin-top: var(--space-6); padding-top: var(--space-4); }
+.article-source summary { color: var(--muted); cursor: pointer; font-size: 13px; }
+.article-source > a { display: inline-block; margin-top: var(--space-3); font-size: 13px; }
+.article-source textarea { margin-top: var(--space-4); font: 13px/1.8 var(--font-data); min-height: 240px; resize: vertical; }
+@media (max-width: 1000px) {
+  .articles-columns { grid-template-columns: minmax(200px, 35%) minmax(0, 1fr); gap: var(--space-4); }
+  .articles-reader { padding: var(--space-4); }
+}
+@media (max-width: 600px) {
+  .articles-publisher-list { grid-template-columns: minmax(0, 1fr); }
+  .articles-toolbar { flex-wrap: wrap; }
+  .articles-toolbar > label { flex-basis: 100%; }
+  .articles-toolbar > button { margin-left: auto; }
+  .articles-columns { grid-template-columns: minmax(0, 1fr); }
+  .articles-list { max-height: 320px; }
+  .article-heading h2 { font-size: 20px; }
+}
 .moments-composer {max-width: 760px;}
 .moments-timeline {max-width: 760px; margin-top: var(--space-8);}
 .moments-feed-row {padding: var(--space-5) 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere;}

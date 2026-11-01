@@ -74,7 +74,10 @@ class RobotWorker:
             headers={'X-Helper-Token': token, 'Content-Type': 'application/json'})
         try:
             # 不使用系统代理转发本机管理请求。
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=20) as response:
+            # Loading one article includes a bounded client URL load and cache
+            # polling. Catalog pages and other controls retain the short limit.
+            timeout = 45 if route.split('?', 1)[0] == 'article-read' else 20
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
                 raw = response.read(4 * 1024 * 1024 + 1)
                 if len(raw) > 4 * 1024 * 1024:
                     raise PanelError('机器人管理响应超过大小限制', 503)
@@ -116,6 +119,23 @@ class RobotProxy:
     def accounts(self): return self.request('accounts')['accounts']
     def chats(self): return self.request('chats')['chats']
     def contacts(self): return self.request('contacts')
+    def articles_connection(self): return self.request('articles-connection')
+    def article_publishers(self, account=None):
+        from urllib.parse import urlencode
+        return self.request('articles-publishers?' + urlencode({'account': account or ''}))
+    def list_articles(self, account=None, publisher=None):
+        from urllib.parse import urlencode
+        query = {'account': account or ''}
+        if publisher is not None:
+            query['publisher'] = publisher
+        return self.request('articles?' + urlencode(query))
+    def read_articles(self, data): return self.request('articles-read', data)
+    def read_article(self, data): return self.request('article-read', data)
+    def article(self, identifier, account=None):
+        from urllib.parse import urlencode
+        return self.request('article?' + urlencode({'id': identifier, 'account': account or ''}))
+    def article_media(self, data): return self.request('article-media', data)
+    def export_article(self, data): return self.request('article-export', data)
     def group_members(self, room):
         from urllib.parse import urlencode
         return self.request('group-members?' + urlencode({'room': room}))

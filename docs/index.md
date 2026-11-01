@@ -22,6 +22,10 @@ hero:
       text: GitHub 仓库
       link: https://github.com/Prometheus-first/helper
 features:
+  - icon: 📰
+    title: 公众号文章
+    details: 自动读取已关注公众号，点击公众号分页同步文章，在网页阅读正文和图片并导出 Markdown。
+    link: /guide/web-panel#公众号文章
   - icon: 📷
     title: 朋友圈
     details: 发布文字和图文，读取已加载记录及互动，手动点赞或评论。

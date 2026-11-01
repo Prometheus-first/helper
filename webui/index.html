@@ -8,6 +8,7 @@
   <title>helper · 本地管理台</title>
   <link rel="icon" href="data:,">
   <script src="/moments.js"></script>
+  <script src="/articles.js"></script>
   <script src="/app.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -22,6 +23,7 @@
     <a href="#tasks" data-page="tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>定时任务</a>
     <a href="#contacts" data-page="contacts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="15.5" height="17" rx="2"/><path d="M3.5 7h3M3.5 12h3M3.5 17h3M10 17v-1a3.5 3.5 0 0 1 7 0v1"/><circle cx="13.5" cy="9" r="2.5"/></svg>联系人</a>
     <a href="#moments" data-page="moments"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>朋友圈</a>
+    <a href="#articles" data-page="articles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14v17H5zM8 8h8M8 12h8M8 16h5"/></svg>公众号文章</a>
     <a href="#models" data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>模型与语音</a>
     <a href="#logs" data-page="logs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1"/></svg>运行日志</a>
   </nav>
@@ -120,6 +122,46 @@
       <p id="moments-read-status" class="editor-status" role="status" aria-live="polite">尚未读取。</p>
       <div id="moments-timeline-list"></div>
     </section>
+  </section>
+  <section class="page hidden" id="page-articles" aria-labelledby="articles-heading">
+    <div class="page-heading"><h1 id="articles-heading">公众号文章</h1><button id="articles-refresh" class="secondary" type="button">刷新公众号</button></div>
+    <p id="articles-identity" class="articles-identity"></p>
+    <details class="articles-manual"><summary>按名称手动同步</summary><form id="articles-form" class="articles-toolbar">
+      <label for="articles-publisher">公众号<input id="articles-publisher" list="articles-publishers" placeholder="昵称、微信号或 gh 开头的 ID" autocomplete="off" required><datalist id="articles-publishers"></datalist></label>
+      <button id="articles-read" class="primary" type="submit" disabled>同步文章列表</button>
+    </form></details>
+    <p class="articles-help">自动读取当前账号已关注的公众号，点击公众号同步文章，点击文章加载正文和图片。请保持微信登录，读取时可能出现阅读窗口。</p>
+    <p id="articles-availability" class="editor-status" role="status" aria-live="polite"></p>
+    <p id="articles-status" class="articles-status" role="status" aria-live="polite"></p>
+    <section id="articles-library" class="articles-library" aria-labelledby="articles-publishers-heading">
+      <div class="section-heading"><h2 id="articles-publishers-heading">公众号 <span id="articles-publisher-count" class="count"></span></h2></div>
+      <p id="articles-publishers-status" class="articles-status" role="status" aria-live="polite"></p>
+      <label class="search articles-publisher-search"><input id="articles-publisher-search" type="search" placeholder="搜索公众号" aria-label="搜索本地公众号"></label>
+      <ul id="articles-publisher-list" class="articles-publisher-list"></ul>
+    </section>
+    <nav id="articles-breadcrumb" class="articles-breadcrumb hidden" aria-label="文章层级">
+      <button id="articles-back" class="secondary small" type="button">← 全部公众号</button>
+      <span aria-hidden="true">/</span><strong id="articles-current-publisher" aria-current="page"></strong>
+      <button id="articles-sync-current" class="secondary small" type="button" disabled>同步文章</button>
+    </nav>
+    <div id="articles-content" class="articles-columns hidden">
+      <section class="articles-directory" aria-labelledby="articles-list-heading">
+        <div class="section-heading"><h2 id="articles-list-heading">文章 <span id="articles-count" class="count"></span></h2></div>
+        <label class="search"><input id="articles-search" type="search" placeholder="搜索当前公众号的文章" aria-label="搜索当前公众号的文章"></label>
+        <ul id="articles-list" class="articles-list"></ul>
+      </section>
+      <section class="articles-reader" aria-label="文章阅读">
+        <p id="article-empty" class="articles-empty">从左侧选择一篇文章。</p>
+        <article id="article-detail" class="hidden">
+          <div class="article-heading"><h2 id="article-title"></h2><p id="article-meta" class="article-meta"></p></div>
+          <div class="article-actions"><button id="article-read" class="secondary small" type="button" disabled>读取正文</button><button id="article-export" class="secondary small" type="button" disabled>导出 Markdown</button></div>
+          <p id="article-status" class="articles-status" role="status" aria-live="polite"></p>
+          <div id="article-preview" class="article-preview"></div>
+          <details class="article-source"><summary>查看 Markdown</summary><label for="article-markdown" class="sr-only">只读 Markdown</label><textarea id="article-markdown" rows="16" readonly spellcheck="false"></textarea></details>
+          <details id="article-origin" class="article-source hidden"><summary>微信来源</summary><a id="article-original" target="_blank" rel="noreferrer noopener">在微信打开来源页面</a></details>
+        </article>
+      </section>
+    </div>
   </section>
   <section class="page hidden" id="page-models" aria-labelledby="models-heading">
     <div class="page-heading"><div><h1 id="models-heading">模型与语音</h1></div></div>

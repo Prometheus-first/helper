@@ -61,7 +61,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             parsed = urlsplit(self.path)
             path = parsed.path
             controller = self.server.controller
-            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js'):
+            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js', '/articles.js'):
                 name = 'index.html' if path == '/' else path[1:]
                 raw = (controller.root / 'webui' / name).read_bytes()
                 if name == 'index.html':
@@ -125,6 +125,14 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.publish_moments(data))
                 if path == '/api/moments-read':
                     return self.send(200, controller.read_moments(data))
+                if path == '/api/articles-read':
+                    return self.send(200, controller.read_articles(data))
+                if path == '/api/article-read':
+                    return self.send(200, controller.read_article(data))
+                if path == '/api/article-media':
+                    return self.send(200, controller.article_media(data))
+                if path == '/api/article-export':
+                    return self.send(200, controller.export_article(data))
                 if path == '/api/moments-interact':
                     return self.send(200, controller.interact_moments(data))
                 if path in ('/api/plugin-source', '/api/plugin-reset'):
@@ -162,6 +170,16 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
             if path == '/api/contacts':
                 return self.send(200, controller.contacts())
+            if path == '/api/articles-connection':
+                return self.send(200, controller.articles_connection())
+            if path == '/api/articles-publishers':
+                return self.send(200, controller.article_publishers(parse_qs(parsed.query).get('account', [None])[0]))
+            if path == '/api/articles':
+                values = parse_qs(parsed.query)
+                return self.send(200, controller.list_articles(values.get('account', [None])[0], values.get('publisher', [None])[0]))
+            if path == '/api/article':
+                query = parse_qs(parsed.query)
+                return self.send(200, controller.article(query.get('id', [''])[0], query.get('account', [None])[0]))
             if path == '/api/send-connection':
                 return self.send(200, controller.send_connection())
             if path == '/api/send-status':
@@ -186,7 +204,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             self.send(error.status, {'error': redact(error)})
         except (ValueError, TypeError, KeyError) as error:
             self.send(400, {'error': redact(error)})
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             pass
         except Exception as error:
             logging.getLogger('WebPanel').exception('管理操作失败')

@@ -45,7 +45,7 @@ const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
 const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
-const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', models:'模型与语音', logs:'运行日志'};
+const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', logs:'运行日志'};
 const pluginNames = {anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -59,6 +59,7 @@ async function api(path, body, identifier = robot) {
   return data;
 }
 const moments = window.createMomentsComposer({api, robots:()=>robotRows, label:profileLabel, available:()=>serviceAvailable});
+const articles = window.createArticlesWorkspace({api, available:()=>serviceAvailable});
 function toast(message, error = false) {
   const dialogError = $('dialog[open] .dialog-error');
   if (error && dialogError) { dialogError.textContent = message; dialogError.classList.remove('hidden'); return; }
@@ -85,6 +86,7 @@ function navigate() {
   if (document.body.classList.contains('nav-open')) { setNavigation(false); $('#workspace').focus({preventScroll:true}); }
   window.scrollTo(0, 0);
   moments.render();
+  articles.render();
   if(name==='groups' && state?.connected && !sendChatsAttempted && !sendLoading)loadSendChats();
   if(name==='tasks')loadTasks();
 }
@@ -107,15 +109,19 @@ function renderRobotOptions() {
 }
 function renderState() {
   const unavailable=!serviceAvailable;
+  const articleRobot=robotRows.find(row=>row.id===robot);
+  const articleAccount=state?.account ?? config?.account ?? articleRobot?.account ?? '';
+  articles.setTarget(robot,articleAccount,profileLabel({...articleRobot,id:robot,account:articleAccount}));
   $('#robot-select').disabled=busy||unavailable;
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#plugin-form):not(#moments-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
   moments.render();
+  articles.render();
   document.querySelectorAll('.save-hint').forEach(node=>node.textContent=unavailable?'连接中断':!state?'正在读取':running?'停止后可保存':'启动后生效');
   if(state)$('#nav-plugin-count').textContent=state.plugins.length;
   renderPlugins();
@@ -794,11 +800,12 @@ document.querySelectorAll('[data-page]').forEach(link=>link.addEventListener('cl
 window.addEventListener('hashchange',navigate);navigate();
 async function loadRobots(){
   const data=await api('robots');robotRows=data.robots;
-  if(!robotRows.some(row=>row.id===robot))robot='default';
+  if(!robotRows.some(row=>row.id===robot)&&robot!=='default'){robot='default';state=null;config=null;articles.reset();}
   renderState();
 }
 async function switchRobot(identifier){
   if($('#plugin-dialog').open)$('#plugin-dialog').close();
+  articles.reset();
   resetContacts();
   resetComposer();
   taskRows=[];taskActions=[];taskActionSignature='';taskGeneration++;resetTaskForm();renderTasks();

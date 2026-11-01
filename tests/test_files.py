@@ -15,7 +15,9 @@ SCRATCH = Path(__file__).resolve().parent.parent / ".runtime/tests"
 class FileTests(unittest.TestCase):
     def setUp(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
-        self.temporary = tempfile.TemporaryDirectory(prefix="send-file-", dir=SCRATCH)
+        # Leave room below Windows MAX_PATH for the 180-character basename
+        # plus the nested snapshot directory used by the preservation test.
+        self.temporary = tempfile.TemporaryDirectory(prefix="f-", dir=SCRATCH)
         self.root = Path(self.temporary.name).resolve()
         self.addCleanup(self._cleanup)
         self.source = self.root / "中文 测试.txt"
@@ -86,7 +88,7 @@ class FileTests(unittest.TestCase):
         source = self.root / ("a" * 180 + ".txt")
         source.write_bytes(b"contents")
         self.assertEqual(inspect_file(source).name, source.name)
-        with prepare_file(source, self.root / "snapshots") as result:
+        with prepare_file(source, self.root / "s") as result:
             self.assertEqual(result.path.name, source.name)
             self.assertEqual(result.name, source.name)
             self.assertEqual(result.path.read_bytes(), b"contents")

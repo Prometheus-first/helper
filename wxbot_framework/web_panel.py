@@ -5,6 +5,7 @@ from collections import deque, OrderedDict
 from concurrent.futures import TimeoutError as ControlTimeout
 from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 import json
 import logging
 import os
@@ -28,6 +29,8 @@ from .startup import scan_logged_accounts
 from .text import validate_target, validate_mentions
 from .scheduled_tasks import ScheduledTasks
 from .scheduled_actions import discover_actions
+from .articles import Articles, ArticlesError, normalize_article_url
+from .official_account_sync import OfficialAccountSync
 
 __all__ = ['LogBuffer', 'PanelController', 'PanelError', 'PanelHandler', 'PanelServer',
            'atomic_json', 'read_json', 'redact']
@@ -101,6 +104,9 @@ class PanelController:
         self.messages = MessageBuffer(sanitize=redact_full)
         self.send_jobs = {}
         self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
+        self.articles = Articles(self.workspace)
+        self.article_sync = OfficialAccountSync()
+        self._articles_read_lock = threading.Lock()
         self._moments_identity = None
         self._moments_read_lock = threading.Lock()
         self._moments_seen = OrderedDict()
@@ -157,6 +163,7 @@ class PanelController:
             self._save_many({self.store.path: config})
             if changed_account:
                 self.messages.reset()
+                self.article_sync.clear()
 
     def start(self):
         with self.actions, self.lock:
@@ -246,6 +253,7 @@ class PanelController:
         self.moments.close()
         self.moments_interactions.close()
         self.stop_event.set()
+        self.article_sync.clear()
         self.stop()
         if self.worker is not None:
             self.worker.join(15)
@@ -546,6 +554,170 @@ class PanelController:
                 raise PanelError('微信联系人缓存尚未就绪，请稍后重试', 409)
             return dict(snapshot, session_id=session)
         return self._call(query)
+
+    def _article_account(self, expected=None, *, required=False):
+        account = self.store.load().get('wechat_account')
+        if account_is_unbound(account):
+            raise PanelError('请先在顶部选择微信账号', 409)
+        if (required and not isinstance(expected, str)) or (expected is not None and expected != account):
+            raise PanelError('文章所属账号已变化，请刷新后重试', 409)
+        return account
+
+    def _article_pid(self, account):
+        try:
+            rows = [row for row in self.accounts() if row.get('wxid') == account]
+        except (RuntimeError, OSError):
+            raise PanelError('暂时无法识别当前微信账号，请稍后重试', 409) from None
+        if len(rows) != 1 or type(rows[0].get('pid')) is not int:
+            raise PanelError('请保持所选微信账号登录，并关闭该账号的重复会话', 409)
+        return rows[0]['pid']
+
+    def articles_connection(self):
+        from .official_account_sync import capabilities, OfficialAccountReadError
+        account = ''
+        try:
+            with self.lock:
+                account = self._article_account()
+            pid = self._article_pid(account)
+            info = capabilities(pid, account)
+            with self.lock:
+                self._article_account(account, required=True)
+            return dict(info, account=account, connected=True)
+        except (PanelError, OfficialAccountReadError) as error:
+            return {'account': account, 'connected': False, 'supported': False, 'reason': str(error)}
+
+    def article_publishers(self, account=None):
+        from .official_accounts import OfficialAccountReadError
+        with self.lock:
+            account = self._article_account(account, required=True)
+        pid = self._article_pid(account)
+        def cancelled():
+            with self.lock:
+                return self.stop_event.is_set() or self.store.load().get('wechat_account') != account
+        try:
+            result = self.article_sync.list_publishers(pid, account, cancelled=cancelled)
+        except OfficialAccountReadError as error:
+            raise PanelError(str(error), error.status) from None
+        if self._article_pid(account) != pid:
+            raise PanelError('微信会话已变化，请重新读取公众号', 409)
+        with self.lock:
+            self._article_account(account, required=True)
+            if cancelled():
+                raise PanelError('公众号读取已取消', 409)
+            return dict(result, account=account)
+
+    def list_articles(self, account=None, publisher=None):
+        with self.lock:
+            account = self._article_account(account, required=True)
+            try:
+                return dict(self.articles.list(account, publisher=publisher), account=account)
+            except ArticlesError as error:
+                raise PanelError(str(error), error.status) from None
+
+    def _read_articles(self, data, *, detail=False):
+        from .official_accounts import OfficialAccountReadError, _lookup
+        with self.lock:
+            account = self._article_account(data.get('account'), required=True)
+        publisher, url = data.get('publisher'), data.get('url') if detail else None
+        if not isinstance(publisher, str) or not 1 <= len(publisher.strip()) <= 128:
+            raise PanelError('请输入公众号昵称、微信号或 gh_ 标识')
+        if detail and (not isinstance(url, str) or not 1 <= len(url) <= 4096):
+            raise PanelError('请选择要读取的文章')
+        if detail:
+            url = normalize_article_url(url)
+            if not url:
+                raise PanelError('请选择有效的公众号文章链接')
+            try:
+                saved = self.articles.get(account, hashlib.sha256(url.encode()).hexdigest())
+            except ArticlesError as error:
+                raise PanelError('请先同步该公众号的文章列表，再选择文章', error.status) from None
+            known = saved['publisher']
+            if _lookup(publisher) not in {_lookup(known.get(key, '')) for key in ('username', 'nickname', 'alias')}:
+                raise PanelError('文章不属于所选公众号，请重新同步列表', 409)
+            publisher = known['username']
+        if not self._articles_read_lock.acquire(blocking=False):
+            raise PanelError('文章正在读取，请稍候', 409)
+        try:
+            pid = self._article_pid(account)
+            def cancelled():
+                if self.stop_event.is_set():
+                    return True
+                with self.lock:
+                    try:
+                        self._article_account(account, required=True)
+                        return False
+                    except PanelError:
+                        return True
+            try:
+                if detail:
+                    result = self.article_sync.read_article(pid, account, publisher.strip(), url, cancelled=cancelled)
+                else:
+                    result = self.article_sync.read_page(pid, account, publisher.strip(),
+                                                        continuation=data.get('continuation'), cancelled=cancelled)
+            except OfficialAccountReadError as error:
+                raise PanelError(str(error), error.status) from None
+            # The account can be rebound while a bounded read is in progress.
+            # Commit only to its original library after both identities agree.
+            if self._article_pid(account) != pid:
+                raise PanelError('微信会话已变化，请重新读取文章', 409)
+            with self.lock:
+                self._article_account(account, required=True)
+                try:
+                    if detail:
+                        if normalize_article_url(result.get('article', {}).get('url')) != url:
+                            raise PanelError('返回的文章已变化，已丢弃旧结果', 409)
+                        return {'account': account, 'article': self.articles.import_article(account, result)}
+                    stored = (self.articles.import_list(account, result, allow_partial=True) if result['articles'] else
+                              {'publisher': result['publisher'], 'articles': []})
+                    fields = ('has_more', 'continuation', 'complete_remote_history', 'limit_reached',
+                              'page_count', 'fetched_count', 'truncated')
+                    progress = {key: result[key] for key in fields}
+                    if stored.pop('capacity_limited', False):
+                        self.article_sync.clear()
+                        progress.update(has_more=False, continuation=None, complete_remote_history=False,
+                                        limit_reached=True, truncated=True,
+                                        fetched_count=result['fetched_count'] - len(result['articles']) + len(stored['articles']))
+                    return dict(stored, **progress, account=account)
+                except ArticlesError as error:
+                    raise PanelError(str(error), error.status) from None
+        except BaseException:
+            self.article_sync.clear()
+            raise
+        finally:
+            self._articles_read_lock.release()
+
+    def read_articles(self, data):
+        return self._read_articles(data)
+
+    def read_article(self, data):
+        return self._read_articles(data, detail=True)
+
+    def article(self, identifier, account=None):
+        with self.lock:
+            account = self._article_account(account, required=True)
+            try:
+                return {'account': account, 'article': self.articles.get(account, identifier)}
+            except ArticlesError as error:
+                raise PanelError(str(error), error.status) from None
+
+    def export_article(self, data):
+        with self.lock:
+            account = self._article_account(data.get('account'), required=True)
+            try:
+                return dict(self.articles.export(account, data.get('id')), account=account)
+            except ArticlesError as error:
+                raise PanelError(str(error), error.status) from None
+
+    def article_media(self, data):
+        with self.lock:
+            account = self._article_account(data.get('account'), required=True)
+        try:
+            result = self.articles.image(account, data.get('id'), data.get('index'))
+        except ArticlesError as error:
+            raise PanelError(str(error), error.status) from None
+        with self.lock:
+            self._article_account(account, required=True)
+        return dict(result, account=account)
 
     def list_scheduled_tasks(self):
         self.scheduled_tasks.start()
