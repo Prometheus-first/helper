@@ -35,6 +35,7 @@ H5 original_h5 = nullptr;
 Completion original_completion = nullptr;
 Execute original_execute = nullptr;
 uintptr_t core = 0, host = 0;
+uintptr_t app_vtable = 0, context_vtable = 0, h5_rva = 0, completion_rva = 0, json_dump_rva = 0;
 Config request{};
 Config* output = nullptr;
 void* awaited_callback = nullptr;
@@ -76,10 +77,10 @@ bool fingerprint(HMODULE module, uint64_t expected_size, const unsigned char* ex
 bool account_matches() {
     __try {
         const auto root = *reinterpret_cast<const uintptr_t*>(core + 0xbd0ce30);
-        if (!root || root != request.login_root || *reinterpret_cast<const uintptr_t*>(root) != core + 0x9054b98)
+        if (!root || root != request.login_root || *reinterpret_cast<const uintptr_t*>(root) != core + app_vtable)
             return false;
         const auto context = *reinterpret_cast<const uintptr_t*>(root + 0x68);
-        if (!context || context != request.login_context || *reinterpret_cast<const uintptr_t*>(context) != core + 0x90d4f88 ||
+        if (!context || context != request.login_context || *reinterpret_cast<const uintptr_t*>(context) != core + context_vtable ||
             !(*reinterpret_cast<const unsigned char*>(context + 0x38) & 1)) return false;
         const auto identity = reinterpret_cast<const SmallString*>(context + 0x48);
         const size_t length = strnlen_s(request.account, sizeof(request.account));
@@ -328,7 +329,7 @@ void __fastcall h5_hook(void* a, void* b, uint32_t frame, const SmallString* ori
 bool dump_json(void* value, SmallString* out) {
     __try {
         using Dump = void (__fastcall*)(SmallString*, void*);
-        reinterpret_cast<Dump>(core + 0x663100)(out, value); return true;
+        reinterpret_cast<Dump>(core + json_dump_rva)(out, value); return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void destroy_string(SmallString* out) {
@@ -447,15 +448,23 @@ DWORD start_impl(Config* config) {
     const auto core_module = GetModuleHandleW(L"Weixin.dll"), host_module = GetModuleHandleW(L"wmpf_host_export_x64.dll");
     constexpr unsigned char core_hash[32] = {0x74,0x5c,0xdf,0x29,0x55,0xfa,0x51,0x28,0xcd,0xb0,0x0c,0x05,0x6c,0x97,0x57,0x11,0x56,0xa5,0xf1,0x07,0x40,0x6a,0x9b,0xb1,0x5a,0xc0,0x75,0x4f,0x32,0x46,0xb2,0x01};
     constexpr unsigned char host_hash[32] = {0x64,0x44,0xb9,0x87,0x61,0xa5,0xe5,0x32,0xa9,0xfa,0x5b,0x62,0x82,0x43,0xff,0x4a,0x80,0xd7,0x84,0xfe,0x76,0x15,0x00,0x4a,0xf2,0x59,0x40,0x5c,0x39,0x41,0x20,0x9b};
-    if (!fingerprint(core_module, 205929008, core_hash) || !fingerprint(host_module, 6189608, host_hash)) return ERROR_REVISION_MISMATCH;
+    constexpr unsigned char core_hash_42012[32] = {0x2b,0x36,0x77,0xc3,0xf9,0x32,0xda,0xaa,0x4e,0xf8,0x4c,0x8b,0x2a,0xcd,0x0a,0xee,0x12,0xcb,0xe5,0xa7,0x79,0xff,0x9e,0x74,0x0c,0x37,0x07,0x61,0xe5,0xc2,0x91,0xce};
+    constexpr unsigned char host_hash_42012[32] = {0x33,0x1f,0x44,0xc8,0x11,0xb5,0xf2,0x48,0x9a,0xdd,0x4e,0xbc,0xec,0x82,0xa7,0x9b,0x90,0xff,0xbe,0xca,0x99,0x1a,0xaa,0xab,0x4c,0x16,0xde,0xbe,0x1d,0xf5,0xf4,0x26};
+    if (fingerprint(core_module, 205929008, core_hash) && fingerprint(host_module, 6189608, host_hash)) {
+        app_vtable = 0x9054b98; context_vtable = 0x90d4f88;
+        h5_rva = 0x4674510; completion_rva = 0x1f647c0; json_dump_rva = 0x663100;
+    } else if (fingerprint(core_module, 205932072, core_hash_42012) && fingerprint(host_module, 6189608, host_hash_42012)) {
+        app_vtable = 0x9055b98; context_vtable = 0x90d5f68;
+        h5_rva = 0x4675820; completion_rva = 0x1f64230; json_dump_rva = 0x661e80;
+    } else return ERROR_REVISION_MISMATCH;
     core = reinterpret_cast<uintptr_t>(core_module); host = reinterpret_cast<uintptr_t>(host_module);
     if (!account_matches()) return ERROR_NOT_READY;
     Frame frame{}; if (!find_frame(&frame) || frame.id != request.frame) return ERROR_NOT_READY;
     const auto mh = MH_Initialize(); if (mh != MH_OK) return ERROR_BUSY; initialized = true;
     if (request.operation == 1) {
-        if (MH_CreateHook(reinterpret_cast<void*>(core+0x4674510), reinterpret_cast<void*>(&h5_hook), reinterpret_cast<void**>(&original_h5)) != MH_OK) return ERROR_INVALID_FUNCTION;
+        if (MH_CreateHook(reinterpret_cast<void*>(core+h5_rva), reinterpret_cast<void*>(&h5_hook), reinterpret_cast<void**>(&original_h5)) != MH_OK) return ERROR_INVALID_FUNCTION;
         hook_h5 = true;
-        if (MH_CreateHook(reinterpret_cast<void*>(core+0x1f647c0), reinterpret_cast<void*>(&completion_hook), reinterpret_cast<void**>(&original_completion)) != MH_OK) return ERROR_INVALID_FUNCTION;
+        if (MH_CreateHook(reinterpret_cast<void*>(core+completion_rva), reinterpret_cast<void*>(&completion_hook), reinterpret_cast<void**>(&original_completion)) != MH_OK) return ERROR_INVALID_FUNCTION;
         hook_completion = true;
     } else {
         if (MH_CreateHook(reinterpret_cast<void*>(host+0x1cb6b0), reinterpret_cast<void*>(&execute_hook), reinterpret_cast<void**>(&original_execute)) != MH_OK) return ERROR_INVALID_FUNCTION;

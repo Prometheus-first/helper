@@ -79,6 +79,8 @@ VERIFIED_BUILDS = {
                    0x6AD083C8, 0xC34F000),
     "4.2.0.11": (205929008, "745cdf2955fa5128cdb00c056c97571156a5f107406a9bb15ac0754f3246b201",
                    0x6AE0A8D1, 0xC4DC000),
+    "4.2.0.12": (205932072, "2b3677c3f932daaa4ef84c8b2acd0aee12cbe5a779ff9e740c370761e5c291ce",
+                   0x6AE33707, 0xC4DB000),
 }
 VERIFIED_TEXT_42011 = {
     0x2010:0x2010, 0x45d10:0x45d10, 0x47220:0x47220, 0x47310:0x47310,
@@ -133,7 +135,7 @@ class NativeVersionBridgeTests(unittest.TestCase):
     def test_public_compatibility_metadata_pins_both_exact_builds(self):
         baseline = json.loads(source("compatibility.json"))
         rows = baseline["profiles"]
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         self.assertEqual({row["wechat_version"] for row in rows}, set(VERIFIED_BUILDS))
         for row in rows:
             size, digest, _, _ = VERIFIED_BUILDS[row["wechat_version"]]
@@ -142,10 +144,10 @@ class NativeVersionBridgeTests(unittest.TestCase):
 
     def test_native_fingerprint_table_matches_independent_artifact_identity(self):
         text = source("core_version.h")
-        rows = re.findall(r"\{([123]),\s*(\d+)ull,\s*(0x[0-9a-f]+),\s*(0x[0-9a-f]+),\s*\{([^}]+)\}\}", text)
-        self.assertEqual(len(rows), 3)
+        rows = re.findall(r"\{([1234]),\s*(\d+)ull,\s*(0x[0-9a-f]+),\s*(0x[0-9a-f]+),\s*\{([^}]+)\}\}", text)
+        self.assertEqual(len(rows), 4)
         for build_id, size, stamp, image_size, digest_bytes in rows:
-            expected = VERIFIED_BUILDS[{"1":"4.1.15.13", "2":"4.1.15.56", "3":"4.2.0.11"}[build_id]]
+            expected = VERIFIED_BUILDS[{"1":"4.1.15.13", "2":"4.1.15.56", "3":"4.2.0.11", "4":"4.2.0.12"}[build_id]]
             digest = bytes(int(value, 16) for value in re.findall(r"0x[0-9a-f]+", digest_bytes)).hex()
             self.assertEqual((int(size), digest, int(stamp, 16), int(image_size, 16)), expected)
 

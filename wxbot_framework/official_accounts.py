@@ -20,7 +20,7 @@ from .account import validate_account
 from .official_account_parser import (MAX_SPAN_BYTES, canonical_url, history_articles,
                                       json_spans, publisher_proofs, url_biz)
 
-_SUPPORTED = "4.2.0.11"
+_SUPPORTED = ("4.2.0.11", "4.2.0.12")
 _SECONDS = 12.0
 _WORK_SECONDS = 10.0
 _MAX_BYTES = 256 * 1024 * 1024
@@ -35,7 +35,7 @@ _DIAGNOSTICS = threading.local()
 _OPEN_ARTICLE = "请先在电脑微信打开该公众号一篇文章再重试"
 _OPEN_BODY = "请先在电脑微信打开这篇文章，待加载完成后重试"
 _CHANGED = "微信登录账号或窗口归属已变化，请重新选择账号后重试"
-_UNSUPPORTED = "当前微信核心指纹的公众号读取尚未适配，仅支持已验证的 4.2.0.11"
+_UNSUPPORTED = "当前微信核心指纹的公众号读取尚未适配，仅支持已验证的微信构建"
 _LIMITED = "公众号读取已到单次资源上限，请保持目标公众号页面打开后重试"
 
 
@@ -166,8 +166,13 @@ def _select_processes(rows, pid):
     return _Context(main, browser, tuple(renderers[:_MAX_RENDERERS]), len(renderers) > _MAX_RENDERERS)
 
 
-def _login_snapshot(read, core):
-    """The independently checked 4.2.0.11 login getter, without calling it."""
+def _login_snapshot(read, core, version="4.2.0.11"):
+    """只读校验指定版本的登录标志和账号对象链。"""
+    tables = {"4.2.0.11": (0x9054B98, 0x90D4F88),
+              "4.2.0.12": (0x9055B98, 0x90D5F68)}
+    if version not in tables:
+        return None
+    app_vtable, context_vtable = tables[version]
     def field(address, size):
         if not 0x10000 <= address < address + size < 0x800000000000:
             raise ValueError("invalid login object")
@@ -181,13 +186,13 @@ def _login_snapshot(read, core):
 
     root = pointer(core + 0xBD0CE30)
     table = pointer(root)
-    if table != core + 0x9054B98 or pointer(table + 0x68) != core + 0x4FFD0:
+    if table != core + app_vtable or pointer(table + 0x68) != core + 0x4FFD0:
         return None
     if field(core + 0x4FFD0, 7) != b"\x48\x8b\x49\x68\x48\x85\xc9":
         return None
     context = pointer(root + 0x68)
     context_table = pointer(context)
-    if context_table != core + 0x90D4F88 or pointer(context_table) != core + 0x38BDB0:
+    if context_table != core + context_vtable or pointer(context_table) != core + 0x38BDB0:
         return None
     if field(core + 0x38BDB0, 7) != b"\x0f\xb6\x41\x38\x24\x01\xc3":
         return None
@@ -222,7 +227,7 @@ class _WindowsPlatform:
         path = _local_path(Path(module[1]), suffix={".dll"})
         stat = path.stat()
         profile = _fingerprint(str(path), stat.st_size, stat.st_mtime_ns)
-        if profile is None or profile.version != _SUPPORTED:
+        if profile is None or profile.version not in _SUPPORTED:
             raise OfficialAccountReadError(_UNSUPPORTED, 501)
         budget.check()
         return _Target(module[0], profile, tuple(module), (stat.st_size, stat.st_mtime_ns))
@@ -241,17 +246,17 @@ class _WindowsPlatform:
 
     def account(self, memory, target):
         from .account import read_current_account
-        if target.profile.version != _SUPPORTED:
+        if target.profile.version not in _SUPPORTED:
             return None
         try:
             before = read_current_account(memory.read, target.core, profiles=(target.profile,))
             if not before:
                 return None
-            login = _login_snapshot(memory.read, target.core)
+            login = _login_snapshot(memory.read, target.core, target.profile.version)
             if login is None:
                 return None
             after = read_current_account(memory.read, target.core, profiles=(target.profile,))
-            if after != before or _login_snapshot(memory.read, target.core) != login:
+            if after != before or _login_snapshot(memory.read, target.core, target.profile.version) != login:
                 return None
             return before
         except (OSError, ValueError, struct.error):
@@ -549,7 +554,7 @@ def capabilities(pid, expected_account):
     budget = _Budget(platform.clock)
     try:
         target = platform.target(pid, budget)
-        if target.profile.version != _SUPPORTED:
+        if target.profile.version not in _SUPPORTED:
             raise OfficialAccountReadError(_UNSUPPORTED, 501)
         with ExitStack() as stack:
             memory = _BudgetMemory(platform.memory(pid), budget, pid)
@@ -557,7 +562,7 @@ def capabilities(pid, expected_account):
             if platform.account(memory, target) != expected_account:
                 raise OfficialAccountReadError(_CHANGED, 409)
             _verify(platform, pid, expected_account, target, memory, budget)
-        return {"supported": True, "version": _SUPPORTED, "reason": ""}
+        return {"supported": True, "version": target.profile.version, "reason": ""}
     except OfficialAccountReadError:
         raise
     except _Limit:
@@ -587,7 +592,7 @@ def read_loaded_articles(pid, expected_account, publisher, *, url=None, timeout=
     articles = {}
     try:
         target = platform.target(pid, budget)
-        if target.profile.version != _SUPPORTED:
+        if target.profile.version not in _SUPPORTED:
             raise OfficialAccountReadError(_UNSUPPORTED, 501)
         with ExitStack() as stack:
             main_memory = _BudgetMemory(platform.memory(pid), budget, pid)

@@ -31,6 +31,17 @@ TEXT_42011_CAPABILITIES = CAPABILITIES | frozenset({
     "voice.receive", "voice.send", "friend.voice.send", "group.voice.send"})
 
 
+# 新版只公布已验证的功能；其他能力必须单独适配并完成实测。
+TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
+    "friend.text.receive", "friend.text.send", "friend.request.receive", "friend.request.accept",
+    "group.text.receive", "group.text.send",
+    "group.text.mention", "message.recall", "group.members.read", "group.events", "image.receive", "image.send",
+    "file.receive", "file.send", "friend.file.receive", "friend.file.send",
+    "group.file.receive", "group.file.send", "voice.receive", "voice.send",
+    "friend.voice.send", "group.voice.send",
+})
+
+
 class NativeFileHelperBackend:
     scope = "文件传输助手文本"
     def __init__(self, root, config, *, data_root=None):
@@ -68,12 +79,16 @@ class NativeFileHelperBackend:
 class NativeTextBackend(NativeFileHelperBackend):
     @property
     def scope(self):
+        if self.raw.wechat_version == '4.2.0.12':
+            return '文本、语音、图片及文件收发，群艾特、文字撤回和群成员缓存'
         if self.raw.wechat_version == '4.2.0.11':
             return '文本、语音、图片及文件收发，群艾特、文字撤回和群成员缓存'
         return '文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理'
 
     @property
     def capabilities(self):
+        if self.raw.wechat_version == '4.2.0.12':
+            return TEXT_42012_CAPABILITIES
         return TEXT_42011_CAPABILITIES if self.raw.wechat_version == '4.2.0.11' else TEXT_CAPABILITIES
 
     def __init__(self, root, config, *, data_root=None):

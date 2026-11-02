@@ -15,7 +15,7 @@ from wxbot_framework.group_members import read_group_members
 from wxbot_framework.emoticon_account import read_emoticon_cache_key
 from wxbot_framework.native_profiles import CORE_PROFILES, CoreProfile, profile_for_fingerprint, select_memory_profile
 
-OLD, NEW, TEXT_42011 = CORE_PROFILES
+OLD, NEW, TEXT_42011, TEXT_42012 = CORE_PROFILES
 
 
 def updated_memory(ram, profile=NEW):
@@ -61,6 +61,16 @@ class NativeProfileTests(unittest.TestCase):
         self.assertEqual(read_current_account(ram.read, BASE, profiles=(partial,)), SELF)
         ram.write(BASE + partial.rva(0x36F930), b'\0' * 5)
         self.assertIsNone(read_current_account(ram.read, BASE, profiles=(partial,)))
+
+    def test_42012_verified_account_and_group_profile(self):
+        profile = TEXT_42012
+        ram = updated_memory(AccountMemory(), profile)
+        self.assertIs(profile_for_fingerprint(profile.size, profile.sha256), profile)
+        self.assertIsNone(profile_for_fingerprint(profile.size, '0' * 64))
+        self.assertEqual(read_current_account(ram.read, BASE), SELF)
+        self.assertEqual(profile.rva(0x8F9C228), 0x927B688)
+        ram.write(BASE + profile.rva(0x36F930), b'\0' * 5)
+        self.assertIsNone(read_current_account(ram.read, BASE))
 
     def test_42011_profile_is_text_and_group_only(self):
         ram = updated_memory(AccountMemory(), TEXT_42011)

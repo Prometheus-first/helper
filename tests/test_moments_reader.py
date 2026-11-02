@@ -102,6 +102,14 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(result['rows'], [])
         self.assertEqual(result['loaded_count'], 1)
 
+    def test_42012_source_tables(self):
+        profile = SimpleNamespace(version='4.2.0.12', rva=lambda value: 0xBB92FA0)
+        self.target.return_value = (CORE, profile)
+        primary, secondary = reader._SOURCE_TABLES[profile.version]
+        self.memory.put(SOURCE, struct.pack('<Q', CORE + primary))
+        self.memory.put(SOURCE + 0x10, struct.pack('<Q', CORE + secondary))
+        self.assertEqual(len(self.run_read()['rows']), 1)
+
     def add_interaction(self, *, comment=False):
         obj = COMMENT_ITEM if comment else LIKE_ITEM
         pairs = COMMENT_PAIRS if comment else LIKE_PAIRS

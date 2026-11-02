@@ -275,6 +275,7 @@ static DWORD emoticon_dispatch(void* parameter, bool send) {
         return ERROR_INVALID_PARAMETER;
     HMODULE core = GetModuleHandleW(L"Weixin.dll");
     if (!core || !core_fingerprint(core)) return ERROR_NOT_SUPPORTED;
+    if (InterlockedCompareExchange(&core_profile_id, 0, 0) >= 3) return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     return emoticon_schedule(config);
 }

@@ -6,16 +6,29 @@ import json
 from pathlib import Path
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
 from wxbot_framework.panel_common import PanelError
 from wxbot_framework.panel_http import PanelServer
-from wxbot_framework.wechat_login import WechatLoginManager, _find_qr
+from wxbot_framework.wechat_login import WechatLoginManager, _find_qr, _verified_core
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = 'http://weixin.qq.com/x/ABCDEFGHIJKLMN012345'
+
+
+class VerifiedCoreTests(unittest.TestCase):
+    def test_login_accepts_only_known_supported_versions(self):
+        from types import SimpleNamespace
+        with patch('native.moments_transport._core_profile') as lookup:
+            for version in ('4.2.0.11', '4.2.0.12'):
+                lookup.return_value = SimpleNamespace(version=version)
+                _verified_core(Path('Weixin.dll'))
+            for profile in (None, SimpleNamespace(version='4.2.0.13')):
+                lookup.return_value = profile
+                with self.assertRaises(PanelError):
+                    _verified_core(Path('Weixin.dll'))
 
 
 class FakeTarget:

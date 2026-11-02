@@ -27,6 +27,11 @@ _CORE_SIZE = 205929008
 _CORE_HASH = '745cdf2955fa5128cdb00c056c97571156a5f107406a9bb15ac0754f3246b201'
 _HOST_SIZE = 6189608
 _HOST_HASH = '6444b98761a5e532a9fa5b628243ff4a80d784fe7615004af259405c3941209b'
+_ARTICLE_BUILDS = (
+    ('4.2.0.11', _CORE_SIZE, _CORE_HASH, _HOST_SIZE, _HOST_HASH),
+    ('4.2.0.12', 205932072, '2b3677c3f932daaa4ef84c8b2acd0aee12cbe5a779ff9e740c370761e5c291ce',
+     6189608, '331f44c811b5f2489add4ebcec82a79b90ffbeca991aaaab4c16debe1df5f426'),
+)
 _FEED = b'weixin://resourceid/SubscriptionDisorder/disorder.html'
 _START, _STOP, _ABI = b'WxArticleStart', b'WxArticleStop', b'WxArticleBridgeAbi'
 _LOCKS, _LOCKS_GUARD = {}, threading.Lock()
@@ -227,6 +232,7 @@ class _Snapshot:
     host: int
     login_root: int
     login_context: int
+    version: str = '4.2.0.11'
 
 
 def _inputs(pid, account, publisher=None):
@@ -244,31 +250,43 @@ def _inputs(pid, account, publisher=None):
         raise ArticleTransportError('公众号身份无效，请重新选择', 400)
 
 
+def _verified_article_modules(core_path, host_path):
+    """只接受单个已验证组合，不能跨版本混用核心与浏览器。"""
+    from wxbot_framework.native_profiles import profile_for_fingerprint
+    for version, core_size, core_hash, host_size, host_hash in _ARTICLE_BUILDS:
+        try:
+            core_file = _fingerprint(core_path, core_size, core_hash)
+            host_file = _fingerprint(host_path, host_size, host_hash)
+        except ArticleTransportError:
+            continue
+        profile = profile_for_fingerprint(core_size, core_hash)
+        if profile is not None and profile.version == version:
+            return profile, core_file, host_file
+    raise ArticleTransportError('当前微信或公众号浏览器版本尚未适配主动读取', 501)
+
+
 def _snapshot(pid, account, *, require_frame=True):
     _inputs(pid, account)
     if sys.platform != 'win32':
         raise ArticleTransportError('公众号主动读取仅支持 Windows', 501)
     from wxbot_framework.account import read_current_account
     from wxbot_framework.moments_reader import _Memory
-    from wxbot_framework.native_profiles import profile_for_fingerprint
     from wxbot_framework.official_accounts import _login_snapshot
     modules = _native().modules(pid)
     core, host = modules.get('weixin.dll'), modules.get('wmpf_host_export_x64.dll')
     if not core or not host:
         raise ArticleTransportError('公众号浏览器尚未就绪，请保持微信登录后重试')
-    core_file = _fingerprint(core[1], _CORE_SIZE, _CORE_HASH)
-    host_file = _fingerprint(host[1], _HOST_SIZE, _HOST_HASH)
-    profile = profile_for_fingerprint(_CORE_SIZE, _CORE_HASH)
+    profile, core_file, host_file = _verified_article_modules(core[1], host[1])
     memory = _Memory(pid)
     try:
         before = read_current_account(memory.read, core[0], profiles=(profile,))
-        login = _login_snapshot(memory.read, core[0])
+        login = _login_snapshot(memory.read, core[0], profile.version)
         if before != account or not login:
             raise ArticleTransportError('微信登录会话已变化，请重新选择账号')
         frame = _frame_binding(memory.read, host[0])[0] if require_frame else 0
         latest_modules = _native().modules(pid)
         if (read_current_account(memory.read, core[0], profiles=(profile,)) != before or
-                _login_snapshot(memory.read, core[0]) != login or
+                _login_snapshot(memory.read, core[0], profile.version) != login or
                 latest_modules.get('weixin.dll') != core or latest_modules.get('wmpf_host_export_x64.dll') != host):
             raise ArticleTransportError('微信登录会话已变化，请重新选择账号')
         # PID reuse changes the process-creation time even if its selected account is identical.
@@ -280,7 +298,7 @@ def _snapshot(pid, account, *, require_frame=True):
         if not get_times(memory.handle, c.byref(creation), c.byref(exit_time), c.byref(kernel_time), c.byref(user_time)):
             raise ArticleTransportError('无法核对微信会话，请稍后重试')
         identity = (pid, creation.value, core[0], core_file, host[0], host_file, tuple(login))
-        return _Snapshot(identity, frame, core[0], host[0], login[0], login[2])
+        return _Snapshot(identity, frame, core[0], host[0], login[0], login[2], profile.version)
     except ArticleTransportError:
         raise
     except (OSError, ValueError, struct.error, OverflowError):
@@ -298,8 +316,8 @@ def article_capabilities(pid, account, *, bridge_path=ARTICLE_DLL):
     try:
         bridge = _local_path(bridge_path, suffix={'.dll'})
         _exports(bridge)
-        _snapshot(pid, account)
-        return {'supported': True, 'version': '4.2.0.11', 'reason': ''}
+        snapshot = _snapshot(pid, account)
+        return {'supported': True, 'version': snapshot.version, 'reason': ''}
     except ArticleTransportError as error:
         return {'supported': False, 'reason': str(error)}
     except (OSError, ValueError, pefile.PEFormatError):

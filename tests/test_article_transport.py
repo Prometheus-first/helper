@@ -95,6 +95,27 @@ class FrameIdentityTests(unittest.TestCase):
         with self.assertRaises(ValueError):transport._frame_binding(memory.read, memory.host)
 
 
+class ArticleBuildPairTests(unittest.TestCase):
+    def test_matching_builds_work_but_mixed_or_unknown_hosts_fail(self):
+        builds = {row[0]: row for row in transport._ARTICLE_BUILDS}
+        def check_pair(core_version, host_version):
+            core = builds[core_version]
+            host = builds[host_version]
+            def fingerprint(path, size, digest):
+                actual = core[1:3] if path == 'core' else host[3:5]
+                if (size, digest) != actual:
+                    raise transport.ArticleTransportError('fingerprint mismatch', 501)
+                return (path, size, digest)
+            with patch.object(transport, '_fingerprint', side_effect=fingerprint):
+                return transport._verified_article_modules('core', 'host')
+        for version in ('4.2.0.11', '4.2.0.12'):
+            self.assertEqual(check_pair(version, version)[0].version, version)
+        with self.assertRaises(transport.ArticleTransportError):
+            check_pair('4.2.0.11', '4.2.0.12')
+        with self.assertRaises(transport.ArticleTransportError):
+            check_pair('4.2.0.12', '4.2.0.11')
+
+
 class SessionSnapshotTests(unittest.TestCase):
     def snapshot(self, *, replace_host=False):
         initial = {'weixin.dll': (0x100000, 'synthetic-core.dll'),

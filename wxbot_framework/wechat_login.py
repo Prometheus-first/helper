@@ -1,4 +1,4 @@
-"""本机微信 4.2.0.11 登录二维码，按进程隔离且不保存登录凭据。"""
+"""本机微信登录二维码，按进程隔离且不保存登录凭据。"""
 from __future__ import annotations
 
 import base64
@@ -162,8 +162,8 @@ def _native(root):
 def _verified_core(path):
     from native.moments_transport import _core_profile
     profile = _core_profile(Path(path))
-    if profile is None or profile.version != '4.2.0.11':
-        raise PanelError('登录二维码目前仅支持已验证的微信 4.2.0.11 构建', 409)
+    if profile is None or profile.version not in ('4.2.0.11', '4.2.0.12'):
+        raise PanelError('登录二维码目前只支持已验证的微信构建', 409)
 
 
 def _install_path(root):
@@ -186,15 +186,20 @@ def _install_path(root):
                 with winreg.OpenKey(hive, key) as registry:
                     value, _ = winreg.QueryValueEx(registry, 'InstallPath')
                 folder = Path(value).resolve()
-                exe, dll = folder / 'Weixin.exe', folder / '4.2.0.11' / 'Weixin.dll'
-                if exe.is_file() and dll.is_file():
-                    _verified_core(dll)
-                    candidates.add(exe)
+                exe = folder / 'Weixin.exe'
+                for version in ('4.2.0.11', '4.2.0.12'):
+                    dll = folder / version / 'Weixin.dll'
+                    if exe.is_file() and dll.is_file():
+                        try:
+                            _verified_core(dll)
+                        except (OSError, ValueError, PanelError):
+                            continue
+                        candidates.add(exe)
             except (OSError, TypeError, ValueError, PanelError):
                 continue
     candidates = {path.resolve() for path in candidates if path.is_file()}
     if len(candidates) != 1:
-        raise PanelError('未找到唯一的微信 4.2.0.11 安装位置，请先自行打开微信', 409)
+        raise PanelError('未找到唯一的受支持微信安装位置，请先自行打开微信', 409)
     return next(iter(candidates))
 
 

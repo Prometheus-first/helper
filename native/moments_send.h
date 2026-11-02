@@ -54,7 +54,7 @@ static uintptr_t address(uintptr_t rva) {
 }
 
 static size_t model_field(size_t offset) {
-    return offset + (InterlockedCompareExchange(&core_profile_id, 0, 0) == 3 ? 0x10 : 0);
+    return offset + ((InterlockedCompareExchange(&core_profile_id, 0, 0) == 3 || InterlockedCompareExchange(&core_profile_id, 0, 0) == 4) ? 0x10 : 0);
 }
 
 struct VectorView { void* begin; void* end; void* capacity; };
@@ -789,7 +789,8 @@ static DWORD dispatch(void* parameter, bool execute) {
     const HMODULE core = GetModuleHandleW(L"Weixin.dll");
     if (!core || !core_fingerprint(core) ||
         (InterlockedCompareExchange(&core_profile_id, 0, 0) != 2 &&
-         InterlockedCompareExchange(&core_profile_id, 0, 0) != 3))
+         InterlockedCompareExchange(&core_profile_id, 0, 0) != 3 &&
+         InterlockedCompareExchange(&core_profile_id, 0, 0) != 4))
         return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     if (!anchors_match()) return ERROR_REVISION_MISMATCH;

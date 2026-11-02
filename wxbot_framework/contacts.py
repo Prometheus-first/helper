@@ -401,13 +401,13 @@ def _read_friend_cache_name(read_memory, core_base, wxid, *, expected_account=No
 
 
 def _read_group_contact_cache_name(read_memory, core_base, wxid, *, expected_account=None):
-    """读取 4.2.0.11 已验证的群成员／非好友 LRU，不触发网络请求。"""
+    """读取已验证版本的群成员／非好友 LRU，不触发网络请求。"""
     account = read_current_account(read_memory, core_base)
     if not account or (expected_account is not None and account != expected_account):
         return None
     try:
         profile = select_memory_profile(read_memory, core_base)
-        if profile is None or profile.version != '4.2.0.11':
+        if profile is None or profile.version not in ('4.2.0.11', '4.2.0.12'):
             return None
         # 与群缓存使用相同的 LRU 链表及哈希索引布局；仅按真实 ID 查找。
         from .group_members import _StableReader, _find_room

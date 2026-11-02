@@ -237,6 +237,7 @@ static DWORD group_management_dispatch(void* parameter, bool execute, uint32_t r
         return ERROR_INVALID_PARAMETER;
     HMODULE core = GetModuleHandleW(L"Weixin.dll");
     if (!core || !core_fingerprint(core)) return ERROR_NOT_SUPPORTED;
+    if (InterlockedCompareExchange(&core_profile_id, 0, 0) >= 3) return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     try {
         auto lease = std::make_shared<GroupManagementLease>(config, execute);

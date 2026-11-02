@@ -147,7 +147,9 @@ class NativeTextService(NativeFileHelperService):
             # 手动指定 PID 时也先只读核对，避免向其他账号加载 DLL。
             raise RuntimeError("目标进程登录的不是绑定的机器人账号，等待正确账号登录")
         result = super().start()
-        if self.wechat_version == '4.2.0.11':
+        if self.wechat_version == '4.2.0.12':
+            logger.info("当前登录微信ID=%s；4.2.0.12 文本、语音、图片及文件收发已就绪", self.self_wxid)
+        elif self.wechat_version == '4.2.0.11':
             logger.info("当前登录微信ID=%s；4.2.0.11 文本、语音、图片及文件收发已就绪", self.self_wxid)
         else:
             logger.info("当前登录微信ID=%s；好友和群聊文本、图片、文件已就绪", self.self_wxid)

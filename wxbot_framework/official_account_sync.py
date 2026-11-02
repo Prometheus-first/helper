@@ -68,7 +68,7 @@ class _Guard(AbstractContextManager):
         if not function(self.memory.handle, *(c.byref(value) for value in values)):
             raise OfficialAccountReadError(_CHANGED, 409)
         created = (values[0].dwHighDateTime << 32) | values[0].dwLowDateTime
-        login = _login_snapshot(self.memory.read, self.target.core)
+        login = _login_snapshot(self.memory.read, self.target.core, self.target.profile.version)
         if not login:
             raise OfficialAccountReadError(_CHANGED, 409)
         return created, self.target.module, self.target.file_identity, login

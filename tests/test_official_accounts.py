@@ -200,6 +200,19 @@ class NativeGuardTests(unittest.TestCase):
         }
         return core, context, values
 
+    def test_42012_login_getters_and_account_chain(self):
+        core, context, values = self.login_memory()
+        root = core + 0x1000
+        values[root] = struct.pack("<Q", core + 0x9055B98)
+        values[core + 0x9055B98 + 0x68] = struct.pack("<Q", core + 0x4FFD0)
+        values[context] = struct.pack("<Q", core + 0x90D5F68)
+        values[core + 0x90D5F68] = struct.pack("<Q", core + 0x38BDB0)
+        memory = SimpleNamespace(read=lambda address, size: values[address][:size])
+        target = SimpleNamespace(core=core, profile=SimpleNamespace(version="4.2.0.12"))
+        with patch("wxbot_framework.account.read_current_account", return_value=ACCOUNT):
+            self.assertEqual(reader._WindowsPlatform().account(memory, target), ACCOUNT)
+        self.assertIsNone(reader._login_snapshot(memory.read, core, "4.2.0.13"))
+
     def test_logged_out_cached_account_and_other_flag_are_rejected(self):
         platform = reader._WindowsPlatform()
         for flag in (0, 2, 1):

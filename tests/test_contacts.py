@@ -132,6 +132,12 @@ class GroupContactCacheTests(unittest.TestCase):
         self.assertIsNone(read_contact_name(self.ram.read, BASE, 'wxid_missing', expected_account=SELF))
         self.assertIsNone(read_contact_name(self.ram.read, BASE, PEER, expected_account='wxid_other'))
 
+    def test_42012_nonfriend_name_uses_the_verified_cache(self):
+        with patch('wxbot_framework.contacts.select_memory_profile',
+                   return_value=SimpleNamespace(version='4.2.0.12', rva=lambda value: value,
+                                                rvas={CONTACT_CACHE_VTABLE_RVA: CONTACT_CACHE_VTABLE_RVA})):
+            self.assertEqual(read_contact_name(self.ram.read, BASE, PEER, expected_account=SELF), '新群友')
+
     def test_changed_snapshot_and_mismatched_identity_are_rejected(self):
         changed = False
         def changing(address, length):
