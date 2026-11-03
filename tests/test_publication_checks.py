@@ -25,6 +25,15 @@ class PublicationChecksTests(unittest.TestCase):
         unknown.write_bytes(b'synthetic unexpected bridge')
         self.assertIn({'file':'native/build_article/another_bridge.dll','kind':'unexpected_binary'}, inspect(self.root)['findings'])
 
+    def test_linux_build_outputs_and_core_dumps_are_not_release_files(self):
+        for name in ('native/linux/stale.so', 'core', 'core.1234', 'wechat.core'):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'synthetic diagnostic artifact')
+        findings = inspect(self.root)['findings']
+        for name in ('native/linux/stale.so', 'core', 'core.1234', 'wechat.core'):
+            self.assertIn({'file': name, 'kind': 'unnecessary_or_private_artifact'}, findings)
+
     def test_known_private_markers_in_native_utf16_are_reported_without_values(self):
         marker = 'synthetic-sensitive-owner'
         path = self.root / 'native/build_article/article_bridge.dll'

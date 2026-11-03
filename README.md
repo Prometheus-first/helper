@@ -1,6 +1,9 @@
 # helper
 
+
 Windows 微信机器人 Python 插件框架，提供本地网页管理台和控制台入口。
+
+Linux 实验版已验证文本收发、本地图片与文件发送、好友图片后台自动下载；尚未接入日常启动入口和网页管理台。安装、验证命令和限制见 [Linux 实验版](LINUX_PORT_STATUS.md)。
 
 [在线文档](https://prometheus-first.github.io/helper/) · [快速开始](docs/guide/quick-start.md) · [插件开发](docs/development/plugins.md)
 
@@ -72,6 +75,7 @@ python main.py
 | 图片、文件、表情和语音 | [图片](docs/messages/images.md) · [文件](docs/messages/files.md) · [表情](docs/messages/emoticons.md) · [语音](docs/messages/voice.md) |
 | 合并转发与防撤回 | [合并转发](docs/messages/forwarded.md) · [防撤回](docs/messages/recall.md) |
 | 好友申请、群成员与群管理 | [好友申请与群管理](docs/guide/friends-and-groups.md) |
+| Linux 适配与测试 | [Linux 实验版](LINUX_PORT_STATUS.md) |
 | 开发和维护 | [插件开发](docs/development/plugins.md) · [代码结构与验证](docs/development/structure.md) |
 
 ## 目录

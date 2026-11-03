@@ -22,7 +22,7 @@ logger = logging.getLogger("Bot")
 
 
 class BotApplication:
-    def __init__(self, root, store, *, backend_factory=None):
+    def __init__(self, root, store, *, backend_factory=None, initial_capabilities=None):
         self.root, self.store = root, store
         self.config = store.load()
         self.service = ServiceFacade(text_delay=self.config.get("text_send_delay"))
@@ -30,7 +30,7 @@ class BotApplication:
         self.service.message_observer = self._observe_message
         self.members = MemberStore.from_config(self.config, self.store.path.parent)
         generic = self.config.get("backend") == "native_text"
-        capabilities = TEXT_CAPABILITIES if generic else CAPABILITIES
+        capabilities = (TEXT_CAPABILITIES if generic else CAPABILITIES) if initial_capabilities is None else frozenset(initial_capabilities)
         self.plugins = PluginManager(root / "plugins", store, self.service, capabilities,
                                      self.config.get("plugin_queue_size", 128), member_store=self.members)
         backend_type = NativeTextBackend if generic else NativeFileHelperBackend

@@ -37,7 +37,9 @@ def inspect(root, private_markers=()):
         label = relative.as_posix()
         if path.suffix.lower() in ('.pyc','.obj','.pdb','.lib','.exp','.exe','.dmp','.db','.sqlite','.sqlite3','.bak','.zip',
                                    '.wxgf','.hevc','.gif','.png','.jpg','.jpeg','.webp','.bmp',
-                                   '.wav','.pcm','.silk','.mp3','.opus','.ogg','.flac','.aac','.amr','.m4a'):
+                                   '.wav','.pcm','.silk','.mp3','.opus','.ogg','.flac','.aac','.amr','.m4a','.so','.core'):
+            findings.append({'file':label,'kind':'unnecessary_or_private_artifact'})
+        if path.name == 'core' or path.name.startswith('core.'):
             findings.append({'file':label,'kind':'unnecessary_or_private_artifact'})
         if path.suffix.lower() == '.dll' and label not in ALLOWED_DLLS:
             findings.append({'file':label,'kind':'unexpected_binary'})

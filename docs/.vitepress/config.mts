@@ -41,6 +41,7 @@ export default defineConfig({
       { text: '开发与维护', items: [
         { text: '插件开发', link: '/development/plugins' },
         { text: '代码结构与验证', link: '/development/structure' },
+        { text: 'Linux 实验版', link: '/guide/linux' },
         { text: '常见问题', link: '/guide/faq' },
         { text: '维护这份文档', link: '/development/documentation' }
       ] }

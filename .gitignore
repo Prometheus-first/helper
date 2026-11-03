@@ -63,3 +63,11 @@ desktop.ini
 /wxbot-main/
 /config.json
 /Helper_*.dll
+
+# Linux bridges are built locally; do not publish diagnostic binaries or dumps
+*.so
+*.core
+/core
+/core.*
+/native/linux/build/
+/helper-linux-lab/
