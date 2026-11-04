@@ -72,7 +72,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_media_monitor_does_not_keep_xml_credentials(self):
         monitor = MessageBuffer()
-        for kind in (3, 34, 49):
+        for kind in (3, 34, 47, 49):
             message = self.backend.convert_event(self.event('<msg aeskey="PRIVATE_FIXTURE_KEY"/>', kind))
             self.assertTrue(message.data['monitor_only'])
             self.assertEqual(message.text, '')
@@ -80,8 +80,50 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn('PRIVATE_FIXTURE', repr(message.data))
         content = json.dumps(monitor.tail(0))
         self.assertNotIn('aeskey', content)
-        for text in ('[图片]', '[语音]', '[文件/分享]'):
+        for text in ('[图片]', '[语音]', '[表情]', '[文件/分享]'):
             self.assertIn(text, json.dumps(monitor.tail(0), ensure_ascii=False))
+
+    def test_recall_marks_original_and_does_not_expose_system_xml(self):
+        monitor=MessageBuffer()
+        source=self.event('wxid_friend_fixture:\n原消息', sender='123@chatroom')
+        source['native_message_id']='18446744073709551614'
+        original=self.backend.convert_event(source)
+        monitor.append(original)
+        xml=('<sysmsg type="revokemsg"><revokemsg><session>123@chatroom</session>'
+             '<newmsgid>18446744073709551614</newmsgid><replacemsg>撤回了一条消息</replacemsg>'
+             '</revokemsg></sysmsg>')
+        event=self.event(xml,10002,sender='123@chatroom');event['sequence']=2
+        recall=self.backend.convert_event(event)
+        self.assertTrue(recall.data['monitor_only'])
+        self.assertFalse(recall.data['dispatch_to_recall_plugins'])
+        self.assertNotIn('sysmsg',repr(recall.data))
+        monitor.append(recall)
+        rows=monitor.tail(0)['rows']
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['content'],'原消息')
+        self.assertTrue(rows[0]['recalled'])
+        self.assertEqual(rows[0]['message_id'],'18446744073709551614')
+
+    def test_recall_rejects_wrong_session_and_forged_xml(self):
+        xml=('<sysmsg type="revokemsg"><revokemsg><session>999@chatroom</session>'
+             '<newmsgid>1</newmsgid></revokemsg></sysmsg>')
+        self.assertIsNone(self.backend.convert_event(self.event(xml,10002,sender='123@chatroom')))
+        self.assertIsNone(self.backend.convert_event(self.event('<!DOCTYPE x><sysmsg/>',10002,sender='123@chatroom')))
+
+    def test_monitor_only_recall_does_not_invoke_plugins(self):
+        from types import SimpleNamespace
+        from wxbot_framework.runtime import BotApplication
+        observed=[];dispatched=[]
+        app=SimpleNamespace(_with_group_role=lambda message: message,
+                            _observe_message=observed.append,
+                            _dispatch_recall_plugins=dispatched.append,
+                            config={'chat_allowlist':[]})
+        msg=Message(text='',chat_id='123@chatroom',type=10002,is_group=True,
+                    data={'monitor_only':True,'dispatch_to_recall_plugins':False,
+                          'recall':{'chat_id':'123@chatroom','message_id':'7'}})
+        BotApplication._emit(app,msg)
+        self.assertEqual(observed,[msg])
+        self.assertEqual(dispatched,[])
 
     def test_capture_environment_does_not_inherit_diagnostic_filters(self):
         env = self.backend.launch_environment({'HELPER_LINUX_TEST_MEDIA':'1', 'HELPER_LINUX_TEST_MARKERS':'1'})
@@ -119,6 +161,13 @@ class FakeBackend:
 
     def chats(self):
         return [{'chat_id':'wxid_friend_fixture', 'is_group':False, 'name':''}]
+
+    def contacts(self):
+        return {'account': self.account, 'session_id': self.session_id, 'source': 'wechat_database',
+                'complete': False, 'scanned_at': '2026-01-01T00:00:00Z',
+                'contacts': [{'wxid':'wxid_friend_fixture', 'nickname':'合成昵称', 'remark':'合成备注',
+                              'alias':'', 'tags':['合成标签'], 'tag_ids':['7'], 'tags_status':'ready'}],
+                'tags': [{'id':'7', 'name':'合成标签'}]}
 
     def stop(self):
         return {'capture_stop_requested':True, 'wechat_left_running':True}
@@ -204,6 +253,26 @@ class PanelTests(unittest.TestCase):
         editor = self.controller.plugin_business('echo')
         self.assertIn('functions', editor)
         self.assertNotIn('files', editor)
+
+    def test_linux_contacts_http_read_is_authenticated_and_session_scoped(self):
+        self.start_identified()
+        server = PanelServer(self.controller, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = 'http://127.0.0.1:' + str(server.server_address[1]) + '/api/contacts'
+        with self.assertRaises(HTTPError) as error:
+            urlopen(url)
+        self.assertEqual(error.exception.code, 403)
+        with urlopen(Request(url, headers={'X-Helper-Token': server.token})) as response:
+            result = json.load(response)
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual(result['session_id'], 'linux-fixture-session')
+        self.assertEqual(result['account'], 'wxid_self_fixture')
+        self.assertEqual(result['contacts'][0]['remark'], '合成备注')
+        self.assertEqual(result['contacts'][0]['tags'], ['合成标签'])
+        self.assertNotIn('合成备注', json.dumps(self.controller.snapshot(), ensure_ascii=False))
 
     def test_configuration_masks_keys_and_saves_group_alias(self):
         self.controller.save_configuration({'groups':['123@chatroom'], 'group_names':{'123@chatroom':'测试备注'},

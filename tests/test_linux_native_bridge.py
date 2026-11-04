@@ -35,6 +35,7 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         cls.marker_fixture = cls.directory / "marker-fixture"
         cls.two_fixture = cls.directory / "two-fixture"
         cls.source_fixture = cls.directory / "source-fixture"
+        cls.events_fixture = cls.directory / "events-fixture"
         cls.cli_fixture = cls.directory / "cli-fixture"
         cls.test_bridge = cls.directory / "fixture-bridge.so"
         cls.production_bridge = cls.directory / "production-bridge.so"
@@ -44,6 +45,7 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-DHELPER_FIXTURE_TWO", "-o", str(cls.two_fixture), str(FIXTURE)], check=True)
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-DHELPER_FIXTURE_SOURCE", "-o", str(cls.source_fixture), str(FIXTURE)], check=True)
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.cli_fixture), str(ROOT / "tests" / "fixtures" / "linux_bridge_cli_fixture.c")], check=True)
+        subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.events_fixture), str(ROOT / "tests" / "fixtures" / "linux_events_fixture.c")], check=True)
         common = ["gcc", "-O2", "-fPIC", "-shared", "-pthread"]
         subprocess.run(common + ["-DHELPER_FIXTURE_TEST", "-o", str(cls.test_bridge), str(SOURCE), "-ldl"], check=True)
         subprocess.run(common + ["-o", str(cls.production_bridge), str(SOURCE), "-ldl"], check=True)
@@ -53,12 +55,14 @@ class LinuxNativeBridgeTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def _spawn(self, listener, bridge, *, controller=None, marker_mode=False, fixture=None):
+    def _spawn(self, listener, bridge, *, controller=None, marker_mode=False, fixture=None, panel_media=False):
         env = os.environ.copy()
         env.update(LD_PRELOAD=str(bridge), HELPER_LINUX_EVENT_SOCKET=os.fspath(listener.path),
                    HELPER_LINUX_CONTROLLER_PID=str(os.getpid() if controller is None else controller))
         if marker_mode:
             env["HELPER_LINUX_TEST_MARKERS"] = "1"
+        if panel_media:
+            env["HELPER_LINUX_PANEL_MEDIA"] = "1"
         child = subprocess.Popen([str(fixture or self.fixture)], env=env, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, text=True)
         listener.bind_pid(child.pid)
@@ -94,6 +98,21 @@ class LinuxNativeBridgeTests(unittest.TestCase):
                     acknowledge_text_event(conn, event["sequence"], stop=True)
             finally:
                 child.communicate(timeout=5)
+
+    def test_native_sticker_and_recall_frames_include_server_id(self):
+        with LocalEventListener() as listener:
+            child=self._spawn(listener,self.test_bridge,fixture=self.events_fixture,panel_media=True)
+            with listener.accept(timeout=4) as conn:
+                conn.settimeout(4);read_bridge_ready(conn)
+                events=[]
+                for _ in range(3):
+                    event=read_text_event(conn);events.append(event)
+                    acknowledge_text_event(conn,event['sequence'])
+            out,err=child.communicate(timeout=5)
+            self.assertEqual(child.returncode,0,err)
+            self.assertEqual([event['type'] for event in events],[1,47,10002])
+            self.assertEqual(events[0]['native_message_id'],'18446744073709551614')
+            self.assertEqual(events[1]['native_message_id'],'77')
 
     def test_unacknowledged_event_is_retried_with_same_sequence(self):
         with LocalEventListener() as listener:

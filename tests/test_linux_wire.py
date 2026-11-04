@@ -75,6 +75,31 @@ class LinuxWireTests(unittest.TestCase):
             left.close()
             thread.join(timeout=5)
 
+    def test_extended_frame_preserves_64_bit_id_and_metadata(self):
+        sender=b"123456789@chatroom";receiver=b"wxid_self_fixture"
+        body="wxid_friend_fixture:\n@成员\u2005你好".encode()
+        source=b"<msgsource><atuserlist>wxid_self_fixture</atuserlist></msgsource>"
+        server_id=18446744073709551614
+        frame=struct.pack("!4sQIIIIQI",b"HLE1",7,len(sender),len(receiver),len(body),1,server_id,len(source))+sender+receiver+body+source
+        left,right=socket.socketpair()
+        try:
+            right.sendall(frame)
+            event=read_text_event(left)
+            message=LinuxTextAdapter("wxid_self_fixture","fixture").convert(event)
+            self.assertEqual(message.data["native_message_id"],str(server_id))
+            self.assertTrue(message.data["is_at_self"])
+        finally:
+            left.close();right.close()
+
+    def test_extended_frame_rejects_source_for_nontext(self):
+        left,right=socket.socketpair()
+        try:
+            right.sendall(struct.pack("!4sQIIIIQI",b"HLE1",1,1,1,1,47,1,1))
+            with self.assertRaises(LinuxWireError):
+                read_text_event(left)
+        finally:
+            left.close();right.close()
+
     def test_rejects_unbounded_source(self):
         left, right = socket.socketpair()
         try:

@@ -189,6 +189,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
             if path == '/api/contacts':
                 return self.send(200, controller.contacts())
+            if path == '/api/linux-contact-labels' and hasattr(controller, 'linux_contact_labels'):
+                return self.send(200, controller.linux_contact_labels())
             if path == '/api/articles-connection':
                 return self.send(200, controller.articles_connection())
             if path == '/api/articles-publishers':

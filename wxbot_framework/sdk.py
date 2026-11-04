@@ -382,6 +382,16 @@ class ServiceFacade:
                 raise RuntimeError("联系人所属的微信连接已结束")
             return result
 
+    def contact_labels(self, *, expected_session=None):
+        """读取当前账号已加载的好友标签，不假设标签列表完整。"""
+        with self._lock:
+            session = self._backend.session_id if self._backend is not None else None
+        result = self._manage('contact_labels', expected_session=expected_session if expected_session is not None else session)
+        with self._lock:
+            if not self.session_is_current(session) or result.get('session_id') != session:
+                raise RuntimeError('标签所属的微信连接已结束')
+            return result
+
     def group_member_name(self, room, wxid, *, expected_session=None):
         from .account import validate_account
         validate_account(wxid)
@@ -529,6 +539,11 @@ class PluginContext:
         if "contact.read" not in self.capabilities:
             raise CapabilityError("当前插件缺少联系人读取能力")
         return self._service.contacts(expected_session=expected_session)
+
+    def contact_labels(self, *, expected_session=None):
+        if "contact.labels.read" not in self.capabilities:
+            raise CapabilityError("当前插件缺少联系人标签读取能力")
+        return self._service.contact_labels(expected_session=expected_session)
 
     def group_member_name(self, room, wxid, *, expected_session=None):
         return self._service.group_member_name(room, wxid, expected_session=expected_session)

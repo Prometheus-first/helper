@@ -264,14 +264,14 @@ class PanelController:
         logging.getLogger().removeHandler(self.logs)
         self.stopped_event.set()
 
-    def _call(self, callback):
+    def _call(self, callback, *, timeout=15):
         with self.lock:
             app = self.app
             if app is None or self.state == 'stopping':
                 raise PanelError('请先启动机器人', 409)
             future = app.submit_control(lambda: callback(app))
         try:
-            return future.result(timeout=15)
+            return future.result(timeout=timeout)
         except ControlTimeout:
             future.cancel()
             raise PanelError('操作仍在等待微信；请查看运行状态后再试', 409) from None
@@ -557,7 +557,7 @@ class PanelController:
             if snapshot is None:
                 raise PanelError('微信联系人缓存尚未就绪，请稍后重试', 409)
             return dict(snapshot, session_id=session)
-        return self._call(query)
+        return self._call(query, timeout=30)
 
     def _article_account(self, expected=None, *, required=False):
         account = self.store.load().get('wechat_account')

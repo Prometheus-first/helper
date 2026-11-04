@@ -98,6 +98,21 @@ class LinuxPanelController(PanelController):
             login_pending=bool((self.session is not None and self.session.wechat_running() and not account) or (result['connected'] and not account)),
             capabilities=sorted(PANEL_CAPABILITIES))
 
+    def linux_contact_labels(self):
+        def query(app):
+            if not app._connection_ready or app.backend is None:
+                raise PanelError('微信尚未连接', 409)
+            backend, session = app.backend, app.backend.session_id
+            try:
+                result = app.service.contact_labels(expected_session=session)
+            except RuntimeError as error:
+                raise PanelError(str(error), 409) from None
+            if (not app._connection_ready or app.backend is not backend or
+                    backend.session_id != session or not app.service.session_is_current(session)):
+                raise PanelError('标签所属的微信连接已结束，请重新扫描', 409)
+            return result
+        return self._call(query)
+
     def robot_list(self):
         snapshot = self.snapshot()
         return {'robots': [dict(snapshot, id='default', name='Linux 微信')]}
@@ -105,7 +120,7 @@ class LinuxPanelController(PanelController):
     def guard_route(self, path, write):
         unsupported = ('/api/moments', '/api/article', '/api/contact', '/api/group-members',
                        '/api/scheduled-', '/api/wechat-login', '/api/accounts/', '/api/account')
-        if any(path.startswith(prefix) for prefix in unsupported) and path != '/api/accounts':
+        if any(path.startswith(prefix) for prefix in unsupported) and path not in ('/api/accounts', '/api/contacts'):
             raise PanelError('Linux 版尚未适配此功能', 409)
 
     def plugin_rows(self):

@@ -6,10 +6,12 @@ from .account import validate_account
 from .linux_backend import LinuxNativeTextBackend
 from .linux_messages import LinuxTextAdapter
 from .sdk import Message
+from .recall import parse_recall, message_id
 from .text import validate_target
 
 PANEL_CAPABILITIES = frozenset({"text.receive", "text.send", "friend.text.receive", "friend.text.send",
-    "group.text.receive", "group.text.send", "image.send", "file.send", "friend.file.send", "group.file.send"})
+    "group.text.receive", "group.text.send", "image.send", "file.send", "friend.file.send", "group.file.send",
+    "contact.read", "contact.labels.read"})
 
 
 class LinuxPanelBackend(LinuxNativeTextBackend):
@@ -58,11 +60,21 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                 sequence=event['sequence'], msg_type=event['type'])
             if routed is None:
                 return None
-            # 丢弃原始 XML 和 CDN 凭据；不把媒体内容交给文字业务插件。
+            # 仅向监控提供媒体类型/撤回结果，不泄露原始 XML 或 CDN 凭据。
+            metadata = {'self_wxid': identified, 'monitor_only': True,
+                        'dispatch_to_plugins': False, 'dispatch_to_recall_plugins': False}
+            native_id = message_id(event.get('native_message_id'))
+            if native_id:
+                metadata['native_message_id'] = native_id
+            if event['type'] == 10002:
+                recall = parse_recall(event['text'], chat_id=routed['chat_id'])
+                if not recall:
+                    return None
+                metadata['recall'] = recall
             message = Message(text='', chat_id=routed['chat_id'], sender_id=routed['sender_id'],
                 receiver_id=receiver, type=event['type'], is_group=bool(routed['room_wxid']),
                 is_self=routed['is_self'], sequence=event['sequence'], session_id=self.session_id,
-                data={'self_wxid': identified, 'monitor_only': True, 'dispatch_to_plugins': False})
+                data=metadata)
         if message is not None:
             self.account, self.adapter = identified, adapter
             with self._chat_lock:
@@ -75,6 +87,25 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
     def chats(self):
         with self._chat_lock:
             return list(self._chats.values())
+
+    def contacts(self):
+        from .linux_contact_database import read_process_linux_contacts
+        if not self.process or self.process.poll() is not None or not self.account:
+            raise RuntimeError('微信尚未连接')
+        home = getattr(self, 'instance_home', None)
+        if home is None:
+            raise RuntimeError('当前 Linux 会话尚未配置隔离目录')
+        result = read_process_linux_contacts(self.pid, expected_account=self.account,
+                                             expected_sha256=self.expected_hash, instance_home=home)
+        return dict(result, account=self.account, session_id=self.session_id)
+
+    def contact_labels(self):
+        from .linux_contacts import read_process_linux_labels
+        if not self.process or self.process.poll() is not None or not self.account:
+            raise RuntimeError('微信尚未连接')
+        result = read_process_linux_labels(self.pid, expected_account=self.account,
+                                           expected_sha256=self.expected_hash)
+        return dict(result, account=self.account, session_id=self.session_id)
 
     def _authorize(self, target):
         validate_target(target)

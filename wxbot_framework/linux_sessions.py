@@ -113,6 +113,32 @@ class SessionLease:
     def send_file(self, chat_id, path): return self._send('send_file', chat_id, path)
     def chats(self): return self.owner.backend.chats() if self.owner.backend else []
 
+    def contacts(self):
+        with self.owner.lock:
+            if self.closed or self.owner.active_lease is not self or self.last_error:
+                raise RuntimeError('联系人所属的微信连接已结束')
+            backend = self.owner.backend
+        result = backend.contacts()
+        with self.owner.lock:
+            if (self.closed or self.owner.active_lease is not self or
+                    self.owner.backend is not backend or self.last_error or
+                    result.get('account') != self.account):
+                raise RuntimeError('联系人所属的微信连接已结束')
+        return dict(result, session_id=self.session_id)
+
+    def contact_labels(self):
+        with self.owner.lock:
+            if self.closed or self.owner.active_lease is not self or self.last_error:
+                raise RuntimeError('联系人所属的微信连接已结束')
+            backend = self.owner.backend
+        result = backend.contact_labels()
+        with self.owner.lock:
+            if (self.closed or self.owner.active_lease is not self or
+                    self.owner.backend is not backend or self.last_error or
+                    result.get('account') != self.account):
+                raise RuntimeError('联系人所属的微信连接已结束')
+        return dict(result, session_id=self.session_id)
+
 
 class LinuxSessionController:
     """一个 worker 拥有一个微信；账号工作区在原生识别后才选择。"""

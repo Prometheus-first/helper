@@ -79,7 +79,7 @@ class RobotWorker:
             # 不使用系统代理转发本机管理请求。
             # Loading one article includes a bounded client URL load and cache
             # polling. Catalog pages and other controls retain the short limit.
-            timeout = 45 if route.split('?', 1)[0] == 'article-read' else 20
+            timeout = 45 if route.split('?', 1)[0] == 'article-read' else 35 if route.split('?', 1)[0] == 'contacts' else 20
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
                 raw = response.read(4 * 1024 * 1024 + 1)
                 if len(raw) > 4 * 1024 * 1024:
@@ -122,6 +122,7 @@ class RobotProxy:
     def accounts(self): return self.request('accounts')['accounts']
     def chats(self): return self.request('chats')['chats']
     def contacts(self): return self.request('contacts')
+    def linux_contact_labels(self): return self.request('linux-contact-labels')
     def articles_connection(self): return self.request('articles-connection')
     def article_publishers(self, account=None):
         from urllib.parse import urlencode

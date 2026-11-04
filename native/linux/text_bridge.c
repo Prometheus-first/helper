@@ -27,7 +27,7 @@ static const unsigned char build_id[20]={0xd6,0x2b,0xde,0x21,0xb2,0x6c,0x59,0x28
 static const unsigned char expected[14]={0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x48};
 static const unsigned char exe_sha256[32]={0x27,0x49,0x53,0x5f,0x29,0x9b,0xa6,0x7f,0xeb,0x8e,0xf8,0x0c,0xab,0x89,0x8b,0xb0,0x53,0x1f,0xa8,0xf3,0x76,0xb1,0x6f,0x8a,0x72,0xdb,0x70,0x68,0x11,0xc8,0x41,0x32};
 #define QUEUE_SIZE 128
-struct event { unsigned char *fields[4]; uint32_t lengths[4]; uint64_t seq; uint32_t type; };
+struct event { unsigned char *fields[4]; uint32_t lengths[4]; uint64_t seq; uint64_t native_id; uint32_t type; };
 typedef uintptr_t (*sync_fn)(void*,void*,void*);
 static sync_fn original;
 static struct event *queue[QUEUE_SIZE];static size_t qhead,qcount;
@@ -75,10 +75,20 @@ static void get_source(const void *obj,unsigned char **out,uint32_t *len){
  fail: free(check);free(buf);
 }
 static void capture(const void *obj){
- uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4)||(type!=1&&((!media_test&&!panel_media)||(type!=3&&type!=49&&((!voice_test&&!panel_media)||type!=34)))))return;
+ uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4))return;
+ if(type!=1){
+  int media=(type==3||type==49||type==34);
+  int monitor_only=(type==47||type==10002);
+  if((!media&&!monitor_only)||(monitor_only&&!panel_media)||(media&&!media_test&&!panel_media)||
+     (type==34&&!voice_test&&!panel_media))return;
+ }
  struct event *e=calloc(1,sizeof(*e));if(!e){notice("helper-linux: event allocation failed\n");return;}
  for(int i=0;i<3;i++)if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i])){event_free(e);return;}
  e->type=type;
+ unsigned char present=0,present2=0;uint64_t native_id=0,native_id2=0;
+ if(safe_read(&present,(const char*)obj+0x6d,1)&&(present&8)&&safe_read(&native_id,(const char*)obj+0x50,8)&&
+    safe_read(&present2,(const char*)obj+0x6d,1)&&present==present2&&
+    safe_read(&native_id2,(const char*)obj+0x50,8)&&native_id==native_id2)e->native_id=native_id;
  if(type==1)get_source(obj,&e->fields[3],&e->lengths[3]);
  int include=type==1&&(!test_only||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_07",18)||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_08",18));
  pthread_mutex_lock(&qlock);
@@ -120,9 +130,13 @@ static int connect_socket(void){
 }
 static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
 static int send_event(int fd,const struct event *e){
- unsigned char h[28];int has_source=e->type==1&&e->lengths[3];size_t header_size=e->type==1?(has_source?28:24):28;memcpy(h,e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
+ unsigned char h[40];int has_source=e->type==1&&e->lengths[3];
+ int extended=e->native_id||e->type==47||e->type==10002;
+ size_t header_size=extended?40:e->type==1?(has_source?28:24):28;
+ memcpy(h,extended?"HLE1":e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
  for(int i=0;i<3;i++){uint32_t n=htonl(e->lengths[i]);memcpy(h+12+4*i,&n,4);}
- if(e->type!=1){uint32_t type=htonl(e->type);memcpy(h+24,&type,4);}
+ if(extended){uint32_t type=htonl(e->type),n=htonl(has_source?e->lengths[3]:0);uint64_t id=htobe64(e->native_id);memcpy(h+24,&type,4);memcpy(h+28,&id,8);memcpy(h+36,&n,4);}
+ else if(e->type!=1){uint32_t type=htonl(e->type);memcpy(h+24,&type,4);}
  else if(has_source){uint32_t n=htonl(e->lengths[3]);memcpy(h+24,&n,4);}
  if(!send_all(fd,h,header_size))return 0;
  for(int i=0;i<(has_source?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;

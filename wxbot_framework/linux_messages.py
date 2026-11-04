@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from .account import validate_account
 from .sdk import Message
 from .mentions import parse_at_members
+from .recall import message_id
 from .text import TextRouter
 
 
@@ -38,6 +39,9 @@ class LinuxTextAdapter:
         data = self._router.convert(sender, receiver, text, sequence=sequence, msg_type=msg_type)
         if data is None:
             return None
+        native_id = message_id(payload.get("native_message_id"))
+        if native_id:
+            data["native_message_id"] = native_id
         if data.get("room_wxid"):
             data["at_members"] = parse_at_members(payload.get("msgsource"))
             data["is_at_self"] = self.account in data["at_members"]

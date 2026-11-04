@@ -81,7 +81,7 @@ async function action(callback) {
 }
 function navigate() {
   let name = location.hash.slice(1) in pages ? location.hash.slice(1) : 'overview';
-  if(isLinux && ['tasks','contacts','moments','articles'].includes(name))name='overview';
+  if(isLinux && ['tasks','moments','articles'].includes(name))name='overview';
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + name));
   document.querySelectorAll('[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === name));
   document.querySelectorAll('[data-page]').forEach(node => node.dataset.page === name ? node.setAttribute('aria-current','page') : node.removeAttribute('aria-current'));
@@ -649,7 +649,7 @@ function renderContacts() {
   let status=!serviceAvailable?'管理服务连接中断，恢复后请重新扫描。':!state?'正在读取账号状态…':!ready?'当前账号未连接，请先启动机器人。':contactLoading?'正在扫描当前账号的联系人…':contactError;
   if(!status&&contactData) {
     const date=new Date(contactData.scanned_at),time=Number.isNaN(date.getTime())?'本次':date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
-    status=time+' 扫描 · 微信本地缓存'+(contactData.complete?'':' · 名单可能尚未同步完整');
+    status=time+' 扫描 · 微信本地数据'+(contactData.complete?'':' · 名单可能尚未同步完整');
   }
   const statusText=status||'点击“扫描联系人”读取当前账号的好友。';
   if($('#contact-status').textContent!==statusText)$('#contact-status').textContent=statusText;
@@ -925,7 +925,7 @@ if(isLinux){
   });
   $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.add('hidden');
   const modelsLink=$('[data-page="models"]');modelsLink.lastChild.textContent='模型设置';$('#models-heading').textContent='模型设置';
-  for(const page of ['tasks','contacts','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
+  for(const page of ['tasks','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
   $('#linux-start').onclick=()=>action(async()=>{await api('start',{});resetComposer();});
   $('#linux-stop').onclick=()=>action(async()=>{await api('stop',{});resetComposer();});
   const kindChanged=()=>{const media=$('#linux-send-kind').value!=='text';$('#linux-path-field').classList.toggle('hidden',!media);$('#send-content').classList.toggle('hidden',media);$('#send-content-label').classList.toggle('hidden',media);$('#send-content').required=!media;$('#linux-send-path').required=media;renderSendState();};

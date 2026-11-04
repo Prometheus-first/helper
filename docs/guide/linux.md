@@ -21,7 +21,10 @@ Linux 版正在适配中，尚不能替代 Windows 版。已接入本地网页�
 | 登录账号确认 | 微信登录后读取原生账号及昵称，无需发送初始化消息；单账号识别和机器人启停已实机通过 |
 | 多账号 | 独立微信进程与账号配置已接入，模拟隔离测试通过；两个真实微信同时登录仍待验证 |
 | 网页显示登录二维码 | 无桌面模式使用独立虚拟显示，提取二维码后以 PNG Base64 交给网页；真实微信二维码已在网页显示，并完成单账号扫码登录 |
-| 语音条发送、撤回、联系人、群事件、朋友圈、公众号 | 尚未适配 |
+| 联系人资料、备注和标签 | 只读当前账号的本地联系人库；网页扫描、备注和标签显示已实机验证 |
+| 表情包接收与撤回监控 | 网页监控识别表情包并标记已缓存的撤回消息，群聊实机通过；不自动补发 |
+| 表情包发送 | 合成动态图已通过受控实机测试，尚未开放通用发送接口 |
+| 语音条发送、群事件、朋友圈、公众号 | 尚未适配 |
 
 Windows 版的功能列表不代表 Linux 版具备相同能力。Linux 使用独立 ELF 桥接，不能加载 Windows DLL，也不能复用 Windows 偏移。
 
@@ -62,6 +65,8 @@ gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread native/linux/send_
 停止机器人后，微信登录窗口保持运行。使用账号行的“退出微信”关闭该会话。每个微信进程使用独立 HOME 和缓存，机器人配置、群备注、插件覆盖及聊天数据按账号保存在 `.runtime/linux/accounts/`。之前单账号配置仍位于 `.runtime/linux/`，不会自动复制到其他账号。
 
 单账号自动读取、机器人启停和文本收发已实机验证；跨账号隔离已通过模拟测试，真实的双账号同时登录和收发还需要实机验证。尚未适配的功能在网页中隐藏或标记为不可用。
+
+“联系人”页面支持扫描当前机器人账号的好友，按昵称、备注、微信 ID 和标签搜索，并查看好友资料。扫描只读取微信已同步到本机的联系人；离线或未同步的数据可能不完整。读取时临时使用当前微信进程中的数据库密钥，密钥和解密后的数据库不会写入文件或日志。运行用户需要有读取该受管微信进程内存的权限。Linux 微信账号变更、进程退出或文件指纹不匹配时，读取会终止。
 
 
 ### 无桌面服务器
@@ -130,6 +135,7 @@ python -B -m tools.linux_media_test --receive-voice --watch-files --file-name WX
 - `LinuxNativeTextBackend` 是实验性文本后端，复用框架消息转换、插件分发和回复链路。发送需要显式提供 `send_bridge_path`，通过 `send_targets` 允许指定会话；默认仅文件传输助手。
 - `LinuxNativeSender` 提供 `send_text()`、`send_image()`、`send_file()`，以及受控的 `bind_image_scope()`、`image_context_available()`、`download_message_image()`。
 - `LinuxImageDownloader` 符合现有 `ImageReceiver` 下载器接口。图片自动下载尚未接入网页管理台，网页监控仅显示媒体类型。
+- `ctx.contacts()` 返回当前账号已同步的好友资料、备注和标签；`ctx.contact_labels()` 单独读取已加载的标签缓存。插件需分别声明 `contact.read` 或 `contact.labels.read`，结果的 `complete` 为 `false`，不能视为服务端完整名单。
 - 原生图片上下文最多缓存 16 条，仅绑定当前测试双方账号。未知版本、账号不匹配、未完成下载或校验失败都会拒绝返回图片。
 - 下载或发送等待超时后，迟到回调结束会允许后续请求继续执行；原请求仍保持结果未知，不会自动重发。
 - 本地通道核对 PID 和 UID。原生调用在微信自己的协程中执行；超时或连接中断时报告结果未知，不自动重试，避免重复发送。
@@ -141,6 +147,6 @@ python -B -m tools.linux_media_test --receive-voice --watch-files --file-name WX
 python -B -m unittest discover -s tests -p 'test_linux_*.py'
 ```
 
-包含可重复编译的合成 fixture，覆盖文本与媒体协议、断线去重、进程身份、原生调度、图片上下文范围、缓存解密、MD5 和路径检查。测试不会连接真实微信、调用模型或读取个人聊天记录。
+包含可重复编译的合成 fixture，覆盖文本与媒体协议、撤回匹配、联系人解析、账号隔离、断线去重、进程身份、原生调度、图片上下文范围、缓存解密、MD5 和路径检查。测试不会连接真实微信、调用模型或读取个人聊天记录。
 
 发布前还应运行 `python -B -m unittest tests.test_publication_checks`，并对实际待发布目录执行 `tools.check_publication.inspect()`。检查目标是源码和示例配置；本地 `.runtime/`、日志、`.so`、崩溃转储和测试媒体不得进入提交。
