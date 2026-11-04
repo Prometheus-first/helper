@@ -34,6 +34,7 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         cls.fixture = cls.directory / "fixture"
         cls.marker_fixture = cls.directory / "marker-fixture"
         cls.two_fixture = cls.directory / "two-fixture"
+        cls.source_fixture = cls.directory / "source-fixture"
         cls.cli_fixture = cls.directory / "cli-fixture"
         cls.test_bridge = cls.directory / "fixture-bridge.so"
         cls.production_bridge = cls.directory / "production-bridge.so"
@@ -41,6 +42,7 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.fixture), str(FIXTURE)], check=True)
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-DHELPER_FIXTURE_MARKER", "-o", str(cls.marker_fixture), str(FIXTURE)], check=True)
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-DHELPER_FIXTURE_TWO", "-o", str(cls.two_fixture), str(FIXTURE)], check=True)
+        subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-DHELPER_FIXTURE_SOURCE", "-o", str(cls.source_fixture), str(FIXTURE)], check=True)
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.cli_fixture), str(ROOT / "tests" / "fixtures" / "linux_bridge_cli_fixture.c")], check=True)
         common = ["gcc", "-O2", "-fPIC", "-shared", "-pthread"]
         subprocess.run(common + ["-DHELPER_FIXTURE_TEST", "-o", str(cls.test_bridge), str(SOURCE), "-ldl"], check=True)
@@ -79,6 +81,19 @@ class LinuxNativeBridgeTests(unittest.TestCase):
             out, err = child.communicate(timeout=5)
             self.assertEqual(child.returncode, 0, err)
             self.assertIn("fixture_ok", out)
+
+    def test_source_metadata_is_copied_by_native_bridge(self):
+        with LocalEventListener() as listener:
+            child = self._spawn(listener, self.test_bridge, fixture=self.source_fixture)
+            try:
+                with listener.accept(timeout=4) as conn:
+                    read_bridge_ready(conn)
+                    event = read_text_event(conn)
+                    message = LinuxTextAdapter("wxid_self_fixture", "fixture").convert(event)
+                    self.assertEqual(message.data["at_members"], ("wxid_self_fixture",))
+                    acknowledge_text_event(conn, event["sequence"], stop=True)
+            finally:
+                child.communicate(timeout=5)
 
     def test_unacknowledged_event_is_retried_with_same_sequence(self):
         with LocalEventListener() as listener:

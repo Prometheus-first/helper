@@ -23,6 +23,9 @@ int main(void){
  emit(49,"wxid_other_fixture","<msg><appmsg><title>wrong-peer.txt</title></appmsg></msg>");
  emit(49,"wxid_friend_fixture","<msg><appmsg><title>WX_LINUX_FILE_RECV_01.txt</title><type>6</type></appmsg></msg>");
  emit(49,"wxid_friend_fixture","<msg><appmsg><title>quota-file.txt</title></appmsg></msg>");
+ emit(34,"wxid_other_fixture","<msg><voicemsg voicelength=\"2000\"/></msg>");
+ emit(34,"wxid_friend_fixture","<msg><voicemsg voicelength=\"2000\" length=\"4096\" bufid=\"private-fixture\"/></msg>");
+ emit(34,"wxid_friend_fixture","<msg><voicemsg voicelength=\"3000\"/></msg>");
  emit(1,"wxid_other_fixture","WX_LINUX_MEDIA_ARM_11");
  emit(3,"wxid_other_fixture","<msg><img filekey=\"takeover-rejected\"/></msg>");
  emit(1,"wxid_friend_fixture","WX_LINUX_MEDIA_ARM_11");

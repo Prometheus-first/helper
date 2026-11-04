@@ -34,6 +34,10 @@ The operator starts a local Python service, normally with start_web.bat, and ope
 - Support light and dark themes with browser-local preference; first use follows the system. The dark theme uses neutral black and gray surfaces, not green-tinted surfaces.
 - Supported native builds are fingerprint-locked Windows x64 WeChat 4.1.15.13, 4.1.15.56 and 4.2.0.11, with feature coverage documented separately for each build. The native bridge also forwards voice, video and sticker metadata. Monitoring uses placeholders; the default text anti-recall plugin separately caches supported sticker originals from WeChat CDN addresses and re-sends them after recall. Keep this cache bounded and account-isolated; never expose download credentials or raw XML to logs or models.
 
+## Linux Experimental Surface
+
+The Linux branch reuses this interface for multiple isolated Linux WeChat instances. The operator explicitly launches it from the overview, completes login in WeChat, and the bridge reads the logged-in identity. Each session has its own HOME and each account has isolated settings. The local workspace is `.runtime/linux/`; Windows local configuration is not imported. Support start/stop, message monitoring, supported plugin business editing, group aliases, model settings, and text/local-image/file sends. Media monitoring retains type placeholders only. Hide unsupported contacts, Moments, articles, scheduling and voice settings; reject their APIs rather than invoking Windows implementations. Stopping capture leaves the WeChat window open, and a fresh bridge run requires that window to exit first.
+
 ## Brand Commitments
 
 Retain the helper name. The user explicitly requested a less generic, less AI-looking interface and delegated design details and hierarchy to the designer. No binding palette, typeface, or illustration was supplied. The incumbent visual treatment may be replaced.

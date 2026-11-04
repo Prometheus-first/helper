@@ -28,6 +28,7 @@
     };
 const $ = (q, root = document) => root.querySelector(q);
 const token = $('meta[name="helper-token"]').content;
+const isLinux = $('meta[name="helper-platform"]')?.content === 'linux';
 let state = null, config = null, logCursor = 0, logs = [], paused = false, busy = false;
 let selectedPlugin = '', toastTimer, pollBusy = false, serviceAvailable = true;
 let pluginEditor = null, pluginEditorGeneration = 0, pluginFunctionSignature = '';
@@ -42,15 +43,16 @@ let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskL
 let groupNameDraft = new Map(), discoveredGroups = [];
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
 const contactPageSize=50;
-const accountKey = row => row.pid + ':' + row.wxid;
+const accountKey = row => isLinux ? row.robot_id : row.pid + ':' + row.wxid;
 const activeStates = ['starting','running','stopping'];
-const profileLabel = row => loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
+const profileLabel = row => isLinux ? (row?.account_name || row?.account || row?.name || '微信会话') : loggedAccounts.find(account=>account.wxid===row?.account)?.name || row?.account || (row?.id==='default'?'默认配置':row?.name) || '当前账号';
 const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊与会话', tasks:'定时任务', contacts:'联系人', moments:'朋友圈', articles:'公众号文章', models:'模型与语音', logs:'运行日志'};
 const pluginNames = {anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, body, identifier = robot) {
-  const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
+  const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/') || path.startsWith('linux-sessions/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
+  if(isLinux && body !== undefined && scope && ['config','plugin','plugin-source','plugin-business','plugin-reset'].includes(path.split('?')[0])) body={...body,expected_account:config?.account || ''};
   const response = await fetch('/api/' + path + scope, {method: body === undefined ? 'GET' : 'POST', cache:'no-store',
     headers:{'X-Helper-Token':token, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
     ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -78,7 +80,8 @@ async function action(callback) {
   finally { busy = false; renderState(); }
 }
 function navigate() {
-  const name = location.hash.slice(1) in pages ? location.hash.slice(1) : 'overview';
+  let name = location.hash.slice(1) in pages ? location.hash.slice(1) : 'overview';
+  if(isLinux && ['tasks','contacts','moments','articles'].includes(name))name='overview';
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + name));
   document.querySelectorAll('[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === name));
   document.querySelectorAll('[data-page]').forEach(node => node.dataset.page === name ? node.setAttribute('aria-current','page') : node.removeAttribute('aria-current'));
@@ -92,7 +95,8 @@ function navigate() {
 }
 function renderRobotOptions() {
   const names={stopped:'已停止',starting:'启动中',running:'等待连接',stopping:'停止中',error:'异常'};
-  const options=robotRows.map(row=>{
+  const visibleRows=isLinux?robotRows.filter(row=>loggedAccounts.some(account=>account.robot_id===row.id)):robotRows;
+  const options=visibleRows.map(row=>{
     const current=row.id===robot&&state?state:row;
     return {value:row.id,label:profileLabel(row)+' · '+(!serviceAvailable?'状态待更新':current.connected?'已连接':names[current.state]||'已停止')};
   });
@@ -100,6 +104,7 @@ function renderRobotOptions() {
     if(robotRows.some(row=>row.account===account.wxid))continue;
     options.push({value:'account:'+accountKey(account),label:(account.name||account.wxid)+' · 未启动',disabled:!account.selectable});
   }
+  if(isLinux&&!options.length)options.push({value:robot,label:'未选择账号'});
   const signature=JSON.stringify(options);
   if(signature!==robotOptionsSignature) {
     robotOptionsSignature=signature;
@@ -108,11 +113,12 @@ function renderRobotOptions() {
   $('#robot-select').value=robot;
 }
 function renderState() {
+  renderLinuxState();
   const unavailable=!serviceAvailable;
   const articleRobot=robotRows.find(row=>row.id===robot);
   const articleAccount=state?.account ?? config?.account ?? articleRobot?.account ?? '';
   articles.setTarget(robot,articleAccount,profileLabel({...articleRobot,id:robot,account:articleAccount}));
-  $('#robot-select').disabled=busy||unavailable;
+  $('#robot-select').disabled=busy||unavailable||(isLinux&&!loggedAccounts.length);
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
@@ -138,7 +144,7 @@ function renderPlugins() {
   const focusKey = focused && [focused.dataset.plugin,focused.dataset.action];
   $('#plugin-list').innerHTML = cards.map(p => {
     const name = pluginNames[p.name]?.[0] || p.name;
-    return `<tr class="plugin-row"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reset" ${busy||!serviceAvailable?'disabled':''}>重置</button></div></td></tr>`;
+    return `<tr class="plugin-row"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable||(!p.enabled&&p.supported===false)?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reset" ${busy||!serviceAvailable?'disabled':''}>重置</button></div></td></tr>`;
   }).join('') || '<tr><td colspan="4" class="table-empty">没有匹配的插件。</td></tr>';
   if (focusKey) {
     const candidates = [...$('#plugin-list').querySelectorAll('[data-plugin]')];
@@ -167,11 +173,11 @@ function renderAccounts() {
   const statuses={stopped:'未启动',starting:'启动中',running:'等待连接',stopping:'正在停止',error:'异常'};
   $('#account-list').innerHTML=rows.map(row=>{
     const key=accountKey(row),running=activeStates.includes(row.state),disabled=busy||!serviceAvailable||accountsLoading||!row.selectable||running;
-    const label=row.name||row.wxid;
+    const label=row.name||row.wxid||'微信会话';
     const stopping=row.state==='stopping',canStop=running&&!!row.robot_id;
-    const buttonDisabled=busy||!serviceAvailable||stopping||(canStop?false:accountsLoading||!row.selectable);
-    const buttonLabel=stopping?'停止中…':canStop?'停止':'启动';
-    return `<tr class="${row.robot_id===robot?'selected':''}"><td class="account-choice"><label><input type="checkbox" data-select-account="${escape(key)}" aria-label="选择 ${escape(label)} ${escape(row.wxid)}" ${selectedAccounts.has(key)?'checked':''} ${disabled?'disabled':''}></label></td><td><span class="robot-name">${escape(label)}</span><span class="account-id">${escape(row.wxid)}</span></td><td class="account-pid">${escape(row.pid)}</td><td><span class="inline-state ${!serviceAvailable?'waiting':row.reason?'failed':row.connected?'active':row.state==='error'?'failed':running?'waiting':''}">${escape(!serviceAvailable?'待更新':row.reason|| (row.connected?'已连接':statuses[row.state]||'未启动'))}</span>${row.error?`<p class="account-error">${escape(row.error)}</p>`:''}</td><td class="account-action"><button class="secondary small" data-account-action="${escape(key)}" data-action="${canStop?'stop':'start'}" aria-label="${buttonLabel} ${escape(label)} ${escape(row.wxid)}" ${buttonDisabled?'disabled':''}>${buttonLabel}</button></td></tr>`;
+    const buttonDisabled=busy||!serviceAvailable||stopping||(canStop?false:accountsLoading||(!row.selectable&&!(isLinux&&!row.pid)));
+    const buttonLabel=stopping?'停止中…':canStop?'停止':isLinux&&!row.logged_in?'登录':'启动';
+    return `<tr class="${row.robot_id===robot?'selected':''}"><td class="account-choice"><label><input type="checkbox" data-select-account="${escape(key)}" aria-label="选择 ${escape(label)} ${escape(row.wxid)}" ${selectedAccounts.has(key)?'checked':''} ${disabled?'disabled':''}></label></td><td><span class="robot-name">${escape(label)}</span><span class="account-id">${escape(row.wxid)}</span></td><td class="account-pid">${escape(row.pid)}</td><td><span class="inline-state ${!serviceAvailable?'waiting':row.reason?'failed':row.connected?'active':row.state==='error'?'failed':running?'waiting':''}">${escape(!serviceAvailable?'待更新':row.reason|| (row.connected?'机器人运行中':isLinux&&row.logged_in?'已登录':isLinux&&row.login_pending?'等待扫码':statuses[row.state]||'未登录'))}</span>${row.error?`<p class="account-error">${escape(row.error)}</p>`:''}</td><td class="account-action"><button class="secondary small" data-account-action="${escape(key)}" data-action="${canStop?'stop':'start'}" aria-label="${buttonLabel} ${escape(label)} ${escape(row.wxid)}" ${buttonDisabled?'disabled':''}>${buttonLabel}</button>${isLinux&&row.login_pending?` <button class="text-button small" data-account-action="${escape(key)}" data-action="qr">查看二维码</button>`:''}${isLinux&&row.pid?` <button class="text-button small" data-account-action="${escape(key)}" data-action="close">退出微信</button>`:''}</td></tr>`;
   }).join('')||`<tr><td colspan="5" class="table-empty">${accountsLoading?'正在识别账号…':accountsError?'账号识别失败，请刷新重试。':'未发现已登录微信。'}</td></tr>`;
   if(focusKey){const target=[...$('#account-list').querySelectorAll(focusSelector)].find(node=>(node.dataset.selectAccount||node.dataset.accountAction)===focusKey);if(target&&!target.disabled)target.focus({preventScroll:true});}
 }
@@ -184,6 +190,9 @@ async function loadAccounts(quiet=false) {
     selectedAccounts=new Set([...selectedAccounts].filter(key=>available.has(key)));
   }catch(error){accountsError=error.message;loggedAccounts=[];selectedAccounts.clear();}
   finally{accountsFetching=false;accountsLoading=false;lastAccountFetch=Date.now();renderState();}
+  if(isLinux&&loggedAccounts.length&&!loggedAccounts.some(row=>row.robot_id===robot)) {
+    try { await switchRobot(loggedAccounts[0].robot_id); } catch(error) { toast(error.message,true); }
+  }
 }
 async function launchAccounts(rows) {
   if(!rows.length){toast('请先勾选账号',true);return;}
@@ -202,7 +211,7 @@ async function closeWechatLogin() {
   clearTimeout(loginTimer); $('#wechat-login-qr').removeAttribute('src');
   $('#wechat-login-qr').classList.add('hidden'); $('#wechat-login-panel').classList.add('hidden');
   $('#login-wechat').disabled=false;
-  if(attempt){try{await api('wechat-login/cancel',{attempt_id:attempt});}catch{}}
+  if(attempt&&!isLinux){try{await api('wechat-login/cancel',{attempt_id:attempt});}catch{}}
 }
 async function pollWechatLogin(attempt,generation) {
   if(generation!==loginGeneration || attempt!==loginAttempt)return;
@@ -301,6 +310,13 @@ $('#account-list').onchange=event=>{
 $('#account-list').onclick=event=>{
   const button=event.target.closest('[data-account-action]');if(!button)return;
   const account=loggedAccounts.find(row=>accountKey(row)===button.dataset.accountAction);if(!account)return;
+  if(isLinux&&button.dataset.action==='qr'){
+    const generation=++loginGeneration;clearTimeout(loginTimer);loginAttempt=account.robot_id;
+    $('#wechat-login-panel').classList.remove('hidden');$('#wechat-login-status').textContent='正在等待登录二维码…';
+    pollLinuxLogin(account.robot_id,generation);return;
+  }
+  if(isLinux&&button.dataset.action==='close'){action(async()=>{await api('linux-sessions/close',{id:account.robot_id});await loadRobots();await loadAccounts();});return;}
+  if(isLinux&&!account.logged_in&&!account.pid){action(async()=>{await api('linux-sessions/open',{id:account.robot_id,request_id:crypto.randomUUID()});await loadRobots();await loadAccounts();});return;}
   if(button.dataset.action==='stop') {
     if(!account.robot_id)return;
     action(async()=>{await api('stop',{},account.robot_id);await loadRobots();await loadAccounts();toast('正在停止，等待连接清理完成');});
@@ -456,7 +472,8 @@ function renderSendState() {
   $('#refresh-send-members').disabled=!ready||sendLoading||!!pendingSend||!$('#send-chat').value.endsWith('@chatroom');
   $('#send-chat').disabled=!ready||sendLoading||!!pendingSend;
   $('#send-content').disabled=!ready||!!pendingSend;
-  $('#send-text').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#send-chat').value||!$('#send-content').value.trim();
+  if(isLinux){$('#linux-send-kind').disabled=!ready||!!pendingSend;$('#linux-send-path').disabled=!ready||!!pendingSend;}
+  $('#send-text').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#send-chat').value||!(isLinux&&$('#linux-send-kind').value!=='text'?$('#linux-send-path').value.trim():$('#send-content').value.trim());
   $('#send-text').textContent=pendingSend?'发送中…':'发送';
   $('#mention-count').textContent=`已选 ${mentionSelection.size} / 8`;
   $('#send-members').querySelectorAll('input').forEach(node=>node.disabled=!ready||!!pendingSend);
@@ -495,13 +512,13 @@ async function loadSendChats() {
 async function selectSendChat() {
   const room=$('#send-chat').value,requested=robot,generation=++sendGeneration;
   sendMembers=[];mentionSelection.clear();$('#member-search').value='';
-  $('#send-group').classList.toggle('hidden',!room.endsWith('@chatroom'));renderSendMembers();
+  $('#send-group').classList.toggle('hidden',isLinux||!room.endsWith('@chatroom'));renderSendMembers();
   if(!room){renderSendState();return;}
   sendSession='';sendLoading=true;sendFeedback('正在读取…');renderSendState();
   try {
     const connection=await api('send-connection',undefined,requested);
     if(requested!==robot||generation!==sendGeneration)return;
-    if(room.endsWith('@chatroom')) {
+    if(room.endsWith('@chatroom')&&!isLinux) {
       try {
         const data=await api('group-members?room='+encodeURIComponent(room),undefined,requested);
         if(requested!==robot||generation!==sendGeneration)return;
@@ -534,7 +551,7 @@ async function pollSendStatus() {
     if(pendingSend!==job||job.robot!==robot)return;
     if(result.status==='sending')return;
     pendingSend=null;
-    if(result.status==='sent'){$('#send-content').value='';sendFeedback('已发送');}
+    if(result.status==='sent'){$('#send-content').value='';$('#linux-send-path').value='';sendFeedback('已发送');}
     else sendFeedback(result.error||'发送未完成，请核对微信后再重发',true);
     renderSendState();
   } catch(error) {if(pendingSend===job)sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);}
@@ -546,7 +563,8 @@ $('#send-form').onsubmit=async event=>{
   const body={request_id:job.id,session_id:sendSession,chat_id:$('#send-chat').value,content:$('#send-content').value,at_list:[...mentionSelection]};
   sendFeedback('正在发送…');renderSendState();
   try {
-    await api('send-text',body,requested);
+    const kind=isLinux?$('#linux-send-kind').value:'text';
+    await api(kind==='text'?'send-text':'send-media',kind==='text'?body:{request_id:job.id,session_id:sendSession,chat_id:body.chat_id,kind,path:$('#linux-send-path').value.trim()},requested);
     if(pendingSend===job)await pollSendStatus();
   } catch(error) {
     if(pendingSend!==job)return;
@@ -673,6 +691,7 @@ async function scanContacts() {
   }
 }
 async function validateContactSession(requested,generation) {
+  if(isLinux)return;
   if(!contactData||contactLoading||!state?.connected)return;
   const session=contactData.session_id,scannedGeneration=contactGeneration;
   try {
@@ -701,6 +720,7 @@ async function poll(){
     const [next,tail]=await Promise.all([api('state'),api('logs?after='+logCursor)]);
     if(requested!==robot||generation!==messageGeneration)return;
     state=next;serviceAvailable=true;
+    if(isLinux && next.account && config?.account!==next.account)await loadConfig();
     if(!next.connected)sendChatsAttempted=false;
     $('#service-banner').classList.add('hidden');renderState();
     if(next.connected && location.hash==='#groups' && !sendChatsAttempted && !sendLoading)loadSendChats();
@@ -711,7 +731,7 @@ async function poll(){
     await validateContactSession(requested,generation);
     if(requested!==robot||generation!==messageGeneration)return;
     if(Date.now()-lastRobotFetch>4000){lastRobotFetch=Date.now();await loadRobots();}
-    if(Date.now()-lastAccountFetch>10000)await loadAccounts(true);
+    if(Date.now()-lastAccountFetch>(isLinux?2000:10000))await loadAccounts(true);
   }catch(error){serviceDisconnected();}
   finally{pollBusy=false;}
 }
@@ -852,6 +872,65 @@ document.addEventListener('keydown',e=>{
 });
 matchMedia('(max-width: 800px)').addEventListener('change',()=>setNavigation(false));setNavigation(false);
 document.addEventListener('invalid',e=>{const group=e.target.closest('details');if(group)group.open=true;},true);
+async function pollLinuxLogin(identifier, generation) {
+  if(generation!==loginGeneration || identifier!==loginAttempt)return;
+  try {
+    const result=await api('linux-login-qr',undefined,identifier);
+    if(generation!==loginGeneration || identifier!==loginAttempt)return;
+    const image=$('#wechat-login-qr'),status=$('#wechat-login-status');
+    if(result.status==='qr_available') {
+      image.src='data:image/png;base64,'+result.qrcode_base64;
+      image.classList.remove('hidden');status.textContent='请使用手机微信扫码，并在手机确认登录。';
+    } else {
+      image.removeAttribute('src');image.classList.add('hidden');
+      status.textContent=result.status==='logged_in'?'已登录':result.status==='unavailable'?'请在 Linux 微信窗口扫码。':
+        result.status==='error'?(result.error||'微信登录失败'):result.status==='exited'?'微信已退出':
+        result.elapsed_seconds>=15?'二维码加载较慢，请检查 Linux 网络，或关闭后重试。':'正在等待登录二维码…';
+    }
+    if(['logged_in','error','exited','unavailable'].includes(result.status)) {
+      loginAttempt='';$('#login-wechat').disabled=false;
+      await loadRobots();await loadAccounts();return;
+    }
+    loginTimer=setTimeout(()=>pollLinuxLogin(identifier,generation),2000);
+  } catch(error) {
+    if(generation!==loginGeneration)return;
+    $('#wechat-login-qr').removeAttribute('src');$('#wechat-login-qr').classList.add('hidden');
+    $('#wechat-login-status').textContent=error.message;loginAttempt='';$('#login-wechat').disabled=false;
+  }
+}
+function renderLinuxState(){
+  if(!isLinux || $('#linux-session').classList.contains('hidden'))return;
+  const running=!!state&&activeStates.includes(state.state),waiting=!!state?.login_pending;
+  $('#linux-start').disabled=busy||!serviceAvailable||!state||running;
+  $('#linux-stop').disabled=busy||!serviceAvailable||!running||state?.state==='stopping';
+  $('#linux-state').textContent=!serviceAvailable?'管理服务连接中断':state?.connected?'已连接':waiting?'等待登录与首条消息':({running:'正在连接',starting:'正在启动',stopping:'正在停止',error:'启动失败',stopped:'已停止'}[state?.state]||'正在读取状态…');
+  $('#linux-account').textContent=state?.account?'微信 ID：'+state.account:'';
+  $('#linux-session-hint').textContent=state?.connected?'消息监控已开启；图片、语音和附件仅记录消息类型。':running?'在微信窗口扫码登录，再用另一账号私聊发一条消息。':'启动会打开 Linux 微信。再次启动前，请先退出上一轮的 Linux 微信窗口。';
+  const error=state?.error||state?.connection_error||'';
+  $('#linux-error').textContent=error;$('#linux-error').classList.toggle('hidden',!error);
+}
+if(isLinux){
+  document.body.dataset.platform='linux';
+  $('.account-picker').classList.remove('hidden');$('#linux-session').classList.add('hidden');
+  $('#accounts-heading').firstChild.textContent='微信会话 ';
+  $('#login-wechat').textContent='登录微信';
+  $('#login-wechat').onclick=()=>action(async()=>{
+    const generation=++loginGeneration;clearTimeout(loginTimer);loginAttempt='';
+    $('#wechat-login-panel').classList.remove('hidden');$('#wechat-login-qr').classList.add('hidden');
+    $('#wechat-login-qr').removeAttribute('src');$('#wechat-login-status').textContent='正在启动微信…';
+    const r=await api('linux-sessions/open',{request_id:crypto.randomUUID()});
+    if(generation!==loginGeneration)return;
+    loginAttempt=r.id;await loadRobots();await loadAccounts();await switchRobot(r.id);
+    await pollLinuxLogin(r.id,generation);
+  });
+  $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.add('hidden');
+  const modelsLink=$('[data-page="models"]');modelsLink.lastChild.textContent='模型设置';$('#models-heading').textContent='模型设置';
+  for(const page of ['tasks','contacts','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
+  $('#linux-start').onclick=()=>action(async()=>{await api('start',{});resetComposer();});
+  $('#linux-stop').onclick=()=>action(async()=>{await api('stop',{});resetComposer();});
+  const kindChanged=()=>{const media=$('#linux-send-kind').value!=='text';$('#linux-path-field').classList.toggle('hidden',!media);$('#send-content').classList.toggle('hidden',media);$('#send-content-label').classList.toggle('hidden',media);$('#send-content').required=!media;$('#linux-send-path').required=media;renderSendState();};
+  $('#linux-send-kind').onchange=kindChanged;$('#linux-send-path').oninput=renderSendState;
+}
 (async()=>{renderState();try{await loadRobots();await loadConfig();await loadAccounts();await poll();}catch(error){serviceDisconnected();toast(error.message,true);}setInterval(poll,2000);})();
 
   }, {once:true});

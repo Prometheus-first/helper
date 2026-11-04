@@ -22,13 +22,13 @@ logger = logging.getLogger("Bot")
 
 
 class BotApplication:
-    def __init__(self, root, store, *, backend_factory=None, initial_capabilities=None):
+    def __init__(self, root, store, *, backend_factory=None, initial_capabilities=None, defer_members=False):
         self.root, self.store = root, store
         self.config = store.load()
         self.service = ServiceFacade(text_delay=self.config.get("text_send_delay"))
         self.message_observer = None
         self.service.message_observer = self._observe_message
-        self.members = MemberStore.from_config(self.config, self.store.path.parent)
+        self.members = None if defer_members else MemberStore.from_config(self.config, self.store.path.parent)
         generic = self.config.get("backend") == "native_text"
         capabilities = (TEXT_CAPABILITIES if generic else CAPABILITIES) if initial_capabilities is None else frozenset(initial_capabilities)
         self.plugins = PluginManager(root / "plugins", store, self.service, capabilities,

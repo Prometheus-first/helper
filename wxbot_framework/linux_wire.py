@@ -10,6 +10,7 @@ import tempfile
 _HEADER = struct.Struct("!4sQIII")
 _MAGIC = b"HLT1"
 _MEDIA_MAGIC = b"HLM1"
+_SOURCE_MAGIC = b"HLA1"
 _MAX_FIELD = (1 << 32) - 1
 
 
@@ -30,7 +31,7 @@ def encode_text_event(sender: str, receiver: str, text: str, *, sequence: int = 
 
 def encode_media_event(sender: str, receiver: str, xml: str, *, msg_type: int, sequence: int = 1) -> bytes:
     """媒体只传递类型与 XML 元数据，不在本地通道传输图片、文件原始字节。"""
-    if type(msg_type) is not int or msg_type not in (3, 49):
+    if type(msg_type) is not int or msg_type not in (3, 34, 49):
         raise LinuxWireError("尚未适配此媒体消息类型")
     frame = encode_text_event(sender, receiver, xml, sequence=sequence)
     return _MEDIA_MAGIC + frame[4:_HEADER.size] + struct.pack("!I", msg_type) + frame[_HEADER.size:]
@@ -56,19 +57,26 @@ def read_bridge_ready(conn: socket.socket):
 def read_text_event(conn: socket.socket) -> dict:
     header = _read_exact(conn, _HEADER.size)
     magic, sequence, sender_len, receiver_len, text_len = _HEADER.unpack(header)
-    if magic not in (_MAGIC, _MEDIA_MAGIC) or not sequence or not sender_len or not receiver_len or not text_len:
+    if magic not in (_MAGIC, _MEDIA_MAGIC, _SOURCE_MAGIC) or not sequence or not sender_len or not receiver_len or not text_len:
         raise LinuxWireError("无效的 Linux 文本事件帧")
     msg_type = struct.unpack("!I", _read_exact(conn, 4))[0] if magic == _MEDIA_MAGIC else 1
-    if magic == _MEDIA_MAGIC and msg_type not in (3, 49):
+    source_len = struct.unpack("!I", _read_exact(conn, 4))[0] if magic == _SOURCE_MAGIC else 0
+    if source_len > 16384:
+        raise LinuxWireError("消息来源字段过长")
+    if magic == _MEDIA_MAGIC and msg_type not in (3, 34, 49):
         raise LinuxWireError("媒体事件类型无效")
     # 字段长度使用协议内的无符号 32 位长度；不截断正文。
     try:
         sender = _read_exact(conn, sender_len).decode("utf-8", errors="strict")
         receiver = _read_exact(conn, receiver_len).decode("utf-8", errors="strict")
         text = _read_exact(conn, text_len).decode("utf-8", errors="strict")
+        source = _read_exact(conn, source_len).decode("utf-8", errors="replace") if source_len else ""
     except UnicodeDecodeError as error:
         raise LinuxWireError("文本事件不是有效的 UTF-8") from error
-    return {"sender": sender, "receiver": receiver, "text": text, "sequence": sequence, "type": msg_type}
+    result = {"sender": sender, "receiver": receiver, "text": text, "sequence": sequence, "type": msg_type}
+    if source:
+        result["msgsource"] = source
+    return result
 
 
 def acknowledge_text_event(conn: socket.socket, sequence: int, *, stop: bool = False):

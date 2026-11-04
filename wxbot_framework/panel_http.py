@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import secrets
+import os
 from urllib.parse import parse_qs, urlsplit
 
 from .panel_common import PanelError, redact
@@ -11,7 +12,7 @@ from .panel_common import PanelError, redact
 
 class PanelServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    allow_reuse_address = os.name != 'nt'
 
     def __init__(self, controller, port=8765):
         self.controller = controller
@@ -66,15 +67,19 @@ class PanelHandler(BaseHTTPRequestHandler):
                 raw = (controller.root / 'webui' / name).read_bytes()
                 if name == 'index.html':
                     raw = raw.replace(b'__HELPER_TOKEN__', html.escape(self.server.token).encode('ascii'))
+                    raw = raw.replace(b'__HELPER_PLATFORM__', b'linux' if getattr(controller, 'platform', '') == 'linux' else b'windows')
                 kind = {'html': 'text/html', 'css': 'text/css', 'js': 'application/javascript'}[name.rsplit('.', 1)[1]]
                 return self.send(200, raw, kind + '; charset=utf-8')
             hub = controller if hasattr(controller, 'robot') else None
             global_routes = ('/api/robots', '/api/accounts', '/api/accounts/prepare', '/api/accounts/start',
                              '/api/wechat-login/start', '/api/wechat-login/attach',
-                             '/api/wechat-login/status', '/api/wechat-login/cancel')
+                             '/api/wechat-login/status', '/api/wechat-login/cancel',
+                             '/api/linux-sessions/open', '/api/linux-sessions/close')
             if hub is not None and path not in global_routes:
                 robot_id = parse_qs(parsed.query).get('robot', ['default'])[0]
                 controller = hub.robot(robot_id)
+            if hasattr(controller, 'guard_route'):
+                controller.guard_route(path, write)
             if write:
                 if (self.headers.get_content_type() != 'application/json' or self.headers.get('Transfer-Encoding') or
                         not self.headers.get('Content-Length', '').isdigit()):
@@ -101,6 +106,16 @@ class PanelHandler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data, dict):
                     raise PanelError('请求必须为 JSON 对象')
+                if hasattr(controller, 'validate_request'):
+                    controller.validate_request(path, data)
+                if path == '/api/linux-sessions/open' and hub is not None and hasattr(hub, 'open_session'):
+                    return self.send(200, hub.open_session(data))
+                if path == '/api/linux-sessions/close' and hub is not None and hasattr(hub, 'close_session'):
+                    return self.send(200, hub.close_session(data))
+                if path == '/api/linux-session/open' and hasattr(controller, 'open_wechat'):
+                    return self.send(200, controller.open_wechat())
+                if path == '/api/linux-session/close' and hasattr(controller, 'close_wechat'):
+                    return self.send(200, controller.close_wechat())
                 if path == '/api/robots' and hub is not None:
                     return self.send(200, hub.create_robot(data))
                 if path == '/api/accounts/prepare' and hub is not None:
@@ -113,6 +128,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.wechat_login().attach(data))
                 if path == '/api/wechat-login/cancel' and hub is not None:
                     return self.send(200, hub.wechat_login().cancel(data))
+                if path == '/api/send-media' and hasattr(controller, 'send_media'):
+                    return self.send(200, controller.send_media(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
                 if path == '/api/scheduled-tasks':
@@ -148,6 +165,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     raise PanelError('接口不存在', 404)
                 actions[path]()
                 return self.send(200, {'ok': True})
+            if path == '/api/linux-login-qr' and hasattr(controller, 'linux_login_qr'):
+                return self.send(200, controller.linux_login_qr())
             if path == '/api/state':
                 return self.send(200, controller.snapshot())
             if path == '/api/scheduled-tasks':
@@ -197,7 +216,7 @@ class PanelHandler(BaseHTTPRequestHandler):
                 after = int(parse_qs(parsed.query).get('after', ['0'])[0])
                 return self.send(200, controller.message_tail(after))
             if path == '/api/robots':
-                return self.send(200, hub.robot_list() if hub is not None else
+                return self.send(200, controller.robot_list() if hasattr(controller, 'robot_list') else hub.robot_list() if hub is not None else
                     {'robots': [{'id': 'default', 'name': '默认机器人', 'account': '', 'state': controller.state}]})
             raise PanelError('页面不存在', 404)
         except PanelError as error:

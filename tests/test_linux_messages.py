@@ -23,6 +23,15 @@ class LinuxTextAdapterTests(unittest.TestCase):
         self.assertEqual((msg.chat_id, msg.sender_id, msg.text),
                          ("123456789@chatroom", "wxid_friend_fixture", "你好"))
 
+    def test_group_mentions_require_source_metadata(self):
+        event = {"sender": "123456789@chatroom", "receiver": "wxid_self_fixture", "text": "wxid_friend_fixture:\n@昵称\u2005你好"}
+        self.assertEqual(self.adapter.convert(event).data.get("at_members"), ())
+        event["msgsource"] = "<msgsource><atuserlist>wxid_self_fixture,wxid_other_fixture</atuserlist></msgsource>"
+        self.assertEqual(self.adapter.convert(event).data.get("at_members"), ("wxid_self_fixture", "wxid_other_fixture"))
+        self.assertTrue(self.adapter.convert(event).data.get("is_at_self"))
+        event["msgsource"] = "<!DOCTYPE x [<!ENTITY e 'wxid_self_fixture'>]><msgsource><atuserlist>&e;</atuserlist></msgsource>"
+        self.assertEqual(self.adapter.convert(event).data.get("at_members"), ())
+
     def test_wrong_account_and_missing_group_prefix_are_ignored(self):
         self.assertIsNone(self.adapter.convert({"sender": "wxid_friend_fixture", "receiver": "wxid_other_fixture", "text": "你好"}))
         self.assertIsNone(self.adapter.convert({"sender": "123456789@chatroom", "receiver": "wxid_self_fixture", "text": "没有成员前缀"}))

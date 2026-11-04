@@ -52,6 +52,39 @@ class LinuxWireTests(unittest.TestCase):
             thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
 
+    def test_source_metadata_preserves_long_message(self):
+        sender = b"123456789@chatroom"
+        receiver = b"wxid_self_fixture"
+        text = ("wxid_friend_fixture:\n@成员\u2005" + "长文本" * 4000).encode()
+        source = b"<msgsource><atuserlist>wxid_self_fixture</atuserlist></msgsource>"
+        frame = struct.pack("!4sQIIII", b"HLA1", 42, len(sender), len(receiver), len(text), len(source)) + sender + receiver + text + source
+        left, right = socket.socketpair()
+        def send():
+            try:
+                right.sendall(frame)
+            finally:
+                right.close()
+        thread = threading.Thread(target=send)
+        thread.start()
+        try:
+            event = read_text_event(left)
+            msg = LinuxTextAdapter("wxid_self_fixture", "s").convert(event)
+            self.assertEqual(msg.text, text.decode().split("\n", 1)[1])
+            self.assertEqual(msg.data["at_members"], ("wxid_self_fixture",))
+        finally:
+            left.close()
+            thread.join(timeout=5)
+
+    def test_rejects_unbounded_source(self):
+        left, right = socket.socketpair()
+        try:
+            right.sendall(struct.pack("!4sQIIII", b"HLA1", 1, 1, 1, 1, 16385))
+            with self.assertRaises(LinuxWireError):
+                read_text_event(left)
+        finally:
+            left.close()
+            right.close()
+
     def test_invalid_header_truncated_frame_and_utf8_are_rejected(self):
         for payload, error in [
             (struct.pack("!4sQIII", b"NOPE", 1, 1, 1, 1), LinuxWireError),

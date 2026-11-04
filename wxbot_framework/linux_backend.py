@@ -65,6 +65,15 @@ class LinuxNativeTextBackend:
     def pid(self):
         return self.process.pid if self.process else None
 
+    def launch_command(self):
+        return [os.fspath(self.wechat_path)]
+
+    def launch_environment(self, env):
+        return env
+
+    def convert_event(self, event):
+        return self.adapter.convert(event)
+
     def start(self, emit):
         if self._stopping.is_set() or self.process is not None or self._thread is not None:
             raise RuntimeError("Linux 后端已启动")
@@ -90,7 +99,7 @@ class LinuxNativeTextBackend:
                 env["HELPER_LINUX_TEST_MARKERS"] = "1"
             else:
                 env.pop("HELPER_LINUX_TEST_MARKERS", None)
-            child = subprocess.Popen([os.fspath(self.wechat_path)], env=env, pass_fds=(read_fd,),
+            child = subprocess.Popen(self.launch_command(), env=self.launch_environment(env), pass_fds=(read_fd,),
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=None, start_new_session=True)
             listener.bind_pid(child.pid)
@@ -195,7 +204,7 @@ class LinuxNativeTextBackend:
                     try:
                         seq = event["sequence"]
                         if seq not in self._seen:
-                            message = self.adapter.convert(event)
+                            message = self.convert_event(event)
                             if message is not None:
                                 emit(message)
                             # ACK 发送失败后会重试同一帧；在 ACK 之前记住已派发的序号。

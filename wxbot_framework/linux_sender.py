@@ -66,8 +66,8 @@ class LinuxNativeSender:
                 pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 if pid != self.expected_pid or uid != os.geteuid():
                     raise PermissionError("拒绝非目标微信进程的发送连接")
-                attempted = command in (b"S", b"G", b"I", b"F", b"D", b"A", b"K")
-                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"G", b"I", b"F", b"D", b"A", b"K") else b""))
+                attempted = command in (b"S", b"G", b"I", b"F", b"D", b"U", b"A", b"B", b"K")
+                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"G", b"I", b"F", b"D", b"A", b"B", b"K", b"E") else b""))
                 chunks = []
                 count = 0
                 while True:
@@ -86,7 +86,7 @@ class LinuxNativeSender:
                 return response
         except (OSError, EOFError, ValueError) as error:
             if attempted:
-                raise LinuxSendIndeterminate("图片下载结果未知，不会自动重试" if command == b"D" else "发送结果未知，消息可能已送出；不会自动重试") from error
+                raise LinuxSendIndeterminate("图片下载结果未知，不会自动重试" if command in (b"D", b"U") else "发送结果未知，消息可能已送出；不会自动重试") from error
             raise
 
     def wait_ready(self, *, timeout=5.0, process=None):
@@ -120,6 +120,27 @@ class LinuxNativeSender:
         if not isinstance(result, dict) or result.get("success") is not True:
             raise LinuxSendError(result.get("error_message", "微信拒绝发送") if isinstance(result, dict) else "原生回调内容无效")
         return result
+
+    def current_profile(self):
+        """从已校验的微信进程读取登录状态，不依赖收到消息。"""
+        from .account import validate_account
+        with self._lock:
+            result = self._request(b"P")
+        if result.get("logged_in") is not True:
+            return {"logged_in": False, "wxid": "", "name": ""}
+        account = validate_account(result.get("wxid"))
+        name = result.get("name", "")
+        if not isinstance(name, str) or len(name) > 128 or any(ord(ch) < 32 for ch in name):
+            name = ""
+        return {"logged_in": True, "wxid": account, "name": name}
+
+    def bind_account(self, account):
+        from .account import validate_account
+        account = validate_account(account)
+        with self._lock:
+            self._result(self._request(b"E", account.encode("ascii")))
+            self._context_ready = False
+        return True
 
     def ensure_context(self):
         with self._lock:
@@ -194,6 +215,32 @@ class LinuxNativeSender:
                 self.ensure_context()
             self._result(self._request(b"A", (peer + "\n" + account).encode("ascii")))
             self.image_account = account
+        return True
+
+    def bind_voice_test_scope(self, peer, account):
+        """同时保留该测试账号的第一条语音上下文，仅供受控验证。"""
+        from .account import validate_account
+        validate_account(peer); validate_account(account)
+        if "image_context" not in self.features:
+            raise LinuxSendError("当前桥接不支持消息上下文")
+        with self._lock:
+            if not self._context_ready:
+                self.ensure_context()
+            self._result(self._request(b"B", (peer + "\n" + account).encode("ascii")))
+            self.image_account = account
+        return True
+
+    def voice_test_context_available(self):
+        with self._lock:
+            return self._result(self._request(b"T")).get("available") is True
+
+    def download_test_voice(self):
+        if not self.image_account:
+            raise LinuxSendError("测试会话尚未绑定")
+        with self._lock:
+            result = self._result(self._request(b"U"), sending=True)
+            if result.get("native_completed") is not True:
+                raise LinuxSendError("微信没有返回语音下载完成回执")
         return True
 
     def image_context_available(self, md5):

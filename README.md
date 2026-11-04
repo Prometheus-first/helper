@@ -3,7 +3,7 @@
 
 Windows 微信机器人 Python 插件框架，提供本地网页管理台和控制台入口。
 
-Linux 实验版已验证文本收发、本地图片与文件发送、好友图片后台自动下载；尚未接入日常启动入口和网页管理台。安装、验证命令和限制见 [Linux 实验版](LINUX_PORT_STATUS.md)。
+Linux 实验版已验证文本收发、真实群艾特接收、本地图片与文件发送，以及好友图片后台自动下载；网页管理台支持单账号实机启停、多账号隔离模拟、无桌面扫码登录、监控和插件配置。主动群艾特发送尚未完成验证。安装、验证命令和限制见 [Linux 实验版](LINUX_PORT_STATUS.md)。
 
 [在线文档](https://prometheus-first.github.io/helper/) · [快速开始](docs/guide/quick-start.md) · [插件开发](docs/development/plugins.md)
 

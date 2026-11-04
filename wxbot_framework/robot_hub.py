@@ -27,6 +27,10 @@ class RobotWorker:
         self.lock = threading.RLock()
         self.dead = False
 
+    def command(self):
+        return [sys.executable, '-B', '-X', 'utf8', str(self.root / 'web.py'),
+                '--worker', '--workspace', str(self.workspace)]
+
     def launch(self):
         with self.lock:
             if self.dead:
@@ -43,8 +47,7 @@ class RobotWorker:
             output.parent.mkdir(parents=True, exist_ok=True)
             environment = dict(os.environ, PYTHONUTF8='1', PYTHONDONTWRITEBYTECODE='1')
             with output.open('ab') as error_log:
-                process = subprocess.Popen([sys.executable, '-B', '-X', 'utf8', str(self.root / 'web.py'),
-                    '--worker', '--workspace', str(self.workspace)], cwd=self.root,
+                process = subprocess.Popen(self.command(), cwd=self.root,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=error_log,
                     env=environment, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), close_fds=True)
             self.process = process
@@ -140,6 +143,8 @@ class RobotProxy:
         from urllib.parse import urlencode
         return self.request('group-members?' + urlencode({'room': room}))
     def send_text(self, data): return self.request('send-text', data)
+    def send_media(self, data): return self.request('send-media', data)
+    def linux_login_qr(self): return self.request('linux-login-qr')
     def list_scheduled_tasks(self): return self.request('scheduled-tasks')
     def save_scheduled_task(self, data): return self.request('scheduled-tasks', data)
     def delete_scheduled_task(self, data): return self.request('scheduled-tasks/delete', data)

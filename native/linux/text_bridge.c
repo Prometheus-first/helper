@@ -27,14 +27,14 @@ static const unsigned char build_id[20]={0xd6,0x2b,0xde,0x21,0xb2,0x6c,0x59,0x28
 static const unsigned char expected[14]={0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x48};
 static const unsigned char exe_sha256[32]={0x27,0x49,0x53,0x5f,0x29,0x9b,0xa6,0x7f,0xeb,0x8e,0xf8,0x0c,0xab,0x89,0x8b,0xb0,0x53,0x1f,0xa8,0xf3,0x76,0xb1,0x6f,0x8a,0x72,0xdb,0x70,0x68,0x11,0xc8,0x41,0x32};
 #define QUEUE_SIZE 128
-struct event { unsigned char *fields[3]; uint32_t lengths[3]; uint64_t seq; uint32_t type; };
+struct event { unsigned char *fields[4]; uint32_t lengths[4]; uint64_t seq; uint32_t type; };
 typedef uintptr_t (*sync_fn)(void*,void*,void*);
 static sync_fn original;
 static struct event *queue[QUEUE_SIZE];static size_t qhead,qcount;
 static pthread_mutex_t qlock=PTHREAD_MUTEX_INITIALIZER;static pthread_cond_t qready=PTHREAD_COND_INITIALIZER;
 static pthread_t worker;static atomic_int running;static atomic_int accepting;static atomic_int installed;static atomic_uint callbacks;static atomic_ullong sequence;
 static char socket_path[sizeof(((struct sockaddr_un*)0)->sun_path)];static pid_t controller_pid;static int test_only;static int stop_fd=-1;
-static int media_test;static char media_arm[96],media_peer[128],media_self[128];static unsigned media_images,media_files;
+static int panel_media,media_test,voice_test;static char media_arm[96],media_peer[128],media_self[128];static unsigned media_images,media_files,media_voices;
 
 static int stop_requested(void){
  if(stop_fd<0)return 0;
@@ -43,7 +43,7 @@ static int stop_requested(void){
 }
 static void notice(const char *s){ssize_t ignored=write(STDERR_FILENO,s,strlen(s));(void)ignored;}
 static int safe_read(void *out,const void *in,size_t n){struct iovec a={out,n},b={(void*)in,n};return process_vm_readv(getpid(),&a,1,&b,1,0)==(ssize_t)n;}
-static void event_free(struct event *e){if(!e)return;for(int i=0;i<3;i++)free(e->fields[i]);free(e);}
+static void event_free(struct event *e){if(!e)return;for(int i=0;i<4;i++)free(e->fields[i]);free(e);}
 static int get_field(const void *obj,unsigned off,unsigned char **out,uint32_t *len){
  uintptr_t child=0,s=0,data=0;unsigned char header=0;uint64_t n=0;
  if(!safe_read(&child,(const char*)obj+off,8)||!child||!safe_read(&s,(void*)(child+8),8)||!s||!safe_read(&header,(void*)s,1))return 0;
@@ -58,21 +58,39 @@ static int get_field(const void *obj,unsigned off,unsigned char **out,uint32_t *
  if(header&1){if(!safe_read(&n2,(void*)(s+8),8)||!safe_read(&data2,(void*)(s+16),8)||n2!=n||data2!=data){free(check);free(buf);return 0;}}
  free(check);*out=buf;*len=(uint32_t)n;return 1;
 }
+/* Optional new_sync field 10: preserve only a stable, bounded copy. A missing or
+ * unreadable source must never discard an otherwise valid message. */
+static void get_source(const void *obj,unsigned char **out,uint32_t *len){
+ uintptr_t s=0,data=0,s2=0,data2=0;unsigned char h=0,h2=0;uint64_t n=0,n2=0;
+ if(!safe_read(&s,(const char*)obj+0x38,8)||!s||!safe_read(&h,(void*)s,1))return;
+ if(h&1){if(!safe_read(&n,(void*)(s+8),8)||!safe_read(&data,(void*)(s+16),8))return;}
+ else{n=h>>1;data=s+1;}
+ if(!n||n>16384||!data)return;
+ unsigned char *buf=malloc((size_t)n),*check=malloc((size_t)n);
+ if(!buf||!check)goto fail;
+ if(!safe_read(buf,(void*)data,(size_t)n)||!safe_read(check,(void*)data,(size_t)n)||memcmp(buf,check,(size_t)n)||
+    !safe_read(&s2,(const char*)obj+0x38,8)||s2!=s||!safe_read(&h2,(void*)s,1)||h2!=h)goto fail;
+ if(h&1){if(!safe_read(&n2,(void*)(s+8),8)||!safe_read(&data2,(void*)(s+16),8)||n2!=n||data2!=data)goto fail;}
+ free(check);*out=buf;*len=(uint32_t)n;return;
+ fail: free(check);free(buf);
+}
 static void capture(const void *obj){
- uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4)||(type!=1&&(!media_test||(type!=3&&type!=49))))return;
+ uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4)||(type!=1&&((!media_test&&!panel_media)||(type!=3&&type!=49&&((!voice_test&&!panel_media)||type!=34)))))return;
  struct event *e=calloc(1,sizeof(*e));if(!e){notice("helper-linux: event allocation failed\n");return;}
  for(int i=0;i<3;i++)if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i])){event_free(e);return;}
  e->type=type;
+ if(type==1)get_source(obj,&e->fields[3],&e->lengths[3]);
  int include=type==1&&(!test_only||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_07",18)||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_08",18));
  pthread_mutex_lock(&qlock);
+ if(panel_media&&type!=1)include=1;
  if(media_test){
   if(type==1&&e->lengths[2]==strlen(media_arm)&&!memcmp(e->fields[2],media_arm,e->lengths[2])&&
      e->lengths[0]>5&&e->lengths[1]>5&&!memcmp(e->fields[0],"wxid_",5)&&!memcmp(e->fields[1],"wxid_",5)){
    int same=!media_peer[0]||(strlen(media_peer)==e->lengths[0]&&!memcmp(media_peer,e->fields[0],e->lengths[0]));
-   if(same){memcpy(media_peer,e->fields[0],e->lengths[0]);media_peer[e->lengths[0]]=0;memcpy(media_self,e->fields[1],e->lengths[1]);media_self[e->lengths[1]]=0;media_images=1;media_files=1;include=1;}
+   if(same){memcpy(media_peer,e->fields[0],e->lengths[0]);media_peer[e->lengths[0]]=0;memcpy(media_self,e->fields[1],e->lengths[1]);media_self[e->lengths[1]]=0;media_images=1;media_files=1;media_voices=voice_test?1:0;include=1;}
   }else if(type!=1&&media_peer[0]&&strlen(media_peer)==e->lengths[0]&&strlen(media_self)==e->lengths[1]&&
            !memcmp(media_peer,e->fields[0],e->lengths[0])&&!memcmp(media_self,e->fields[1],e->lengths[1])){
-   include=(type==3&&media_images)||(type==49&&media_files);
+   include=(type==3&&media_images)||(type==49&&media_files)||(type==34&&media_voices);
   }
  }
  if(!include){pthread_mutex_unlock(&qlock);event_free(e);return;}
@@ -82,6 +100,7 @@ static void capture(const void *obj){
  if(qcount==QUEUE_SIZE){pthread_mutex_unlock(&qlock);event_free(e);notice("helper-linux: receive queue full\n");return;}
  if(type==3&&media_images)media_images--;
  if(type==49&&media_files)media_files--;
+  if(type==34&&media_voices)media_voices--;
  queue[(qhead+qcount)%QUEUE_SIZE]=e;qcount++;pthread_cond_signal(&qready);pthread_mutex_unlock(&qlock);
 }
 static uintptr_t replacement(void *a,void *b,void *c){
@@ -101,11 +120,12 @@ static int connect_socket(void){
 }
 static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
 static int send_event(int fd,const struct event *e){
- unsigned char h[28];size_t header_size=e->type==1?24:28;memcpy(h,e->type==1?"HLT1":"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
+ unsigned char h[28];int has_source=e->type==1&&e->lengths[3];size_t header_size=e->type==1?(has_source?28:24):28;memcpy(h,e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
  for(int i=0;i<3;i++){uint32_t n=htonl(e->lengths[i]);memcpy(h+12+4*i,&n,4);}
  if(e->type!=1){uint32_t type=htonl(e->type);memcpy(h+24,&type,4);}
+ else if(has_source){uint32_t n=htonl(e->lengths[3]);memcpy(h+24,&n,4);}
  if(!send_all(fd,h,header_size))return 0;
- for(int i=0;i<3;i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;
+ for(int i=0;i<(has_source?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;
  unsigned char ack[8];size_t have=0;
  while(have<sizeof(ack)&&atomic_load(&running)){
   ssize_t n=recv(fd,ack+have,sizeof(ack)-have,0);
@@ -196,7 +216,9 @@ __attribute__((constructor)) static void initialize(void){
   stop_fd=(int)candidate;
  }
  const char *test=getenv("HELPER_LINUX_TEST_MARKERS");test_only=test && !strcmp(test,"1");
- const char *mt=getenv("HELPER_LINUX_TEST_MEDIA"),*arm=getenv("HELPER_LINUX_MEDIA_ARM_TEXT");
+ const char *panel=getenv("HELPER_LINUX_PANEL_MEDIA");panel_media=panel&&!strcmp(panel,"1");
+ const char *voice=getenv("HELPER_LINUX_TEST_VOICE");voice_test=voice&&!strcmp(voice,"1");
+  const char *mt=getenv("HELPER_LINUX_TEST_MEDIA"),*arm=getenv("HELPER_LINUX_MEDIA_ARM_TEXT");
  if(mt&&!strcmp(mt,"1")&&arm&&strlen(arm)>0&&strlen(arm)<sizeof(media_arm)){media_test=1;strcpy(media_arm,arm);}
 
 #ifdef HELPER_FIXTURE_TEST

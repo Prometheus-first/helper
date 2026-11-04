@@ -20,6 +20,11 @@ int main(void){
  const char suffix[]="_FIXTURE_END";size_t total=sizeof(prefix)-1+200000+sizeof(suffix)-1;char *text=malloc(total);if(!text)return 11;
  memcpy(text,prefix,sizeof(prefix)-1);memset(text+sizeof(prefix)-1,'x',200000);memcpy(text+total-(sizeof(suffix)-1),suffix,sizeof(suffix)-1);heap_string(body,text,total);
  struct Buffer a={0,from},b={0,to},c={0,body};struct Msg msg={.sender=&a,.type=1,.receiver=&b,.content=&c};
+#ifdef HELPER_FIXTURE_SOURCE
+ const char source_text[]="<msgsource><atuserlist>wxid_self_fixture</atuserlist></msgsource>";
+ unsigned char source[24]={0};heap_string(source,source_text,sizeof(source_text)-1);
+ void *source_ptr=source;memcpy((char*)&msg+0x38,&source_ptr,sizeof(source_ptr));
+#endif
  usleep(300000);if(fixture_hook_target(NULL,&msg,NULL)!=7)return 12;
 #ifdef HELPER_FIXTURE_TWO
  usleep(600000);if(fixture_hook_target(NULL,&msg,NULL)!=7)return 13;

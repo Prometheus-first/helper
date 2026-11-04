@@ -73,6 +73,34 @@ static void sdk_cb_invoke(struct sdk_callback*c,const struct sdk_string*a,const 
  sdk_copy(sdk_result,sizeof(sdk_result),a);sdk_copy(sdk_error,sizeof(sdk_error),b);sdk_done=1;
  pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
 }
+#ifndef SDK_FIXTURE
+static uintptr_t sdk_base;
+#endif
+static char sdk_expected_account[128];
+/* Fixed-layout read-only identity, validated against this exact ELF build. */
+static int sdk_profile(char account[128],char name[512]){
+ account[0]=name[0]=0;
+#ifdef SDK_FIXTURE
+ int(*profile)(char*,size_t,char*,size_t)=(void*)dlsym(RTLD_DEFAULT,"fixture_sdk_profile");
+ return profile?profile(account,128,name,512):0;
+#else
+ uintptr_t app=0,av=0,hub=0,hv=0,app2=0,hub2=0;unsigned char logged=0,logged2=0;
+ if(!rd(&app,(void*)(sdk_base+0xacf6710),8)||!app||!rd(&av,(void*)app,8)||av!=sdk_base+0xa89cba8||
+    !rd(&hub,(void*)(app+0x68),8)||!hub||!rd(&hv,(void*)hub,8)||hv!=sdk_base+0xa8aa750||
+    !rd(&logged,(void*)(hub+0x38),1)||!(logged&1)||
+    !sdk_copy(account,128,(struct sdk_string*)(hub+0x48)))return 0;
+ for(size_t i=0;account[i];i++)if(!((account[i]>='a'&&account[i]<='z')||(account[i]>='A'&&account[i]<='Z')||
+    (account[i]>='0'&&account[i]<='9')||strchr("_.@-",account[i]))){account[0]=0;return 0;}
+ sdk_copy(name,512,(struct sdk_string*)(hub+0x78));
+ char check[128]={0},name2[512]={0};
+ if(!rd(&app2,(void*)(sdk_base+0xacf6710),8)||app2!=app||!rd(&hub2,(void*)(app+0x68),8)||hub2!=hub||
+    !rd(&logged2,(void*)(hub+0x38),1)||!(logged2&1)||
+    !sdk_copy(check,sizeof(check),(struct sdk_string*)(hub+0x48))||strcmp(account,check)){account[0]=0;return 0;}
+ sdk_copy(name2,sizeof(name2),(struct sdk_string*)(hub+0x78));
+ if(strcmp(name,name2))name[0]=0;
+ return 1;
+#endif
+}
 static void sdk_string_destroy(struct sdk_string*s){if(s->bytes[0]&1){void*p=NULL;memcpy(&p,s->bytes+16,8);sdk_delete(p);}memset(s,0,sizeof(*s));}
 static void sdk_write(int fd,const char*s){size_t n=strlen(s);while(n){ssize_t k=send(fd,s,n,MSG_NOSIGNAL);if(k<0){if(errno==EINTR)continue;break;}if(!k)break;s+=k;n-=k;}}
 static void sdk_escape(char*out,size_t cap,const char*s){size_t n=0;for(;*s&&n+7<cap;s++){unsigned char c=(unsigned char)*s;if(c=='"'||c=='\\'){out[n++]='\\';out[n++]=(char)c;}else if(c<32){int k=snprintf(out+n,cap-n,"\\u%04x",c);n+=(size_t)k;}else out[n++]=(char)c;}out[n]=0;}
@@ -81,9 +109,6 @@ struct sdk_payload { atomic_uint refs; char operation; char *json; };
 struct sdk_callable { void **vtable; struct sdk_payload *payload; };
 struct sdk_source { const char *file; const char *function; uint32_t line,pad; const void *pc; };
 struct sdk_shared { void *object; void *control; };
-#ifndef SDK_FIXTURE
-static uintptr_t sdk_base;
-#endif
 static void sdk_finish_error(const char*msg){
  pthread_mutex_lock(&sdk_mutex);snprintf(sdk_error,sizeof(sdk_error),"%s",msg);sdk_result[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
 }
@@ -144,7 +169,8 @@ static void sdk_perform_media(char operation,const char*payload){
 typedef void*(*sdk_image_dto_fn)(void*,void*);
 static sdk_image_dto_fn sdk_original_image_dto;
 static int sdk_download_hook_ready;
-static atomic_int sdk_image_capture_enabled;
+static atomic_int sdk_image_capture_enabled,sdk_voice_capture_enabled;
+static struct sdk_shared sdk_voice_context;
 static atomic_uint sdk_image_scoped_seen,sdk_image_cached_total;
 static pthread_mutex_t sdk_image_mutex=PTHREAD_MUTEX_INITIALIZER;
 static char sdk_image_peer[128],sdk_image_account[128];
@@ -154,11 +180,18 @@ static int sdk_md5_valid(const char*value){if(strlen(value)!=32)return 0;for(int
 static void sdk_shared_retain(struct sdk_shared*value){if(value->control)__atomic_add_fetch((int64_t*)((char*)value->control+8),1,__ATOMIC_SEQ_CST);}
 static void*sdk_capture_image_dto(void*output,void*source){
  void*result=sdk_original_image_dto(output,source);
- uint32_t type=0;if(!atomic_load(&sdk_image_capture_enabled)||!rd(&type,(char*)output+8,4)||type!=3)return result;
+ uint32_t type=0;if(!atomic_load(&sdk_image_capture_enabled)||!rd(&type,(char*)output+8,4)||(type!=3&&(!atomic_load(&sdk_voice_capture_enabled)||type!=34)))return result;
  char peer[128],account[128],md5[33];
  if(!sdk_copy(peer,sizeof(peer),(struct sdk_string*)((char*)source+0x18))||!sdk_copy(account,sizeof(account),(struct sdk_string*)((char*)source+0x30)))return result;
  pthread_mutex_lock(&sdk_image_mutex);int scoped=!strcmp(peer,sdk_image_peer)&&!strcmp(account,sdk_image_account);pthread_mutex_unlock(&sdk_image_mutex);
  if(!scoped)return result;
+ if(type==34){
+  struct sdk_shared voice={0},previous={0};
+  if(!rd(&voice,(char*)output+0x238,sizeof(voice))||!voice.object||!voice.control)return result;
+  sdk_shared_retain(&voice);pthread_mutex_lock(&sdk_image_mutex);
+  if(!atomic_load(&sdk_voice_capture_enabled)||strcmp(peer,sdk_image_peer)||strcmp(account,sdk_image_account)||sdk_voice_context.object){pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&voice);return result;}
+  previous=sdk_voice_context;sdk_voice_context=voice;pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&previous);return result;
+ }
  atomic_fetch_add(&sdk_image_scoped_seen,1);
  void*metadata=NULL;struct sdk_shared context={0};
  if(!rd(&metadata,(char*)source+0x220,8)||!metadata||sdk_copy(md5,sizeof(md5),(struct sdk_string*)((char*)metadata+0x1c8))!=32||!sdk_md5_valid(md5)||!rd(&context,(char*)output+0x238,sizeof(context))||!context.object||!context.control)return result;
@@ -199,28 +232,35 @@ static int sdk_get_image_context(const char*md5,struct sdk_shared*out){
  for(unsigned i=0;i<16;i++)if(!strcmp(sdk_images[i].md5,md5)&&sdk_images[i].value.object){found=1;if(out){*out=sdk_images[i].value;sdk_shared_retain(out);}break;}
  pthread_mutex_unlock(&sdk_image_mutex);return found;
 }
-static void sdk_perform_image_scope(const char*payload){
+static void sdk_perform_image_scope(const char*payload,int voice_test){
  if(!sdk_download_hook_ready){sdk_finish_error("native image context capture unavailable");return;}
  const char*separator=strchr(payload,'\n');if(!separator||separator==payload||separator-payload>127||strlen(separator+1)>127||strchr(separator+1,'\n')){sdk_finish_error("invalid image scope");return;}
  char peer[128],account[128];memcpy(peer,payload,(size_t)(separator-payload));peer[separator-payload]=0;strcpy(account,separator+1);
  if(strncmp(peer,"wxid_",5)||strncmp(account,"wxid_",5)){sdk_finish_error("image scope requires account identifiers");return;}
- struct sdk_shared old[16];pthread_mutex_lock(&sdk_image_mutex);atomic_store(&sdk_image_capture_enabled,0);
+ struct sdk_shared old[16],old_voice={0};pthread_mutex_lock(&sdk_image_mutex);atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
+ old_voice=sdk_voice_context;memset(&sdk_voice_context,0,sizeof(sdk_voice_context));
  for(unsigned i=0;i<16;i++){old[i]=sdk_images[i].value;memset(&sdk_images[i],0,sizeof(sdk_images[i]));}
- strcpy(sdk_image_peer,peer);strcpy(sdk_image_account,account);sdk_image_next=0;atomic_store(&sdk_image_scoped_seen,0);atomic_store(&sdk_image_cached_total,0);atomic_store(&sdk_image_capture_enabled,1);pthread_mutex_unlock(&sdk_image_mutex);
- for(unsigned i=0;i<16;i++)sdk_release(&old[i]);
+ strcpy(sdk_image_peer,peer);strcpy(sdk_image_account,account);sdk_image_next=0;atomic_store(&sdk_image_scoped_seen,0);atomic_store(&sdk_image_cached_total,0);atomic_store(&sdk_image_capture_enabled,1);atomic_store(&sdk_voice_capture_enabled,voice_test);pthread_mutex_unlock(&sdk_image_mutex);
+ for(unsigned i=0;i<16;i++){sdk_release(&old[i]);}
+ sdk_release(&old_voice);
 #ifdef SDK_FIXTURE
  void(*ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_image_scope_ready");if(ready)ready(peer,account);
+ if(voice_test){void(*voice_ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_voice_scope_ready");if(voice_ready)voice_ready(peer,account);}
 #endif
  sdk_finish_success();
 }
 struct sdk_image_options {uint32_t mode,padding;unsigned char path_a[24],path_b[24];};
 _Static_assert(sizeof(struct sdk_image_options)==56,"native image options ABI");
-static void sdk_perform_message_download(const char*md5){
- if(!sdk_download_hook_ready||!sdk_md5_valid(md5)){sdk_finish_error("native image context capture unavailable or invalid checksum");return;}
- struct sdk_shared image={0};if(!sdk_get_image_context(md5,&image)){sdk_finish_error("native image context not ready");return;}
+static void sdk_perform_message_download(const char*md5,int voice_test){
+ if(!sdk_download_hook_ready||(!voice_test&&!sdk_md5_valid(md5))){sdk_finish_error("native image context capture unavailable or invalid checksum");return;}
+ struct sdk_shared image={0};
+ if(voice_test){pthread_mutex_lock(&sdk_image_mutex);if(atomic_load(&sdk_voice_capture_enabled)){image=sdk_voice_context;sdk_shared_retain(&image);}pthread_mutex_unlock(&sdk_image_mutex);}
+ else sdk_get_image_context(md5,&image);
+ if(!image.object){sdk_finish_error("native media context not ready");return;}
+ int kind=voice_test?11:3,scene=voice_test?0:100;
 #ifdef SDK_FIXTURE
- int(*download)(const struct sdk_shared*,int,int,const void*)=(void*)dlsym(RTLD_DEFAULT,"fixture_native_image_download");
- struct sdk_image_options options={.mode=1};int ok=download&&download(&image,3,100,&options)==1;sdk_release(&image);
+ int(*download)(const struct sdk_shared*,int,int,const void*)=(void*)dlsym(RTLD_DEFAULT,voice_test?"fixture_native_voice_download":"fixture_native_image_download");
+ struct sdk_image_options options={.mode=1};int ok=download&&download(&image,kind,scene,&options)==1;sdk_release(&image);
  if(!ok){sdk_finish_error("fixture native image download rejected");return;}
 #else
  struct sdk_shared hub={0},center={0},manager={0},future={0};struct sdk_image_options options={.mode=1};
@@ -230,7 +270,7 @@ static void sdk_perform_message_download(const char*md5){
  if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
  int ok=0;uint32_t errors[2]={0};
  if(manager.object){
-  ((void(*)(struct sdk_shared*,void*,struct sdk_shared*,int,int,struct sdk_image_options*))(sdk_base+0x6517dc0))(&future,manager.object,&image,3,100,&options);
+  ((void(*)(struct sdk_shared*,void*,struct sdk_shared*,int,int,struct sdk_image_options*))(sdk_base+0x6517dc0))(&future,manager.object,&image,kind,scene,&options);
   if(future.object){
    ((void(*)(struct sdk_shared*))(sdk_base+0x9aef560))(&future);
    void*status=((void*(*)(struct sdk_shared*))(sdk_base+0x6545070))(&future);
@@ -244,10 +284,20 @@ static void sdk_perform_message_download(const char*md5){
  pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_completed\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
 }
 static void sdk_perform(char operation,const char *json_body){
+ if((operation=='S'||operation=='G'||operation=='I'||operation=='F')&&sdk_expected_account[0]){
+  char account[128],name[512];if(!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){
+   sdk_finish_error("WeChat account changed; refusing stale send");return;
+  }
+ }
+
  if(operation!='V'&&!sdk_has_coroutine()){sdk_finish_error("native coroutine context unavailable; no send attempted");return;}
- if(operation=='A'){sdk_perform_image_scope(json_body);return;}
+ if(operation=='T'){
+  pthread_mutex_lock(&sdk_image_mutex);int available=atomic_load(&sdk_voice_capture_enabled)&&sdk_voice_context.object;pthread_mutex_unlock(&sdk_image_mutex);
+  pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"available\":%s}",available?"true":"false");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
+ }
+ if(operation=='A'||operation=='B'){sdk_perform_image_scope(json_body,operation=='B');return;}
  if(operation=='K'){char result[200];int available=sdk_md5_valid(json_body)&&sdk_get_image_context(json_body,NULL);snprintf(result,sizeof(result),"{\"success\":true,\"available\":%s,\"scoped_seen\":%u,\"cached\":%u}",available?"true":"false",atomic_load(&sdk_image_scoped_seen),atomic_load(&sdk_image_cached_total));pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,result);sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;}
- if(operation=='D'){sdk_perform_message_download(json_body);return;}
+ if(operation=='D'||operation=='U'){sdk_perform_message_download(json_body,operation=='U');return;}
  if(operation=='I'||operation=='F'){sdk_perform_media(operation,json_body);return;}
  if(operation=='N'){
   atomic_store(&sdk_context_verified,1);pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_coroutine\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
@@ -301,14 +351,22 @@ static void sdk_schedule(char operation,const char *json){
  if(fn.callable){struct sdk_callable*c=fn.callable;((void(*)(void*))c->vtable[5])(c);}
 }
 static void sdk_handle(int client,char operation,const char *json){
- if(operation!='V'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='D'&&operation!='A'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
- if((operation=='S'||operation=='G'||operation=='I'||operation=='F'||operation=='D')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
+ if(operation!='V'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
+ if((operation=='S'||operation=='G'||operation=='I'||operation=='F'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
  pthread_mutex_lock(&sdk_mutex);
+ /* A timed-out caller does not retry; a completed late callback must not block later work. */
+ if(sdk_running&&sdk_done)sdk_running=0;
  if(sdk_running){pthread_mutex_unlock(&sdk_mutex);sdk_write(client,"{\"error\":\"previous callback pending\"}\n");return;}
  sdk_done=0;sdk_running=1;sdk_result[0]=0;sdk_error[0]=0;pthread_mutex_unlock(&sdk_mutex);
  sdk_schedule(operation,json);
  pthread_mutex_lock(&sdk_mutex);
- struct timespec until;clock_gettime(CLOCK_REALTIME,&until);until.tv_sec+=45;
+ struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
+#ifdef HELPER_FIXTURE_WAIT_MS
+ until.tv_sec+=HELPER_FIXTURE_WAIT_MS/1000;until.tv_nsec+=(HELPER_FIXTURE_WAIT_MS%1000)*1000000L;
+ if(until.tv_nsec>=1000000000L){until.tv_sec++;until.tv_nsec-=1000000000L;}
+#else
+ until.tv_sec+=45;
+#endif
  while(!sdk_done){int rc=pthread_cond_timedwait(&sdk_cond,&sdk_mutex,&until);if(rc==ETIMEDOUT)break;}
  char result[50000];if(sdk_done){char a[32768],b[8192];sdk_escape(a,sizeof(a),sdk_result);sdk_escape(b,sizeof(b),sdk_error);snprintf(result,sizeof(result),"{\"callback\":true,\"result\":\"%s\",\"error\":\"%s\"}\n",a,b);sdk_running=0;}else snprintf(result,sizeof(result),"{\"callback\":false,\"pending\":true}\n");
  pthread_mutex_unlock(&sdk_mutex);sdk_write(client,result);
@@ -324,17 +382,31 @@ static void*sdk_serve(void*unused){
   if(getsockopt(c,SOL_SOCKET,SO_PEERCRED,&peer,&size)||peer.pid!=sdk_parent||peer.uid!=geteuid()){close(c);continue;}
   struct timeval timeout={5,0};setsockopt(c,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
   char op=0;if(recv(c,&op,1,0)==1){
-   if(op=='Q'){atomic_store(&sdk_image_capture_enabled,0);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
-   if(op=='H'){char ready[180];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"local_media\":true,\"image_download\":%s,\"image_context\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
-   else if(op=='S'||op=='G'||op=='I'||op=='F'||op=='D'||op=='A'||op=='K'){
+   if(op=='Q'){atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
+   if(op=='P'){
+    char account[128],name[512],a[1024],n[4096],response[5500];int logged=sdk_profile(account,name);
+    sdk_escape(a,sizeof(a),logged?account:"");sdk_escape(n,sizeof(n),logged?name:"");
+    snprintf(response,sizeof(response),"{\"logged_in\":%s,\"wxid\":\"%s\",\"name\":\"%s\"}\n",logged?"true":"false",a,n);sdk_write(c,response);
+   }else if(op=='H'){char ready[180];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"local_media\":true,\"image_download\":%s,\"image_context\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
+   else if(op=='S'||op=='G'||op=='I'||op=='F'||op=='D'||op=='A'||op=='B'||op=='K'||op=='E'){
     uint32_t net=0;char*body=NULL;
-    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n))sdk_handle(c,op,body);else sdk_write(c,"{\"error\":\"NUL in JSON request\"}\n");}}}
+    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
+     if(op=='E'){
+      char account[128],name[512];
+      if(n<128&&sdk_profile(account,name)&&!strcmp(account,body)){
+       pthread_mutex_lock(&sdk_mutex);int busy=sdk_running&&!sdk_done;
+       if(!busy)memcpy(sdk_expected_account,body,n+1);
+       pthread_mutex_unlock(&sdk_mutex);
+       if(busy)sdk_write(c,"{\"error\":\"previous callback pending\"}\n");else sdk_write(c,"{\"callback\":true,\"result\":\"{\\\"success\\\":true}\",\"error\":\"\"}\n");
+      }else sdk_write(c,"{\"error\":\"account is not logged in\"}\n");
+     }else sdk_handle(c,op,body);
+    }else sdk_write(c,"{\"error\":\"NUL in JSON request\"}\n");}}}
     if(!body)sdk_write(c,"{\"error\":\"invalid request frame\"}\n");
     free(body);
    }else sdk_handle(c,op,NULL);
   }close(c);
  }
- atomic_store(&sdk_image_capture_enabled,0);
+ atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
  close(sdk_listener);sdk_listener=-1;unlink(sdk_path);return NULL;
 }
 __attribute__((constructor))static void sdk_init(void){

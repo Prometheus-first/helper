@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="helper-token" content="__HELPER_TOKEN__">
+  <meta name="helper-platform" content="__HELPER_PLATFORM__">
   <meta name="color-scheme" content="light dark">
   <title>helper · 本地管理台</title>
   <link rel="icon" href="data:,">
@@ -38,6 +39,13 @@
   <div id="service-banner" class="banner hidden" role="status"></div>
   <section class="page" id="page-overview" aria-labelledby="overview-heading">
     <div class="page-heading"><div><h1 id="overview-heading">运行概览</h1></div></div>
+    <section id="linux-session" class="settings-section hidden" aria-labelledby="linux-session-heading">
+      <div class="section-heading"><h2 id="linux-session-heading">Linux 微信</h2><div class="account-controls"><button id="linux-start" class="primary" type="button">启动</button><button id="linux-stop" class="secondary" type="button" disabled>停止</button></div></div>
+      <p id="linux-state" class="inline-state" role="status" aria-live="polite">正在读取状态…</p>
+      <p id="linux-account" class="account-id"></p>
+      <p id="linux-session-hint" class="count">启动后在微信窗口扫码，再用另一账号发一条消息确认账号。</p>
+      <p id="linux-error" class="account-error hidden" role="alert"></p>
+    </section>
     <section class="account-picker" aria-labelledby="accounts-heading">
       <div class="section-heading"><h2 id="accounts-heading">已登录微信 <span id="account-total" class="count">—</span></h2><div class="account-controls"><span id="account-selection-count" class="count">已选 0</span><button id="login-wechat" class="secondary" type="button">登录微信</button><button id="refresh-accounts" class="secondary">刷新账号</button><button id="start-selected" class="primary" disabled>启动所选</button></div></div>
       <section id="wechat-login-panel" class="wechat-login hidden" aria-labelledby="wechat-login-heading">
@@ -71,7 +79,11 @@
           <label class="sr-only" for="member-search">搜索群成员</label><input id="member-search" type="search" placeholder="搜索昵称、微信 ID 或身份" autocomplete="off">
           <div class="table-container member-scroll"><table class="member-table"><thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">群成员</th><th scope="col">身份</th></tr></thead><tbody id="send-members"><tr><td colspan="3" class="table-empty">请先选择群聊。</td></tr></tbody></table></div>
         </div>
-        <label for="send-content">正文</label><textarea id="send-content" rows="3" required placeholder="输入文字" spellcheck="false"></textarea>
+        <div id="linux-send-options" class="hidden">
+          <label for="linux-send-kind">消息类型</label><select id="linux-send-kind"><option value="text">文字</option><option value="image">图片</option><option value="file">文件</option></select>
+          <label id="linux-path-field" class="hidden" for="linux-send-path">Linux 文件绝对路径<input id="linux-send-path" placeholder="/home/user/Pictures/photo.png" spellcheck="false"></label>
+        </div>
+        <label for="send-content" id="send-content-label">正文</label><textarea id="send-content" rows="3" required placeholder="输入文字" spellcheck="false"></textarea>
         <div class="form-footer"><p id="send-status" class="send-status" role="status" aria-live="polite"></p><button id="send-text" class="primary" type="submit" disabled>发送</button></div>
       </form>
     </section>

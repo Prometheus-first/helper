@@ -165,21 +165,25 @@ class PanelController:
                 self.messages.reset()
                 self.article_sync.clear()
 
+    def prepare_start_config(self):
+        config = self.store.load()
+        if account_is_unbound(config.get('wechat_account')):
+            rows = self.accounts()
+            if len(rows) != 1:
+                raise PanelError('请先登录微信，在页面选择并绑定机器人账号', 409)
+            confirmed = self.accounts()
+            if not any(row['wxid'] == rows[0]['wxid'] and row['pid'] == rows[0]['pid'] for row in confirmed):
+                raise PanelError('账号状态已变化，请刷新后选择账号', 409)
+            config = self.store.bind_account(rows[0]['wxid'])
+        return config
+
     def start(self):
         with self.actions, self.lock:
             self._idle()
             lease = self.lock_factory(self.workspace / '.runtime/bot.lock')
             lease.acquire()
             try:
-                config = self.store.load()
-                if account_is_unbound(config.get('wechat_account')):
-                    rows = self.accounts()
-                    if len(rows) != 1:
-                        raise PanelError('请先登录微信，在页面选择并绑定机器人账号', 409)
-                    confirmed = self.accounts()
-                    if not any(row['wxid'] == rows[0]['wxid'] and row['pid'] == rows[0]['pid'] for row in confirmed):
-                        raise PanelError('账号状态已变化，请刷新后选择账号', 409)
-                    config = self.store.bind_account(rows[0]['wxid'])
+                config = self.prepare_start_config()
                 app = self.factory(self.root, self.store)
                 app.config['console'] = False
                 def observe(message):

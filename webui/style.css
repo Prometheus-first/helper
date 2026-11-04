@@ -671,3 +671,13 @@ dialog .form-footer { justify-content: flex-end; }
   .message-table td:nth-child(4) { grid-column: 1 / -1; grid-row: 3; }
   .message-table .table-empty { grid-column: 1 / -1; padding: var(--space-5) 0; }
 }
+
+/* Linux shares the task surfaces; unsupported workspaces are hidden by app.js. */
+body[data-platform="linux"] .model-columns { grid-template-columns: minmax(0, 1fr); }
+#linux-session .inline-state { margin-block: 0 8px; }
+#linux-session .account-id { overflow-wrap: anywhere; }
+#linux-send-options { margin-block: 16px; }
+#linux-path-field { margin-block-start: 12px; }
+
+#linux-session .section-heading { flex-wrap: wrap; }
+#linux-session-heading { white-space: nowrap; }

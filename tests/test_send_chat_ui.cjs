@@ -8,14 +8,14 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../webui/app.js'), 'utf8');
 const code = source.slice(source.indexOf('const roleLabels ='), source.indexOf("$('#refresh-send-chats').onclick=loadSendChats;"));
 
-function fixture(handler) {
+function fixture(handler, linux = false) {
   const nodes = new Map();
   const $ = key => {
     if (!nodes.has(key)) nodes.set(key, {value:'', textContent:'', innerHTML:'', disabled:false,
       classList:{toggle(){}, add(){}, remove(){}}, querySelectorAll(){return [];}});
     return nodes.get(key);
   };
-  const scope = { $, api:handler, state:{connected:true}, serviceAvailable:true, busy:false,
+  const scope = { $, api:handler, isLinux:linux, state:{connected:true}, serviceAvailable:true, busy:false,
     robot:'a', sendMembers:[], mentionSelection:new Set(), sendSession:'', sendGeneration:0,
     sendLoading:false, pendingSend:null, sendChatsAttempted:false,
     escape:s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) };
@@ -77,4 +77,27 @@ test('切换账号后忽略旧账号的会话结果', async () => {
   release(); await old;
   assert.match($('#send-chat').innerHTML, /b@chatroom/);
   assert.doesNotMatch($('#send-chat').innerHTML, /a@chatroom/);
+});
+
+
+test('Linux 群会话不请求未适配的成员接口，仍可发送文字和媒体', async () => {
+  const calls = [];
+  const {scope, $} = fixture(async endpoint => {
+    calls.push(endpoint);
+    if (endpoint === 'send-connection') return {session_id:'linux-session'};
+    throw Error('unexpected ' + endpoint);
+  }, true);
+  $('#send-chat').value = '123@chatroom';
+  $('#send-content').value = 'hello';
+  $('#linux-send-kind').value = 'text';
+  await scope.selectSendChat();
+  assert.deepEqual(calls, ['send-connection']);
+  assert.equal($('#send-text').disabled, false);
+  $('#linux-send-kind').value = 'file';
+  $('#linux-send-path').value = '';
+  scope.renderSendState();
+  assert.equal($('#send-text').disabled, true);
+  $('#linux-send-path').value = '/tmp/fixture.txt';
+  scope.renderSendState();
+  assert.equal($('#send-text').disabled, false);
 });

@@ -59,8 +59,13 @@ def make_image(path):
 
 
 class MediaTest:
-    def __init__(self, sender, directory, *, auto_download=False):
+    def __init__(self, sender, directory, *, auto_download=False, receive_voice=False, watch_files=False, expected_filename=FILE_NAME):
         self.sender = sender
+        self.receive_voice = receive_voice
+        self.watch_files = watch_files
+        self.expected_filename = expected_filename
+        self._stop = threading.Event()
+        self._file_thread = None
         self.directory = Path(directory)
         self.image_path = self.directory / "WX_LINUX_IMAGE_SEND_01.png"
         self.file_path = self.directory / "WX_LINUX_FILE_SEND_01.txt"
@@ -87,19 +92,37 @@ class MediaTest:
             if self.peer is not None and event["sender"] != self.peer:
                 return
             self.peer, self.receiver = event["sender"], event["receiver"]
-            if self.auto_download:
+            if self.receive_voice:
+                self.sender.bind_voice_test_scope(self.peer, self.receiver)
+                self.results["voice_scope_bound"] = True
+            elif self.auto_download:
                 self.sender.bind_image_scope(self.peer, self.receiver)
                 self.results["image_context_bound"] = True
             self.armed = True
-            print("媒体测试已绑定当前测试账号，等待一张图片和一个测试文件。", flush=True)
+            print("媒体测试已绑定当前测试账号，等待测试附件和语音。" if self.receive_voice else "媒体测试已绑定当前测试账号，等待一张图片和一个测试文件。", flush=True)
             return
         if not self.armed or event.get("sender") != self.peer or event.get("receiver") != self.receiver:
             return
-        capture = parse_media(event)
+        if event.get("type") == 34:
+            if not self.receive_voice:
+                return
+            xml = event.get("text", "")
+            if not isinstance(xml, str) or "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
+                raise ValueError("语音 XML 无效")
+            node = ET.fromstring(xml).find("voicemsg")
+            if node is None:
+                raise ValueError("语音消息缺少元数据")
+            self.captures[34] = {"type": 34, "attributes": dict(node.attrib)}
+            print("测试语音元数据已收到；尚未播放或下载。", flush=True)
+            return
+        capture = parse_test_media(event, expected_filename=self.expected_filename)
         if capture is not None:
             kind = capture["type"]
             self.captures[kind] = capture
             print("测试图片元数据已收到。" if kind == 3 else "测试文件元数据已收到。", flush=True)
+            if kind == 49 and self.watch_files and self._file_thread is None:
+                self._file_thread = threading.Thread(target=self._watch_file, args=(dict(capture), self.receiver), daemon=True)
+                self._file_thread.start()
             if kind == 3 and self.auto_download and not self._download_started:
                 self._download_started = True
                 self._download_thread = threading.Thread(target=self._download_image, args=(dict(capture),), daemon=True)
@@ -120,7 +143,29 @@ class MediaTest:
             self._download_updates.put(("auto_download_error", type(error).__name__))
             print("测试图片自动下载未完成：" + type(error).__name__, flush=True)
 
+    def _watch_file(self, capture, account):
+        try:
+            deadline = time.monotonic() + 45
+            self._download_updates.put(("file_cache_wait_started", True))
+            while not self._stop.is_set():
+                cached = find_cached_file(capture, account)
+                if cached is not None:
+                    self._download_updates.put(("file_cache_verified", True))
+                    self.sender.send_file("filehelper", cached)
+                    self._download_updates.put(("file_cache_forwarded", True))
+                    print("测试文件已在后台落盘，大小及 MD5 校验通过，并回发文件传输助手。", flush=True)
+                    return
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("微信尚未自动落盘，文件主动下载接口仍需适配")
+                self._stop.wait(.2)
+        except Exception as error:
+            self._download_updates.put(("file_cache_error", type(error).__name__))
+            print("测试文件后台落盘检测未完成：" + type(error).__name__, flush=True)
+
     def close(self):
+        self._stop.set()
+        if self._file_thread is not None:
+            self._file_thread.join(timeout=3)
         self._downloader.close()
         if self._download_thread is not None:
             self._download_thread.join(timeout=3)
@@ -128,10 +173,19 @@ class MediaTest:
     def execute(self, operation, *, repeat=False):
         if operation == "status":
             return self.status()
+        if operation == "voice_context":
+            return {"available": self.sender.voice_test_context_available()}
         if operation in self.attempted and not repeat:
             raise RuntimeError("本项已经尝试，不自动重复发送")
         self.attempted.add(operation)
-        if operation == "validate":
+        if operation == "download_voice":
+            if 34 not in self.captures:
+                raise RuntimeError("尚未收到本轮测试语音")
+            if not self.sender.voice_test_context_available():
+                raise RuntimeError("语音原生消息上下文尚未就绪")
+            self.sender.download_test_voice()
+            self.results[operation] = True
+        elif operation == "validate":
             self.sender.ensure_context()
             payload = {"chat_id": "filehelper", "message_type": 3, "content_xml": ""}
             raw = self.sender._request(b"G", json.dumps(payload).encode())
@@ -186,12 +240,12 @@ class MediaTest:
         while True:
             try: name, value = self._download_updates.get_nowait()
             except queue.Empty: break
-            if name == "auto_download_error": self.errors[name] = RuntimeError(value)
+            if name in ("auto_download_error", "file_cache_error"): self.errors[name] = RuntimeError(value)
             else: self.results[name] = value
         captures = {}
         for key, value in self.captures.items():
             attrs = value.get("attributes", {})
-            captures["image" if key == 3 else "file"] = {"received": True, "field_names": sorted(attrs),
+            captures[{3: "image", 49: "file", 34: "voice"}[key]] = {"received": True, "field_names": sorted(attrs),
                 "has_aeskey": bool(attrs.get("aeskey")), "has_cdn_token": bool(attrs.get("filekey") or attrs.get("cdnmidimgurl") or attrs.get("cdnattachurl")),
                 "app_type": value.get("app_type"), "has_upload_token": bool(attrs.get("fileuploadtoken"))}
         return {"armed": self.armed, "captures": captures, "callback_results": dict(self.results),
@@ -208,12 +262,17 @@ def main():
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--auto-download-images", action="store_true", help="收到一张受控测试图片后自动下载并发往文件传输助手")
     parser.add_argument("--state-file", type=Path, default=root / ".runtime/linux_media_test.json")
+    parser.add_argument("--receive-voice", action="store_true", help="仅接收指定测试账号的第一条语音元数据")
+    parser.add_argument("--watch-files", action="store_true", help="等待测试附件在微信后台落盘并回发，不主动调用未知下载接口")
+    parser.add_argument("--file-name", default=FILE_NAME, help="本轮只处理此文件名的测试附件")
     args = parser.parse_args()
     if args.send_bridge is None:
         args.send_bridge = root / "native/linux/build/send_bridge.so"
     wechat, receive, send = [p.resolve(strict=True) for p in (args.wechat, args.receive_bridge, args.send_bridge)]
     if args.timeout < 1:
         parser.error("超时必须为正数")
+    if not args.file_name or Path(args.file_name).name != args.file_name or any(c in args.file_name for c in ("\\", "\0")):
+        parser.error("测试附件名称无效")
     with wechat.open("rb") as source:
         if hashlib.file_digest(source, "sha256").hexdigest() != LINUX_WECHAT_SHA256:
             raise SystemExit("Linux 微信版本指纹不匹配")
@@ -230,7 +289,7 @@ def main():
     control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     control.bind(str(control_path));control_path.chmod(0o600);control.listen(4);control.setblocking(False)
     sender = LinuxNativeSender()
-    test = MediaTest(sender, work, auto_download=args.auto_download_images)
+    test = MediaTest(sender, work, auto_download=args.auto_download_images, receive_voice=args.receive_voice, watch_files=args.watch_files, expected_filename=args.file_name)
     state_file = args.state_file.resolve();state_file.parent.mkdir(parents=True, exist_ok=True)
     stop_read, stop_write = os.pipe()
     child = None;conn = None;stopped = False;handled = set()
@@ -245,6 +304,8 @@ def main():
             env = os.environ.copy();env.update(sender.environment(), LD_PRELOAD=os.pathsep.join((str(receive), str(send))),
                 HELPER_LINUX_EVENT_SOCKET=str(listener.path), HELPER_LINUX_TEST_MARKERS="1", HELPER_LINUX_TEST_MEDIA="1",
                 HELPER_LINUX_MEDIA_ARM_TEXT=ARM, HELPER_LINUX_STOP_FD=str(stop_read))
+            if args.receive_voice: env["HELPER_LINUX_TEST_VOICE"] = "1"
+            else: env.pop("HELPER_LINUX_TEST_VOICE", None)
             child = subprocess.Popen([str(wechat)], env=env, pass_fds=(stop_read,), stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             os.close(stop_read);stop_read = -1;listener.bind_pid(child.pid);sender.bind_pid(child.pid)

@@ -18,7 +18,7 @@ function fixture(api) {
     }
     return nodes.get(key);
   };
-  const scope = {$, api, loginAttempt:'', loginGeneration:0, loginTimer:null, loginStarting:false,
+  const scope = {$, api, isLinux:false, loginAttempt:'', loginGeneration:0, loginTimer:null, loginStarting:false,
     setTimeout:()=>1, clearTimeout:()=>{}, loadRobots:async()=>{}, loadAccounts:async()=>{}};
   vm.createContext(scope); vm.runInContext(code, scope);
   return {scope, $};
@@ -54,4 +54,21 @@ test('页面关闭后返回的旧启动结果不会显示二维码', async () =>
   await scope.closeWechatLogin();resolve({attempt_id:'b'.repeat(32)});await pending;
   assert.equal($('#wechat-login-qr').src,'');
   assert.equal(calls.at(-1)[0],'wechat-login/cancel');
+});
+
+
+test('Linux 登录二维码按会话显示，登录后清除', async () => {
+  const start=source.indexOf('async function pollLinuxLogin('), end=source.indexOf('function renderLinuxState()',start);
+  const nodes=new Map(), $=key=>{if(!nodes.has(key)){const classes=new Set(['hidden']);nodes.set(key,{textContent:'',src:'',disabled:false,classList:{add:x=>classes.add(x),remove:x=>classes.delete(x),contains:x=>classes.has(x)},removeAttribute(){this.src='';}});}return nodes.get(key);};
+  let status='qr_available';const calls=[];
+  const scope={$,$dummy:null,loginGeneration:1,loginAttempt:'account-a',loginTimer:null,setTimeout:()=>1,
+    api:async(route,body,id)=>{calls.push([route,id]);return status==='qr_available'?{status,qrcode_base64:'cG5n'}:{status};},
+    loadRobots:async()=>{},loadAccounts:async()=>{}};
+  vm.createContext(scope);vm.runInContext(source.slice(start,end),scope);
+  await scope.pollLinuxLogin('account-a',1);
+  assert.equal($('#wechat-login-qr').src,'data:image/png;base64,cG5n');
+  assert.equal(calls[0][1],'account-a');
+  status='logged_in';await scope.pollLinuxLogin('account-a',1);
+  assert.equal($('#wechat-login-qr').src,'');
+  assert.equal($('#wechat-login-status').textContent,'已登录');
 });

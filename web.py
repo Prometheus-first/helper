@@ -23,20 +23,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765, help='本机端口，默认 8765')
     parser.add_argument('--no-browser', action='store_true', help='不自动打开浏览器')
+    parser.add_argument('--headless', action='store_true', help='使用虚拟显示运行 Linux 微信')
+    parser.add_argument('--wechat', type=Path, default=Path('/opt/wechat/wechat'), help='Linux 微信可执行文件路径')
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--linux-worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--workspace', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
-        return worker_main(args.workspace)
+        return worker_main(args.workspace, args.wechat, linux_worker=args.linux_worker, headless=args.headless)
     if not 1 <= args.port <= 65535:
         parser.error('端口应为 1–65535')
     controller = server = None
     try:
-        initialize_configs(ROOT)
-        configure_logging(ConfigStore(ROOT / 'bot_config.json').load(), directory=ROOT / 'logs/panel')
+        if sys.platform == 'linux':
+            from wxbot_framework.linux_hub import LinuxRobotHub
+            controller = LinuxRobotHub(ROOT, wechat_path=args.wechat, headless=args.headless)
+            configure_logging({'log_level':'INFO'}, directory=controller.directory / 'logs/panel')
+        else:
+            initialize_configs(ROOT)
+            configure_logging(ConfigStore(ROOT / 'bot_config.json').load(), directory=ROOT / 'logs/panel')
         with InstanceLock(ROOT / '.runtime/web.lock'):
-            from wxbot_framework.robot_hub import RobotHub
-            controller = RobotHub(ROOT)
+            if controller is None:
+                from wxbot_framework.robot_hub import RobotHub
+                controller = RobotHub(ROOT)
             server = PanelServer(controller, args.port)
             url = f'http://127.0.0.1:{server.server_address[1]}'
             print(f'管理台已启动：{url}\n在网页点击启动机器人；退出管理服务请按 Ctrl+C。', flush=True)
@@ -58,13 +67,22 @@ def main():
             controller.close()
 
 
-def worker_main(workspace):
+def worker_main(workspace, wechat_path=None, *, linux_worker=False, headless=False):
     if workspace is None:
         raise ValueError('缺少机器人工作目录')
     workspace = workspace.resolve()
-    if workspace != ROOT and not workspace.is_relative_to((ROOT / '.runtime/robots').resolve()):
-        raise ValueError('机器人工作目录不在项目允许范围')
-    controller = PanelController(ROOT, workspace=workspace)
+    directory = (ROOT / '.runtime/linux/sessions').resolve()
+    # Existing Linux manager processes may have started before --linux-worker existed.
+    linux_worker = linux_worker or (sys.platform == 'linux' and workspace.parent == directory)
+    if linux_worker:
+        from wxbot_framework.linux_sessions import LinuxSessionController
+        if workspace.parent != directory or not __import__('re').fullmatch(r'default|[a-f0-9]{12}',workspace.name):
+            raise ValueError('Linux 会话工作目录不在允许范围')
+        controller = LinuxSessionController(ROOT, workspace, wechat_path=wechat_path, headless=headless)
+    else:
+        if workspace != ROOT and not workspace.is_relative_to((ROOT / '.runtime/robots').resolve()):
+            raise ValueError('机器人工作目录不在项目允许范围')
+        controller = PanelController(ROOT, workspace=workspace)
     configure_logging(controller.store.load(), directory=workspace / 'logs', console_enabled=False)
     # configure_logging(force=True) 会替换根处理器，重新接上本机器人的日志缓冲。
     logging.getLogger().addHandler(controller.logs)

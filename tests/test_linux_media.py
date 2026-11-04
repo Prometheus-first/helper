@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class MediaWireTests(unittest.TestCase):
     def test_media_and_text_frames_preserve_type_and_complete_xml(self):
         image = "<msg><img test='图片'/></msg>" * 2000
-        for kind in (1, 3, 49):
+        for kind in (1, 3, 34, 49):
             a,b=socket.socketpair()
             try:
                 import threading
@@ -31,11 +31,11 @@ class MediaWireTests(unittest.TestCase):
 
     def test_unknown_media_type_is_rejected(self):
         with self.assertRaises(LinuxWireError):
-            encode_media_event("wxid_fixture", "wxid_self_fixture", "xml", msg_type=34)
+            encode_media_event("wxid_fixture", "wxid_self_fixture", "xml", msg_type=43)
         a,b=socket.socketpair()
         try:
             frame=encode_media_event("wxid_fixture", "wxid_self_fixture", "xml", msg_type=3)
-            a.sendall(frame[:24]+struct.pack("!I",34)+frame[28:])
+            a.sendall(frame[:24]+struct.pack("!I",43)+frame[28:])
             with self.assertRaises(LinuxWireError):
                 read_message_event(b)
         finally:
@@ -73,6 +73,24 @@ class MediaControllerTests(unittest.TestCase):
             test.execute("forward_image");test.execute("forward_file")
             self.assertEqual(len(sender.calls),4)
             with self.assertRaises(RuntimeError):test.execute("send_image")
+
+    def test_voice_metadata_is_scoped_and_runtime_status_contains_no_voice_identifiers(self):
+        import json
+        from tools.linux_media_test import MediaTest, ARM
+        class Sender:
+            def bind_voice_test_scope(self, peer, account):return True
+        with tempfile.TemporaryDirectory(prefix="helper-voice-controller-") as temporary:
+            test=MediaTest(Sender(),temporary,receive_voice=True)
+            event={"sender":"wxid_fixture","receiver":"wxid_self_fixture","type":34,
+                   "text":'<msg><voicemsg voicelength="2000" length="4096" clientmsgid="SECRET_FIXTURE" bufid="SECRET_FIXTURE"/></msg>'}
+            test.on_event(event);self.assertEqual(test.captures,{})
+            test.on_event({"sender":"wxid_fixture","receiver":"wxid_self_fixture","type":1,"text":ARM})
+            test.on_event(dict(event,sender="wxid_other_fixture"));self.assertNotIn(34,test.captures)
+            test.on_event(event)
+            self.assertIn(34,test.captures)
+            status=json.dumps(test.status())
+            self.assertIn('voice',status);self.assertNotIn('SECRET_FIXTURE',status);self.assertNotIn('wxid_',status)
+            test.close()
 
     def test_xml_entities_and_unexpected_attachments_are_rejected(self):
         from tools.linux_media_test import parse_media
@@ -241,6 +259,27 @@ class NativeMediaTests(unittest.TestCase):
             finally:
                 if child.poll() is None:child.kill();child.wait()
 
+    def test_panel_mode_monitors_all_supported_types_without_test_arm_or_quota(self):
+        with LocalEventListener() as listener:
+            env=os.environ.copy()
+            for key in ('HELPER_LINUX_TEST_MARKERS','HELPER_LINUX_TEST_MEDIA','HELPER_LINUX_TEST_VOICE'):
+                env.pop(key,None)
+            env.update(LD_PRELOAD=str(self.receiver_bridge),HELPER_LINUX_EVENT_SOCKET=str(listener.path),
+                HELPER_LINUX_CONTROLLER_PID=str(os.getpid()),HELPER_LINUX_PANEL_MEDIA='1')
+            child=subprocess.Popen([str(self.receiver)],env=env);listener.bind_pid(child.pid)
+            try:
+                with listener.accept(timeout=3) as conn:
+                    conn.settimeout(3);read_bridge_ready(conn);events=[]
+                    for _ in range(15):
+                        event=read_message_event(conn);events.append(event);acknowledge_text_event(conn,event['sequence'])
+                    self.assertEqual(len(events),15)
+                    self.assertEqual({e['type'] for e in events},{1,3,34,49})
+                    self.assertEqual(events[0]['type'],3)
+                    self.assertEqual(sum(e['type']==34 for e in events),3)
+                self.assertEqual(child.wait(timeout=3),0)
+            finally:
+                if child.poll() is None:child.kill();child.wait()
+
     def test_media_sampling_is_disabled_by_default(self):
         with LocalEventListener() as listener:
             env=os.environ.copy();env.update(LD_PRELOAD=str(self.receiver_bridge),HELPER_LINUX_EVENT_SOCKET=str(listener.path),
@@ -254,6 +293,28 @@ class NativeMediaTests(unittest.TestCase):
                 self.assertEqual(child.wait(timeout=3),0)
             finally:
                 if child.poll() is None:child.kill();child.wait()
+
+    def test_profile_and_native_send_reject_a_changed_account(self):
+        from wxbot_framework.linux_sender import LinuxSendError
+        profile=self.work/'fixture-profile.txt';profile.write_text('wxid_fixture_a')
+        sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge),HELPER_FIXTURE_PROFILE_FILE=str(profile))
+        child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
+        try:
+            sender.wait_ready(process=child)
+            self.assertEqual(sender.current_profile()['wxid'],'wxid_fixture_a')
+            self.assertTrue(sender.bind_account('wxid_fixture_a'))
+            self.assertTrue(sender.send_text('filehelper','fixture hello'))
+            profile.write_text('wxid_fixture_b')
+            self.assertEqual(sender.current_profile()['wxid'],'wxid_fixture_b')
+            with self.assertRaises(LinuxSendError):sender.send_text('filehelper','stale account')
+            self.assertTrue(sender.bind_account('wxid_fixture_b'))
+            self.assertTrue(sender.send_text('filehelper','new account'))
+            profile.write_text('')
+            self.assertFalse(sender.current_profile()['logged_in'])
+            with self.assertRaises(LinuxSendError):sender.send_text('filehelper','logged out')
+        finally:
+            sender.close()
+            if child.poll() is None:child.terminate();child.wait(timeout=3)
 
     def test_message_download_uses_scoped_retained_context_and_coroutine(self):
         sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
@@ -272,6 +333,59 @@ class NativeMediaTests(unittest.TestCase):
         finally:
             sender.close()
             if child.poll() is None:child.terminate();child.wait(timeout=3)
+
+    def test_completed_late_callback_does_not_leave_sender_permanently_busy(self):
+        import time
+        from wxbot_framework.linux_sender import LinuxSendIndeterminate
+        bridge=self.work/"late-callback.so"
+        subprocess.run(["gcc","-O2","-fPIC","-shared","-pthread","-DSDK_FIXTURE","-DHELPER_FIXTURE_WAIT_MS=20",
+                        str(ROOT/"native/linux/send_bridge.c"),"-ldl","-o",str(bridge)],check=True)
+        sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(bridge))
+        child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
+        try:
+            sender.wait_ready(process=child)
+            with self.assertRaises(LinuxSendIndeterminate):sender.send_text("filehelper","LATE_CALLBACK_FIXTURE")
+            time.sleep(.25)
+            self.assertTrue(sender.ensure_context())
+            self.assertIsNone(child.poll())
+        finally:
+            sender.close()
+            if child.poll() is None:child.terminate();child.wait(timeout=3)
+
+    def test_voice_context_requires_explicit_scope_and_download_uses_native_coroutine(self):
+        sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
+        child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
+        try:
+            sender.wait_ready(process=child)
+            self.assertFalse(sender.voice_test_context_available())
+            with self.assertRaises(LinuxSendError):sender.download_test_voice()
+            sender.bind_voice_test_scope("wxid_friend_fixture","wxid_self_fixture")
+            self.assertTrue(sender.voice_test_context_available())
+            self.assertTrue(sender.download_test_voice())
+            sender.bind_image_scope("wxid_friend_fixture","wxid_self_fixture")
+            self.assertFalse(sender.voice_test_context_available())
+            self.assertIsNone(child.poll())
+        finally:
+            sender.close()
+            if child.poll() is None:child.terminate();child.wait(timeout=3)
+
+    def test_voice_sampling_requires_flag_and_is_limited_to_first_scoped_voice(self):
+        with LocalEventListener() as listener:
+            env=os.environ.copy();env.update(LD_PRELOAD=str(self.receiver_bridge),HELPER_LINUX_EVENT_SOCKET=str(listener.path),
+                HELPER_LINUX_CONTROLLER_PID=str(os.getpid()),HELPER_LINUX_TEST_MARKERS="1",
+                HELPER_LINUX_TEST_MEDIA="1",HELPER_LINUX_TEST_VOICE="1",HELPER_LINUX_MEDIA_ARM_TEXT="WX_LINUX_MEDIA_ARM_11")
+            child=subprocess.Popen([str(self.receiver)],env=env);listener.bind_pid(child.pid)
+            try:
+                with listener.accept(timeout=3) as conn:
+                    conn.settimeout(3);read_bridge_ready(conn);events=[]
+                    for _ in range(6):
+                        event=read_message_event(conn);events.append(event);acknowledge_text_event(conn,event["sequence"])
+                    self.assertEqual([e["type"] for e in events],[1,3,49,34,1,3])
+                    self.assertTrue(all(e["sender"]=="wxid_friend_fixture" for e in events))
+                    self.assertIn('voicelength="2000"',events[3]["text"])
+                self.assertEqual(child.wait(timeout=3),0)
+            finally:
+                if child.poll() is None:child.kill();child.wait()
 
     def test_local_media_paths_and_generic_messages_use_native_coroutine(self):
         sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
