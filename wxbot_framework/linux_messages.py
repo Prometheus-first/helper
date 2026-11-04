@@ -13,12 +13,12 @@ from .text import TextRouter
 class LinuxTextAdapter:
     """将已核实的 Linux 字段转换为现有插件使用的 Message。"""
 
-    def __init__(self, account: str, session_id: str):
+    def __init__(self, account: str, session_id: str, *, include_self_groups=False):
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("必须提供当前机器人连接的 session_id")
         self.account = validate_account(account)
         self.session_id = session_id
-        self._router = TextRouter()
+        self._router = TextRouter(include_self_groups=include_self_groups)
         self._router.set_account(self.account)
 
     def convert(self, payload: Mapping) -> Message | None:

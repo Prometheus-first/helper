@@ -100,6 +100,16 @@ class LinuxWireTests(unittest.TestCase):
         finally:
             left.close();right.close()
 
+    def test_group_system_frame_rejects_oversized_body_before_reading_it(self):
+        for kind in (10000, 10002):
+            left,right=socket.socketpair()
+            try:
+                right.sendall(struct.pack('!4sQIIIIQI',b'HLE1',1,1,1,16385,kind,0,0))
+                with self.assertRaisesRegex(LinuxWireError, '群系统消息字段过长'):
+                    read_text_event(left)
+            finally:
+                left.close();right.close()
+
     def test_rejects_unbounded_source(self):
         left, right = socket.socketpair()
         try:

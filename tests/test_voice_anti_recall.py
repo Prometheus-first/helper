@@ -137,7 +137,7 @@ class VoiceRecallTests(unittest.TestCase):
     def test_manifest_defaults_and_editable_business_function(self):
         manifest = json.loads((ROOT / 'plugins/anti_recall_voice/plugin.json').read_text(encoding='utf-8'))
         self.assertTrue(manifest['default_enabled'])
-        self.assertEqual(set(manifest['requires']), {'voice.receive', 'voice.send', 'message.recall'})
+        self.assertEqual(set(manifest['requires']), {'voice.recall.receive', 'voice.send', 'message.recall'})
         self.assertEqual(manifest['business'][0]['function'], 'Plugin.send_recalled')
 
 

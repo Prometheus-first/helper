@@ -318,6 +318,7 @@ class NativeMediaTests(unittest.TestCase):
 
     def test_message_download_uses_scoped_retained_context_and_coroutine(self):
         sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
+        profile=self.work/'image-profile.txt';profile.write_text('wxid_self_fixture');env['HELPER_FIXTURE_PROFILE_FILE']=str(profile)
         child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
         try:
             sender.wait_ready(process=child)
@@ -354,6 +355,7 @@ class NativeMediaTests(unittest.TestCase):
 
     def test_voice_context_requires_explicit_scope_and_download_uses_native_coroutine(self):
         sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
+        profile=self.work/'voice-profile.txt';profile.write_text('wxid_self_fixture');env['HELPER_FIXTURE_PROFILE_FILE']=str(profile)
         child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
         try:
             sender.wait_ready(process=child)
@@ -408,6 +410,7 @@ class NativeMediaTests(unittest.TestCase):
         finally:
             sender.close()
             if child.poll() is None:child.terminate();child.wait(timeout=3)
+            sender.cleanup_retained_files()
 
 
 if __name__=="__main__":unittest.main()

@@ -10,13 +10,14 @@ from .recall import parse_recall, message_id
 from .text import validate_target
 
 PANEL_CAPABILITIES = frozenset({"text.receive", "text.send", "friend.text.receive", "friend.text.send",
-    "group.text.receive", "group.text.send", "image.send", "file.send", "friend.file.send", "group.file.send",
-    "contact.read", "contact.labels.read"})
+    "group.text.receive", "group.text.send", "group.text.mention", "image.send", "file.send", "friend.file.send", "group.file.send",
+    "contact.read", "contact.labels.read", "group.members.read", "group.events", "message.recall",
+    "image.recall.receive", "file.recall.receive", "voice.recall.receive"})
 
 
 class LinuxPanelBackend(LinuxNativeTextBackend):
     capabilities = PANEL_CAPABILITIES
-    scope = "Linux 文本收发、图片和文件发送；媒体仅显示类型"
+    scope = "Linux 文本收发与防撤回、图片和文件发送"
 
     def __init__(self, wechat_path, bridge_path, send_bridge_path, *, allowed_targets=(), **kwargs):
         super().__init__(wechat_path, bridge_path, "wxid_linux_pending", test_markers_only=False,
@@ -28,6 +29,8 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
         self.scope = type(self).scope
         self._chats = OrderedDict()
         self._chat_lock = threading.Lock()
+        self._group_lock = threading.RLock()
+        self._group_reader = None
         self._chats['filehelper'] = {'chat_id': 'filehelper', 'name': '文件传输助手', 'is_group': False}
         for target in sorted(self.allowed):
             self._chats[target] = {'chat_id': target, 'name': '', 'is_group': target.endswith('@chatroom')}
@@ -39,6 +42,15 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
         env['HELPER_LINUX_PANEL_MEDIA'] = '1'
         return env
 
+    def start(self, emit):
+        result = super().start(emit)
+        # 老桥接仍能做文字防撤回，但不能把通用消息入口冒充表情发送。
+        if self._sender is not None and 'local_emoticons' in self._sender.features:
+            self.capabilities = self.capabilities | frozenset({'emoticon.send'})
+        if self._sender is not None and 'local_voice' in self._sender.features:
+            self.capabilities = self.capabilities | frozenset({'voice.send', 'friend.voice.send', 'group.voice.send'})
+        return result
+
     def convert_event(self, event):
         # Sync 来信入口 receiver 是本账号；不从目录名、登录窗口或旧配置猜账号。
         sender = validate_target(event.get('sender'))
@@ -48,7 +60,7 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                 return None
             # 发往文件传输助手的同步消息，其 sender 才是本账号。
             identified = validate_account(sender if receiver == 'filehelper' else receiver)
-            adapter = LinuxTextAdapter(identified, self.session_id)
+            adapter = LinuxTextAdapter(identified, self.session_id, include_self_groups=True)
         else:
             if self.account not in (sender, receiver):
                 raise RuntimeError('Linux 微信登录账号已变化，请停止后重新连接')
@@ -60,17 +72,48 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                 sequence=event['sequence'], msg_type=event['type'])
             if routed is None:
                 return None
-            # 仅向监控提供媒体类型/撤回结果，不泄露原始 XML 或 CDN 凭据。
+            # 媒体只交给防撤回插件；群系统消息先进入成员状态验证。
             metadata = {'self_wxid': identified, 'monitor_only': True,
-                        'dispatch_to_plugins': False, 'dispatch_to_recall_plugins': False}
+                        'dispatch_to_plugins': False, 'dispatch_to_recall_plugins': True}
             native_id = message_id(event.get('native_message_id'))
             if native_id:
                 metadata['native_message_id'] = native_id
-            if event['type'] == 10002:
-                recall = parse_recall(event['text'], chat_id=routed['chat_id'])
-                if not recall:
-                    return None
-                metadata['recall'] = recall
+            if event['type'] in (3, 49):
+                from .linux_media_receiver import parse_linux_media_payload
+                try:
+                    payload = parse_linux_media_payload(event['type'], routed['content'])
+                    if payload is not None:
+                        metadata['_linux_media'] = payload
+                except ValueError:
+                    pass
+            if event['type'] == 47:
+                from .sticker_metadata import StickerError, parse_sticker
+                try:
+                    metadata['sticker_metadata'] = parse_sticker(routed['content'])
+                except StickerError:
+                    pass
+            if event['type'] == 34:
+                from .linux_voice_receiver import LinuxVoicePayload
+                metadata['_linux_voice'] = LinuxVoicePayload(xml=routed['content'], body=event.get('voice_bytes', b''))
+            if event['type'] in (10000, 10002):
+                content = routed['content']
+                recall = parse_recall(content, chat_id=routed['chat_id'])
+                if recall:
+                    metadata['recall'] = recall
+                else:
+                    if not routed['room_wxid']:
+                        return None
+                    from .group_events import GroupEventError, parse_group_system_message
+                    try:
+                        parsed = parse_group_system_message(content, msg_type=event['type'],
+                            room_id=routed['chat_id'], self_id=identified)
+                    except GroupEventError:
+                        return None
+                    if not parsed:
+                        return None
+                    # 解析只确认系统消息结构。完整名单、历史同步、会话和去重仍由
+                    # BotApplication / GroupMembershipTracker 判断，不能在这里发事件。
+                    metadata.update(monitor_only=False, system_content=content)
             message = Message(text='', chat_id=routed['chat_id'], sender_id=routed['sender_id'],
                 receiver_id=receiver, type=event['type'], is_group=bool(routed['room_wxid']),
                 is_self=routed['is_self'], sequence=event['sequence'], session_id=self.session_id,
@@ -107,6 +150,38 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                                            expected_sha256=self.expected_hash)
         return dict(result, account=self.account, session_id=self.session_id)
 
+    def group_members(self, room):
+        from .group_management import validate_group_id
+        from .linux_group_members import LinuxGroupReader
+        validate_group_id(room)
+        if self.allowed and room not in self.allowed:
+            raise ValueError('该会话不在收发白名单中')
+        with self._group_lock:
+            if not self.process or self.process.poll() is not None or not self.account or self._stopping.is_set():
+                raise RuntimeError('群成员读取所属的微信连接已结束')
+            home = getattr(self, 'instance_home', None)
+            if home is None:
+                return None
+            reader = self._group_reader
+            if reader and (reader.pid != self.pid or reader.account != self.account):
+                reader.close()
+                reader = self._group_reader = None
+            if reader is None:
+                reader = self._group_reader = LinuxGroupReader(self.pid, expected_account=self.account,
+                    expected_sha256=self.expected_hash, instance_home=home)
+            result = reader.members(room)
+            if self._stopping.is_set() or self.process.poll() is not None:
+                raise RuntimeError('群成员读取所属的微信连接已结束')
+            return result
+
+    def stop(self):
+        result = super().stop()
+        with self._group_lock:
+            if self._group_reader is not None:
+                self._group_reader.close()
+                self._group_reader = None
+        return result
+
     def _authorize(self, target):
         validate_target(target)
         if not self.account or self._stopping.is_set() or self._sender is None:
@@ -123,6 +198,49 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
         self._authorize(chat_id)
         return self._sender.send_image(chat_id, path)
 
+    def send_at_text(self, chat_id, text, at_list):
+        self._authorize(chat_id)
+        return super().send_at_text(chat_id, text, at_list)
+
     def send_file(self, chat_id, path):
         self._authorize(chat_id)
         return self._sender.send_file(chat_id, path)
+
+    def send_emoticon(self, chat_id, path):
+        self._authorize(chat_id)
+        if 'emoticon.send' not in self.capabilities:
+            raise RuntimeError('当前 Linux 桥接尚不支持本地表情发送，请更新并重启微信')
+        self._sender.bind_account(self.account)
+        return self._sender.send_emoticon(chat_id, path)
+
+    def send_voice(self, chat_id, path):
+        self._authorize(chat_id)
+        if 'voice.send' not in self.capabilities:
+            raise RuntimeError('当前 Linux 桥接不支持语音发送，请更新并重启微信')
+        self._sender.bind_account(self.account)
+        return self._sender.send_voice(chat_id, path)
+
+    def configure_image_downloads(self, targets):
+        sender = self._sender
+        if sender is None or 'image_scope_groups' not in sender.features or not targets or len(targets) > 64:
+            return None
+        from .text import SYSTEM_PEERS
+        targets = sorted(target for target in targets if target != 'filehelper' and
+            not target.startswith('gh_') and target not in SYSTEM_PEERS)
+        if not targets:
+            return None
+        sender.bind_account(self.account)
+        return sender.bind_image_scopes(targets, self.account)
+
+    def clear_image_downloads(self, generation):
+        if self._sender is not None and generation is not None:
+            self._sender.clear_image_scope(generation)
+
+    def request_image(self, message, metadata, generation, is_current):
+        sender = self._sender
+        if sender is None or generation is None or not is_current():
+            return False
+        if sender.wait_image_context(metadata.md5, timeout=5, is_current=is_current,
+                                     scope_generation=generation) and is_current():
+            return sender.download_message_image(metadata.md5, scope_generation=generation)
+        return False

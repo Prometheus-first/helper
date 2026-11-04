@@ -56,10 +56,24 @@ class MessageBuffer:
                 content = '[文件/分享：内容过长或不可读]'
             else:
                 content = '[文件] ' + name if name else '[文件/分享]'
+        elif message.type in (10000, 10002):
+            content = '[系统消息]'
+            event = data.get('group_event')
+            # 仅展示运行时确认的成员变更摘要；不投影系统 XML 或事件附加字段。
+            if group and isinstance(event, dict) and event.get('room_id') == message.chat_id:
+                kind = event.get('kind')
+                label = '[成员入群]' if kind == 'join' else '[成员退群]' if kind == 'leave' else ''
+                name = self._text(event.get('nickname'), 128).strip() or self._text(event.get('member_id'), 128)
+                if label and name:
+                    content = label + ' ' + ' '.join(name.split())
         else:
             content = {3: '[图片]', 34: '[语音]', 37: '[好友申请]', 43: '[视频]',
                        47: '[表情]', 62: '[视频]', 10000: '[系统消息]', 10002: '[系统消息]'}.get(
                            message.type, f'[消息类型 {message.type}]')
+        if data.get('media_cache_only') and message.type in (3, 34, 49):
+            status = data.get('voice_status' if message.type == 34 else 'image_status' if message.type == 3 else 'file_status')
+            content += {'pending': ' 等待缓存', 'ready': ' 已缓存', 'failed': ' 缓存失败',
+                        'unavailable': ' 缓存不可用'}.get(status, '')
         now = self.clock()
         row = {'timestamp': now, 'time': time.strftime('%H:%M:%S', time.localtime(now)),
                'date': time.strftime('%Y-%m-%d', time.localtime(now)), 'account': self._text(account, 128),
@@ -141,7 +155,7 @@ class MessageBuffer:
                     identifier = self.sequence
                     self.rows.append(dict(projected_row, id=identifier, revision=self.sequence))
                 identifiers.append(identifier)
-            if deduplicate and records is not None:
+            if deduplicate and (records is not None or data.get('media_cache_only')):
                 self.forwarded_rows[key] = identifiers
 
     def _recall(self, message, account):

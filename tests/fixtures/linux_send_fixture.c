@@ -32,7 +32,40 @@ struct callable{void**v;char operation;};
 struct shared{void*a,*b;};
 static void*dispatch_run(void*p){struct callable*c=p;in_context=1;((void(*)(void*))c->v[6])(c);in_context=0;((void(*)(void*))c->v[5])(c);return NULL;}
 void fixture_sdk_dispatch(struct shared*out,void*queue,const void*source,struct function*fn,int kind){(void)queue;(void)source;if(kind!=1)abort();struct callable*c=fn->callable;struct callable*copy=((struct callable*(*)(void*))c->v[2])(c);fn->callable=NULL;((void(*)(void*))c->v[5])(c);out->a=NULL;out->b=NULL;pthread_t t;if(pthread_create(&t,NULL,dispatch_run,copy))abort();pthread_detach(t);}
-int fixture_sdk_media(char type,const char*target,const char*path){if(!in_context)abort();if(type!='I'&&type!='F')return 0;if(!target[0]||path[0]!='/')return 0;return 1;}
+int fixture_sdk_media(char type,const char*target,const char*path){
+ if(!in_context)abort();
+ if(type!='I'&&type!='F'&&type!='O')return 0;
+ if(!target[0]||path[0]!='/')return 0;
+ if(type=='O'){
+  const char*mode=getenv("HELPER_FIXTURE_EMOTICON_MODE");
+  if(mode&&!strcmp(mode,"eof"))_exit(0);
+  if(mode&&!strcmp(mode,"delay"))usleep(180000);
+  FILE*f=fopen(path,"rb");if(!f)return 0;unsigned char head[6]={0};
+  size_t read=fread(head,1,6,f);fclose(f);if(read!=6||memcmp(head,"GIF8",4))return 0;
+  const char*report=getenv("HELPER_FIXTURE_EMOTICON_REPORT");
+  if(report){f=fopen(report,"a");if(!f)abort();fprintf(f,"%c\n%s\n%s\n",type,target,path);fclose(f);}
+  if(mode&&!strcmp(mode,"reject"))return 0;
+ }
+ return 1;
+}
+int fixture_sdk_voice(const char*target,const unsigned char*bytes,size_t size,uint32_t duration){
+ if(!in_context||!target[0]||!duration||size<13||memcmp(bytes,"\x02#!SILK_V3",10))abort();
+ const char*remove=getenv("HELPER_FIXTURE_VOICE_REMOVE");if(remove&&unlink(remove))abort();
+ const char*mode=getenv("HELPER_FIXTURE_VOICE_MODE");
+ if(mode&&!strcmp(mode,"eof"))_exit(0);
+ if(mode&&!strcmp(mode,"delay"))usleep(180000);
+ const char*report=getenv("HELPER_FIXTURE_VOICE_REPORT");
+ if(report){FILE*f=fopen(report,"wb");if(!f)abort();fprintf(f,"%s\n%u\n",target,duration);if(fwrite(bytes,1,size,f)!=size)abort();fclose(f);}
+ return !mode||strcmp(mode,"reject");
+}
+int fixture_sdk_mention(const char*target,const char*content,const char*members){
+ if(!in_context)abort();
+ const char *report=getenv("HELPER_FIXTURE_MENTION_REPORT");
+ if(report){FILE*f=fopen(report,"a");if(!f)abort();fprintf(f,"%s\n%s\n%s\n",target,members,content);fclose(f);}
+ if(strstr(content,"FORCE_EOF"))_exit(0);
+ if(strstr(content,"CALLBACK_DELAY"))usleep(180000);
+ return strstr(content,"NATIVE_REJECT")==NULL;
+}
 static unsigned char fixture_image_context[0x280],fixture_voice_context[0x280];
 static int fixture_dto_voice;
 static void fixture_image_destroy(void*p){(void)p;}
@@ -44,12 +77,17 @@ __attribute__((naked,noinline,aligned(16)))void*fixture_image_dto(void*out __att
 static void fixture_emit_image_context(const char*peer,const char*account,const char*md5){
  unsigned char source[0x280]={0},metadata[0x200]={0},output[0x350]={0};void*meta=metadata;
  fixture_sdk_string((struct str*)(source+0x18),peer,strlen(peer));fixture_sdk_string((struct str*)(source+0x30),account,strlen(account));fixture_sdk_string((struct str*)(metadata+0x1c8),md5,32);memcpy(source+0x220,&meta,8);
- atomic_store(&fixture_image_control.refs,0);fixture_image_dto(output,source);
+ atomic_fetch_add(&fixture_image_control.refs,1);fixture_image_dto(output,source);
  atomic_fetch_sub(&fixture_image_control.refs,1);
  for(int i=0;i<2;i++){struct str*value=(struct str*)(source+(i?0x30:0x18));if(value->b[0]&1)free((void*)raw(value));}
  free((void*)raw((struct str*)(metadata+0x1c8)));
 }
-void fixture_image_scope_ready(const char*peer,const char*account){fixture_emit_image_context("wxid_unscoped_fixture",account,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");fixture_emit_image_context(peer,account,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");}
+void fixture_image_scope_ready(const char*peer,const char*account){
+ fixture_emit_image_context("wxid_unscoped_fixture",account,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+ fixture_emit_image_context(peer,"wxid_wrong_receiver","cccccccccccccccccccccccccccccccc");
+ fixture_emit_image_context(peer,account,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+ if(strstr(peer,"@chatroom"))fixture_emit_image_context(peer,account,"dddddddddddddddddddddddddddddddd");
+}
 void fixture_voice_scope_ready(const char*peer,const char*account){
  unsigned char source[0x280]={0},output[0x350]={0};
  fixture_sdk_string((struct str*)(source+0x18),peer,strlen(peer));fixture_sdk_string((struct str*)(source+0x30),account,strlen(account));
@@ -65,6 +103,7 @@ int fixture_native_image_download(const struct shared*image,int quality,int scen
  if(!in_context)abort();
  uint32_t mode;memcpy(&mode,options,4);
  if(image->a!=fixture_image_context||image->b!=&fixture_image_control||quality!=3||scene!=100||mode!=1)abort();
+ const char*delay=getenv("HELPER_FIXTURE_IMAGE_DELAY");if(delay&&!strcmp(delay,"1"))usleep(180000);
  return 1;
 }
 int main(void){sleep(30);return 0;}

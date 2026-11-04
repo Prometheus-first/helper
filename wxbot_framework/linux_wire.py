@@ -12,6 +12,7 @@ _MAGIC = b"HLT1"
 _MEDIA_MAGIC = b"HLM1"
 _SOURCE_MAGIC = b"HLA1"
 _EVENT_MAGIC = b"HLE1"
+_VOICE_MAGIC = b"HLV1"
 _MAX_FIELD = (1 << 32) - 1
 
 
@@ -58,12 +59,16 @@ def read_bridge_ready(conn: socket.socket):
 def read_text_event(conn: socket.socket) -> dict:
     header = _read_exact(conn, _HEADER.size)
     magic, sequence, sender_len, receiver_len, text_len = _HEADER.unpack(header)
-    if magic not in (_MAGIC, _MEDIA_MAGIC, _SOURCE_MAGIC, _EVENT_MAGIC) or not sequence or not sender_len or not receiver_len or not text_len:
+    if magic not in (_MAGIC, _MEDIA_MAGIC, _SOURCE_MAGIC, _EVENT_MAGIC, _VOICE_MAGIC) or not sequence or not sender_len or not receiver_len or not text_len:
         raise LinuxWireError("无效的 Linux 文本事件帧")
-    msg_type, native_id, source_len = 1, 0, 0
-    if magic == _EVENT_MAGIC:
+    msg_type, native_id, source_len, voice_len = 1, 0, 0, 0
+    if magic == _VOICE_MAGIC:
+        msg_type, native_id, voice_len = struct.unpack("!IQI", _read_exact(conn, 16))
+        if msg_type != 34 or voice_len > 262144 or text_len > 16384 or max(sender_len, receiver_len) > 127:
+            raise LinuxWireError("原生语音帧类型或长度无效")
+    elif magic == _EVENT_MAGIC:
         msg_type, native_id, source_len = struct.unpack("!IQI", _read_exact(conn, 16))
-        if msg_type not in (1, 3, 34, 47, 49, 10002) or (source_len and msg_type != 1):
+        if msg_type not in (1, 3, 34, 47, 49, 10000, 10002) or (source_len and msg_type != 1):
             raise LinuxWireError("原生事件类型或来源无效")
     elif magic == _MEDIA_MAGIC:
         msg_type = struct.unpack("!I", _read_exact(conn, 4))[0]
@@ -73,6 +78,8 @@ def read_text_event(conn: socket.socket) -> dict:
         source_len = struct.unpack("!I", _read_exact(conn, 4))[0]
     if source_len > 16384:
         raise LinuxWireError("消息来源字段过长")
+    if msg_type in (10000, 10002) and text_len > 16384:
+        raise LinuxWireError("群系统消息字段过长")
     # 字段长度使用协议内的无符号 32 位长度；不截断正文。
     try:
         sender = _read_exact(conn, sender_len).decode("utf-8", errors="strict")
@@ -86,6 +93,8 @@ def read_text_event(conn: socket.socket) -> dict:
         result["native_message_id"] = str(native_id)
     if source:
         result["msgsource"] = source
+    if magic == _VOICE_MAGIC:
+        result["voice_bytes"] = _read_exact(conn, voice_len)
     return result
 
 

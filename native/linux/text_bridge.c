@@ -74,22 +74,48 @@ static void get_source(const void *obj,unsigned char **out,uint32_t *len){
  free(check);*out=buf;*len=(uint32_t)n;return;
  fail: free(check);free(buf);
 }
+/* Exact ELF: new_sync+0x30 is SKBuiltinBuffer_t (copy 0x7df4a93).
+ * Its declared size is +0x10, libc++ string pointer +8 (0x7ba64e7/4f8).
+ * Copy synchronously while the protobuf remains alive; never log its bytes. */
+static void get_voice(const void*obj,unsigned char**out,uint32_t*len){
+ uintptr_t child=0,s=0,data=0,child2=0,s2=0,data2=0;
+ uint32_t declared=0,declared2=0;uint64_t n=0,n2=0;unsigned char h=0,h2=0;
+ if(!safe_read(&child,(const char*)obj+0x30,8)||!child||
+    !safe_read(&declared,(void*)(child+0x10),4)||declared<=12||declared>262144||
+    !safe_read(&s,(void*)(child+8),8)||!s||!safe_read(&h,(void*)s,1))return;
+ if(h&1){if(!safe_read(&n,(void*)(s+8),8)||!safe_read(&data,(void*)(s+16),8))return;}
+ else{n=h>>1;data=s+1;}
+ if(n!=declared||!data)return;
+ unsigned char *buf=malloc((size_t)n),*check=malloc((size_t)n);
+ if(!buf||!check)goto fail;
+ if(!safe_read(buf,(void*)data,(size_t)n)||
+    (memcmp(buf,"\x02#!SILK_V3",10)&&memcmp(buf,"#!SILK_V3",9))||
+    !safe_read(check,(void*)data,(size_t)n)||memcmp(buf,check,(size_t)n)||
+    !safe_read(&child2,(const char*)obj+0x30,8)||child2!=child||
+    !safe_read(&declared2,(void*)(child+0x10),4)||declared2!=declared||
+    !safe_read(&s2,(void*)(child+8),8)||s2!=s||!safe_read(&h2,(void*)s,1)||h2!=h)goto fail;
+ if(h&1){if(!safe_read(&n2,(void*)(s+8),8)||!safe_read(&data2,(void*)(s+16),8)||n2!=n||data2!=data)goto fail;}
+ free(check);*out=buf;*len=(uint32_t)n;return;
+ fail: free(check);free(buf);
+}
 static void capture(const void *obj){
  uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4))return;
  if(type!=1){
   int media=(type==3||type==49||type==34);
-  int monitor_only=(type==47||type==10002);
+  int monitor_only=(type==47||type==10000||type==10002);
   if((!media&&!monitor_only)||(monitor_only&&!panel_media)||(media&&!media_test&&!panel_media)||
      (type==34&&!voice_test&&!panel_media))return;
  }
  struct event *e=calloc(1,sizeof(*e));if(!e){notice("helper-linux: event allocation failed\n");return;}
  for(int i=0;i<3;i++)if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i])){event_free(e);return;}
+ if((type==34||type==10000||type==10002)&&e->lengths[2]>16384){event_free(e);return;}
  e->type=type;
  unsigned char present=0,present2=0;uint64_t native_id=0,native_id2=0;
  if(safe_read(&present,(const char*)obj+0x6d,1)&&(present&8)&&safe_read(&native_id,(const char*)obj+0x50,8)&&
     safe_read(&present2,(const char*)obj+0x6d,1)&&present==present2&&
     safe_read(&native_id2,(const char*)obj+0x50,8)&&native_id==native_id2)e->native_id=native_id;
  if(type==1)get_source(obj,&e->fields[3],&e->lengths[3]);
+ if(type==34)get_voice(obj,&e->fields[3],&e->lengths[3]);
  int include=type==1&&(!test_only||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_07",18)||memmem(e->fields[2],e->lengths[2],"WX_LINUX_BRIDGE_08",18));
  pthread_mutex_lock(&qlock);
  if(panel_media&&type!=1)include=1;
@@ -130,16 +156,16 @@ static int connect_socket(void){
 }
 static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
 static int send_event(int fd,const struct event *e){
- unsigned char h[40];int has_source=e->type==1&&e->lengths[3];
- int extended=e->native_id||e->type==47||e->type==10002;
+ unsigned char h[40];int has_source=e->type==1&&e->lengths[3],voice=e->type==34;
+ int extended=voice||e->native_id||e->type==47||e->type==10000||e->type==10002;
  size_t header_size=extended?40:e->type==1?(has_source?28:24):28;
- memcpy(h,extended?"HLE1":e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
+ memcpy(h,voice?"HLV1":extended?"HLE1":e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
  for(int i=0;i<3;i++){uint32_t n=htonl(e->lengths[i]);memcpy(h+12+4*i,&n,4);}
- if(extended){uint32_t type=htonl(e->type),n=htonl(has_source?e->lengths[3]:0);uint64_t id=htobe64(e->native_id);memcpy(h+24,&type,4);memcpy(h+28,&id,8);memcpy(h+36,&n,4);}
+ if(extended){uint32_t type=htonl(e->type),n=htonl((has_source||voice)?e->lengths[3]:0);uint64_t id=htobe64(e->native_id);memcpy(h+24,&type,4);memcpy(h+28,&id,8);memcpy(h+36,&n,4);}
  else if(e->type!=1){uint32_t type=htonl(e->type);memcpy(h+24,&type,4);}
  else if(has_source){uint32_t n=htonl(e->lengths[3]);memcpy(h+24,&n,4);}
  if(!send_all(fd,h,header_size))return 0;
- for(int i=0;i<(has_source?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;
+ for(int i=0;i<((has_source||voice)?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;
  unsigned char ack[8];size_t have=0;
  while(have<sizeof(ack)&&atomic_load(&running)){
   ssize_t n=recv(fd,ack+have,sizeof(ack)-have,0);

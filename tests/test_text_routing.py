@@ -66,6 +66,7 @@ class TextRoutingTests(unittest.TestCase):
             self.assertTrue(data["is_self"])
             self.assertEqual(data["msg"], text)
 
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows native service requires WinDLL')
     def test_native_service_skips_recent_bot_text_but_allows_players(self):
         if str(NATIVE) not in sys.path:
             sys.path.insert(0, str(NATIVE))
@@ -84,6 +85,7 @@ class TextRoutingTests(unittest.TestCase):
         own.text = (FRIEND + ":\n意气风发").encode("utf-8")
         self.assertEqual(service._map_message(own)["sender_id"], FRIEND)
 
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows native service requires WinDLL')
     def test_native_long_text_retains_private_group_mentions_and_id(self):
         if str(NATIVE) not in sys.path:
             sys.path.insert(0, str(NATIVE))

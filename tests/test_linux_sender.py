@@ -45,10 +45,11 @@ class LinuxSenderTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def spawn(self, *, bridge=None, timeout=2, controller=None):
-        sender = LinuxNativeSender(timeout=timeout)
+    def spawn(self, *, bridge=None, timeout=2, controller=None, allowed_targets=("filehelper",), extra_env=None):
+        sender = LinuxNativeSender(timeout=timeout, allowed_targets=allowed_targets)
         env = os.environ.copy()
         env.update(sender.environment(), LD_PRELOAD=str(bridge or self.bridge))
+        env.update(extra_env or {})
         if controller is not None:
             env["HELPER_LINUX_CONTROLLER_PID"] = str(controller)
         child = subprocess.Popen([str(self.fixture)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -78,6 +79,101 @@ class LinuxSenderTests(unittest.TestCase):
         with self.assertRaisesRegex(LinuxSendError, "fixture rejected"):
             sender.send_text("filehelper", "NATIVE_REJECT")
         self.assertIsNone(child.poll())
+
+    def mention_sender(self, timeout=2):
+        folder = Path(tempfile.mkdtemp(dir=self.dir))
+        profile, report = folder / 'profile', folder / 'mentions'
+        profile.write_text('wxid_self_fixture')
+        sender, child = self.spawn(timeout=timeout, allowed_targets=('123@chatroom', 'filehelper'),
+            extra_env={'HELPER_FIXTURE_PROFILE_FILE':str(profile), 'HELPER_FIXTURE_MENTION_REPORT':str(report)})
+        sender.wait_ready(process=child)
+        sender.bind_account('wxid_self_fixture')
+        return sender, child, profile, report
+
+    def test_native_mentions_preserve_ids_and_unicode_separately_from_display(self):
+        sender, child, _, report = self.mention_sender()
+        self.assertIn('group_mentions', sender.features)
+        text = '@显示名字\u2005\n你好，第二行 😺'
+        self.assertTrue(sender.send_at_text('123@chatroom', text, ['wxid_first', 'wxid_second']))
+        self.assertEqual(report.read_text(), '123@chatroom\nwxid_first,wxid_second\n' + text + '\n')
+        self.assertIsNone(child.poll())
+
+    def test_plugin_reply_at_uses_linux_backend_and_mentions_only_first_chunk(self):
+        from wxbot_framework.linux_messages import LinuxTextAdapter
+        from wxbot_framework.sdk import Message, PluginContext, ServiceFacade
+        sender, child, _, report = self.mention_sender()
+        backend = LinuxNativeTextBackend(self.fixture, self.recv, 'wxid_self_fixture',
+            send_bridge_path=self.bridge, send_targets=('123@chatroom',))
+        backend._sender, backend.process = sender, child
+        backend.adapter = LinuxTextAdapter('wxid_self_fixture', backend.session_id)
+        service = ServiceFacade(text_delay={'enabled':False})
+        self.addCleanup(service.close)
+        service.bind(backend)
+        calls = []
+        original = sender.send_text
+        def plain(target, text):
+            calls.append(text)
+            return original(target, text)
+        sender.send_text = plain
+        context = PluginContext('fixture', {}, service, [])
+        message = Message('test', '123@chatroom', 'wxid_peer', is_group=True,
+                          session_id=backend.session_id)
+        self.assertIn('group.text.mention', backend.capabilities)
+        context.reply_at(message, '文' * 800, display_name='测试成员')
+        lines = report.read_text().splitlines()
+        self.assertEqual(lines[:2], ['123@chatroom', 'wxid_peer'])
+        first = '\n'.join(lines[2:])
+        self.assertEqual(first + ''.join(calls), '@测试成员\u2005\n' + '文' * 800)
+        self.assertLessEqual(len(first.encode('utf-8')), 1023)
+        self.assertEqual(report.read_text().count('123@chatroom'), 1)
+
+    def test_mentions_reject_invalid_members_and_scope_without_native_call(self):
+        sender, _, _, report = self.mention_sender()
+        for room, members in [('filehelper',['wxid_a']), ('123@chatroom',[]),
+                ('123@chatroom',['wxid_a']*2), ('123@chatroom',['filehelper']),
+                ('123@chatroom',['gh_account']), ('123@chatroom',['notify@all']), ('123@chatroom',['a\nb']),
+                ('123@chatroom',[f'wxid_{i}' for i in range(9)])]:
+            with self.assertRaises(ValueError):sender.send_at_text(room, 'test', members)
+        with self.assertRaises(LinuxSendError):sender.send_at_text('456@chatroom', 'test', ['wxid_a'])
+        for text in ('', 'nul\0text', '字'*342):
+            with self.assertRaises(ValueError):sender.send_at_text('123@chatroom', text, ['wxid_a'])
+        sender.features = frozenset()
+        with self.assertRaisesRegex(LinuxSendError, '重新编译'):sender.send_at_text('123@chatroom','test',['wxid_a'])
+        self.assertFalse(report.exists())
+
+    def test_native_mention_validation_cannot_be_bypassed_by_raw_frame(self):
+        sender, _, _, report = self.mention_sender()
+        sender.ensure_context()
+        for payload in (b'filehelper\nwxid_a\ntext', b'123@chatroom\nwxid_a,wxid_a\ntext',
+                b'123@chatroom\nnotify@all\ntext', b'123@chatroom\nfilehelper\ntext',
+                b'123@chatroom\nwxid_a,\ntext', b'123@chatroom\nwxid_a\n'+b'x'*1024):
+            with self.assertRaises(LinuxSendError):sender._result(sender._request(b'M', payload), sending=True)
+        self.assertFalse(report.exists())
+
+    def test_native_mention_rechecks_bound_account(self):
+        sender, _, profile, report = self.mention_sender()
+        sender.ensure_context()
+        profile.write_text('wxid_other')
+        with self.assertRaisesRegex(LinuxSendError, 'account changed'):
+            sender.send_at_text('123@chatroom', 'test', ['wxid_a'])
+        self.assertFalse(report.exists())
+
+    def test_mention_timeout_does_not_retry(self):
+        sender, _, _, report = self.mention_sender(timeout=.02)
+        sender.ensure_context()
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_at_text('123@chatroom', 'CALLBACK_DELAY', ['wxid_a'])
+        time.sleep(.25)
+        self.assertEqual(report.read_text().count('CALLBACK_DELAY'),1)
+
+    def test_native_mention_rejection_and_lost_reply(self):
+        sender, child, _, report = self.mention_sender()
+        with self.assertRaisesRegex(LinuxSendError, 'fixture mention rejected'):
+            sender.send_at_text('123@chatroom', 'NATIVE_REJECT', ['wxid_a'])
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_at_text('123@chatroom', 'FORCE_EOF', ['wxid_a'])
+        self.assertEqual(child.wait(timeout=3),0)
+        self.assertEqual(report.read_text().count('FORCE_EOF'),1)
 
     def test_reply_lost_has_indeterminate_result_without_retry(self):
         sender, child = self.spawn()

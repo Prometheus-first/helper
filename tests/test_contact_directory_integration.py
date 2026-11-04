@@ -3,6 +3,7 @@ from copy import deepcopy
 from datetime import datetime
 import http.client
 import json
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -109,6 +110,7 @@ class ContactServiceTests(unittest.TestCase):
         self.assertEqual(context.contacts(expected_session=SESSION), directory())
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows native service requires WinDLL')
 class ContactNativeTests(unittest.TestCase):
     def setUp(self):
         from text_service import NativeTextService

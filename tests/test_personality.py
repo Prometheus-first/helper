@@ -322,6 +322,7 @@ class PersonalityTests(unittest.TestCase):
             self.assertIn("以“大”", reply)
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows native service requires WinDLL')
 class NativeAtReceiveTests(unittest.TestCase):
     def test_cdata_and_multiple_members_are_parsed_without_guessing_names(self):
         self.assertEqual(parse_at_members("<msgsource><atuserlist><![CDATA[wxid_a,amy123,wxid_a]]></atuserlist></msgsource>"),

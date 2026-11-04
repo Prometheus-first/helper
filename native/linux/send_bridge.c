@@ -125,14 +125,27 @@ static void sdk_finish_success(void){pthread_mutex_lock(&sdk_mutex);strcpy(sdk_r
 struct native_media_status {uint32_t error_type,error_code;struct sdk_string error;void *object,*control;};
 _Static_assert(sizeof(struct native_media_status)==48,"send result ABI");
 static int unhex(char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;return -1;}
+/* Python fully decodes a bounded private GIF snapshot. Recheck the native
+ * boundary too, including raw O frames; never classify another file as type 47. */
+static int sdk_emoticon_file(const char*path){
+ int fd=open(path,O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);if(fd<0)return 0;
+ struct stat st;unsigned char head[10]={0},tail=0;
+ int ok=!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_nlink==1&&st.st_uid==geteuid()&&
+  !(st.st_mode&0077)&&st.st_size>=14&&st.st_size<=1048576&&
+  pread(fd,head,sizeof(head),0)==(ssize_t)sizeof(head)&&pread(fd,&tail,1,st.st_size-1)==1&&
+  (!memcmp(head,"GIF87a",6)||!memcmp(head,"GIF89a",6))&&tail==0x3b;
+ unsigned width=head[6]|((unsigned)head[7]<<8),height=head[8]|((unsigned)head[9]<<8);
+ close(fd);return ok&&width&&width<=1024&&height&&height<=1024;
+}
 static void sdk_perform_media(char operation,const char*payload){
  const char*sep=strchr(payload,'\n');if(!sep||sep==payload||sep-payload>127){sdk_finish_error("invalid media target");return;}
- size_t tn=(size_t)(sep-payload),hexlen=strlen(sep+1);if(!hexlen||(hexlen&1)){sdk_finish_error("invalid media path frame");return;}
+ size_t tn=(size_t)(sep-payload),hexlen=strlen(sep+1);if(!hexlen||(hexlen&1)||(operation=='O'&&hexlen>2046)){sdk_finish_error("invalid media path frame");return;}
  char target[128];memcpy(target,payload,tn);target[tn]=0;
  for(size_t i=0;i<tn;i++)if(!((target[i]>='a'&&target[i]<='z')||(target[i]>='A'&&target[i]<='Z')||(target[i]>='0'&&target[i]<='9')||strchr("_.@-",target[i]))){sdk_finish_error("invalid media target");return;}
  char*path=malloc(hexlen/2+1);if(!path){sdk_finish_error("allocation failed");return;}
  for(size_t i=0;i<hexlen;i+=2){int a=unhex(sep[1+i]),b=unhex(sep[2+i]);if(a<0||b<0||(!a&&!b)){free(path);sdk_finish_error("invalid media path encoding");return;}path[i/2]=(char)((a<<4)|b);}path[hexlen/2]=0;
  struct stat st;if(path[0]!='/'||stat(path,&st)||!S_ISREG(st.st_mode)||st.st_size<=0){free(path);sdk_finish_error("media file missing or empty");return;}
+ if(operation=='O'&&!sdk_emoticon_file(path)){free(path);sdk_finish_error("emoticon requires a private bounded GIF snapshot");return;}
 #ifdef SDK_FIXTURE
  int(*send)(char,const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_sdk_media");
  int result=send?send(operation,target,path):-1;free(path);
@@ -142,16 +155,27 @@ static void sdk_perform_media(char operation,const char*payload){
  struct sdk_shared hub={0},center={0},manager={0},message={0};struct native_media_status status={0};
  sdk_str(&to,target,tn);
  ((void(*)(void*,const char*,size_t))(sdk_base+0x453c040))(native_path,path,hexlen/2);free(path);
+ /* 0x6f803b0 classifies the local path; 0x6f8054c constructs the type-47 DTO.
+  * 0x6f809c6 copies image_info+24 into DTO+0x5e8, then assigns path and target.
+  * Its dispatched lambda 0x6f91ed0 calls this same manager at 0x6f91fe3.
+  * manager -> 0x64d6ba0 waits at 0x64d6bd0 before returning the status. */
+ unsigned char image_info[32]={0};int emoticon_ready=1;
+ if(operation=='O'){
+  emoticon_ready=((int(*)(const void*))(sdk_base+0x73dc1f0))(native_path)==2;
+  if(emoticon_ready){((void(*)(void*,const void*))(sdk_base+0x7592ae0))(image_info,native_path);emoticon_ready=image_info[0]!=0;}
+ }
  ((void(*)(struct sdk_shared*))(sdk_base+0x60421e0))(&hub);
  if(hub.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x619ce90))(&center,hub.object);
  if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
  int invoked=0;
- if(manager.object){
+ if(manager.object&&emoticon_ready){
   unsigned char scratch[64]={0};
-  ((void(*)(struct sdk_shared*,void*))(sdk_base+(operation=='I'?0x4a03f10:0x5325050)))(&message,scratch);
-  if(message.object){
-   uint32_t type=operation=='I'?3:49,subtype=operation=='I'?0:6;
+  ((void(*)(struct sdk_shared*,void*))(sdk_base+(operation=='O'?0x496bb00:operation=='I'?0x4a03f10:0x5325050)))(&message,scratch);
+  uintptr_t vtable=0;
+  if(message.object&&(operation!='O'||(rd(&vtable,message.object,8)&&vtable==sdk_base+0xa8a11b8))){
+   uint32_t type=operation=='O'?47:operation=='I'?3:49,subtype=operation=='F'?6:0;
    memcpy((char*)message.object+0xe4,&type,4);memcpy((char*)message.object+0xe8,&subtype,4);
+   if(operation=='O')memcpy((char*)message.object+0x5e8,image_info+24,8);
    ((void(*)(void*,const struct sdk_string*))(sdk_base+0x450fdb0))((char*)message.object+0x90,&to);
    ((void(*)(void*,const void*))(sdk_base+0x45396a0))((char*)message.object+0xf0,native_path);
    ((void(*)(struct native_media_status*,void*,struct sdk_shared*))(sdk_base+0x64ccca0))(&status,manager.object,&message);invoked=1;
@@ -159,10 +183,142 @@ static void sdk_perform_media(char operation,const char*payload){
  }
  if(invoked&&!status.error_type&&!status.error_code)sdk_finish_success();
  else if(invoked){char error[1024]={0};sdk_copy(error,sizeof(error),&status.error);sdk_finish_error(error[0]?error:"native media send failed");}
- else sdk_finish_error("native message manager unavailable");
+ else sdk_finish_error(emoticon_ready?"native message manager or DTO unavailable":"native emoticon validation failed");
  if(invoked)((void(*)(struct native_media_status*))(sdk_base+0x64cdaa0))(&status);
  sdk_release(&message);sdk_release(&manager);sdk_release(&center);sdk_release(&hub);
+ if(operation=='O')((void(*)(void*))(sdk_base+0x939bf60))(image_info+8);
  ((void(*)(void*))(sdk_base+0x4539690))(native_path);sdk_string_destroy(&to);
+#endif
+}
+/* Text message layout, exact 4.1.13.26 build: ctor 0x4a040a0;
+ * 0x60ace38 / 0x60ace8a register content +0x5c8 and at_user_list +0x5e0.
+ * The latter property resolves via vtable 0xa8a3448 to 0x60bab90.
+ * Plain SDK send_text ignores mention metadata; construct the native text DTO. */
+static int sdk_identifier(const char *value,size_t n){
+ if(!n||n>127)return 0;
+ for(size_t i=0;i<n;i++)if(!((value[i]>='a'&&value[i]<='z')||(value[i]>='A'&&value[i]<='Z')||
+    (value[i]>='0'&&value[i]<='9')||strchr("_.@-",value[i])))return 0;
+ return 1;
+}
+/* 4.1.13.26 voice send: 0x810b1a0 -> 0x810c840 -> 0x810c9a0.
+ * The ctor deep-copies recipient, SILK bytes (+0x5c8), duration (+0x5e0)
+ * and options. 0x69f6cfa copies those bytes into the upload buffer; it does
+ * not open a path. 0x60c3d20/47 serialize duration/format into voice XML.
+ * Match the recording UI's {4,3,30000,0,empty string} options at 0x4a18ea8.
+ * Manager completion is a native stage result, not proof of delivery. */
+struct sdk_voice_options {uint32_t format,mode;uint64_t timeout;unsigned char flag,pad[7];struct sdk_string extra;};
+_Static_assert(sizeof(struct sdk_voice_options)==48,"voice options ABI");
+_Static_assert(offsetof(struct sdk_voice_options,extra)==24,"voice options string ABI");
+static unsigned char*sdk_voice_file(const char*path,uint32_t duration,size_t*length){
+ int fd=open(path,O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);if(fd<0)return NULL;
+ struct stat before,after;unsigned char*data=NULL;size_t n=0,done=0;
+ if(fstat(fd,&before)||!S_ISREG(before.st_mode)||before.st_nlink!=1||before.st_uid!=geteuid()||
+    (before.st_mode&0077)||before.st_size<13||before.st_size>262144)goto out;
+ n=(size_t)before.st_size;data=malloc(n);if(!data)goto out;
+ while(done<n){ssize_t k=read(fd,data+done,n-done);if(k<0&&errno==EINTR)continue;if(k<=0)goto bad;done+=(size_t)k;}
+ if(fstat(fd,&after)||before.st_size!=after.st_size||before.st_mtim.tv_sec!=after.st_mtim.tv_sec||
+    before.st_mtim.tv_nsec!=after.st_mtim.tv_nsec||before.st_ctim.tv_sec!=after.st_ctim.tv_sec||
+    before.st_ctim.tv_nsec!=after.st_ctim.tv_nsec||memcmp(data,"\x02#!SILK_V3",10))goto bad;
+ size_t pos=10;uint32_t packets=0;
+ while(pos<n){
+  if(n-pos<2)goto bad;
+  unsigned size=(unsigned)data[pos]|((unsigned)data[pos+1]<<8);pos+=2;
+  if(!size||size>32767||size>n-pos||++packets>3000)goto bad;
+  pos+=size;
+ }
+ if(!packets||packets*20!=duration)goto bad;
+ *length=n;close(fd);return data;
+ bad:free(data);data=NULL;
+ out:close(fd);return NULL;
+}
+static void sdk_perform_voice(const char*payload){
+ const char*first=strchr(payload,'\n'),*second=first?strchr(first+1,'\n'):NULL;
+ if(!first||!second||!sdk_identifier(payload,(size_t)(first-payload))||second==first+1||second-first>6){sdk_finish_error("invalid voice target or duration");return;}
+ uint32_t duration=0;for(const char*p=first+1;p<second;p++){if(*p<'0'||*p>'9'){sdk_finish_error("invalid voice duration");return;}duration=duration*10+(unsigned)(*p-'0');}
+ size_t hexlen=strlen(second+1);if(!duration||duration>60000||duration%20||!hexlen||(hexlen&1)||hexlen>2046){sdk_finish_error("invalid voice duration or path");return;}
+ char target[128],path[1024];size_t tn=(size_t)(first-payload);memcpy(target,payload,tn);target[tn]=0;
+ for(size_t i=0;i<hexlen;i+=2){int a=unhex(second[1+i]),b=unhex(second[2+i]);if(a<0||b<0||(!a&&!b)){sdk_finish_error("invalid voice path encoding");return;}path[i/2]=(char)((a<<4)|b);}path[hexlen/2]=0;
+ size_t size=0;unsigned char*bytes=path[0]=='/'?sdk_voice_file(path,duration,&size):NULL;
+ if(!bytes){sdk_finish_error("voice requires private complete Tencent SILK matching duration (max 262144 bytes)");return;}
+ char account[128],name[512];if(!sdk_expected_account[0]||!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){free(bytes);sdk_finish_error("WeChat account changed; refusing stale voice send");return;}
+#ifdef SDK_FIXTURE
+ int(*send_voice)(const char*,const unsigned char*,size_t,uint32_t)=(void*)dlsym(RTLD_DEFAULT,"fixture_sdk_voice");
+ int ok=send_voice?send_voice(target,bytes,size,duration):0;free(bytes);
+ if(ok)sdk_finish_success();else sdk_finish_error("fixture voice send rejected");
+#else
+ struct sdk_string to={0},audio={0};struct sdk_voice_options options={.format=4,.mode=3,.timeout=30000};
+ struct sdk_shared hub={0},center={0},manager={0},message={0};struct native_media_status status={0};
+ sdk_str(&to,target,tn);sdk_str(&audio,(const char*)bytes,size);free(bytes);
+ ((void(*)(struct sdk_shared*))(sdk_base+0x60421e0))(&hub);
+ if(hub.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x619ce90))(&center,hub.object);
+ if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
+ int invoked=0;
+ if(manager.object){
+  unsigned char scratch[16]={0};
+  ((void(*)(struct sdk_shared*,void*,const struct sdk_string*,const struct sdk_string*,const uint32_t*,const struct sdk_voice_options*))(sdk_base+0x810c840))(&message,scratch,&to,&audio,&duration,&options);
+  uintptr_t vtable=0;
+  if(message.object&&rd(&vtable,message.object,8)&&vtable==sdk_base+0xa9dae60&&sdk_profile(account,name)&&!strcmp(account,sdk_expected_account)){
+   uint32_t type=34;memcpy((char*)message.object+0xe4,&type,4);
+   ((void(*)(struct native_media_status*,void*,struct sdk_shared*))(sdk_base+0x64ccca0))(&status,manager.object,&message);invoked=1;
+  }
+ }
+ if(invoked&&!status.error_type&&!status.error_code)sdk_finish_success();
+ else if(invoked){char error[1024]={0};sdk_copy(error,sizeof(error),&status.error);sdk_finish_error(error[0]?error:"native voice send failed");}
+ else sdk_finish_error("native voice manager, DTO or account unavailable");
+ if(invoked)((void(*)(struct native_media_status*))(sdk_base+0x64cdaa0))(&status);
+ sdk_release(&message);sdk_release(&manager);sdk_release(&center);sdk_release(&hub);
+ sdk_string_destroy(&audio);sdk_string_destroy(&to);
+#endif
+}
+static void sdk_perform_mention(const char *payload){
+ const char *first=strchr(payload,'\n'),*second=first?strchr(first+1,'\n'):NULL;
+ if(!first||!second){sdk_finish_error("invalid mention frame");return;}
+ size_t tn=(size_t)(first-payload),mn=(size_t)(second-first-1),cn=strlen(second+1);
+ if(!sdk_identifier(payload,tn)||tn<=9||memcmp(payload+tn-9,"@chatroom",9)||!mn||mn>1023||!cn||cn>1023){
+  sdk_finish_error("invalid mention target or length");return;
+ }
+ char target[128],members[1024],check[1024];memcpy(target,payload,tn);target[tn]=0;
+ memcpy(members,first+1,mn);members[mn]=0;memcpy(check,members,mn+1);
+ char *ids[8],*part=check;size_t count=0;
+ for(;;){
+  char *comma=strchr(part,',');if(comma)*comma=0;
+  size_t n=strlen(part);
+  if(count==8||!sdk_identifier(part,n)||(n>=9&&!strcmp(part+n-9,"@chatroom"))||
+     !strncmp(part,"gh_",3)||!strcmp(part,"filehelper")||!strcmp(part,"weixin")||
+     !strcmp(part,"fmessage")||!strcmp(part,"newsapp")||!strcmp(part,"floatbottle")||!strcmp(part,"notify@all")){
+   sdk_finish_error("invalid mention member");return;
+  }
+  for(size_t i=0;i<count;i++)if(!strcmp(ids[i],part)){sdk_finish_error("duplicate mention member");return;}
+  ids[count++]=part;if(!comma)break;part=comma+1;
+ }
+#ifdef SDK_FIXTURE
+ int(*send)(const char*,const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_sdk_mention");
+ if(send&&send(target,second+1,members)==1)sdk_finish_success();else sdk_finish_error("fixture mention rejected");
+#else
+ struct sdk_shared hub={0},center={0},manager={0},message={0};struct native_media_status status={0};
+ struct sdk_string to={0},content={0},at={0};int invoked=0;
+ sdk_str(&to,target,tn);sdk_str(&content,second+1,cn);sdk_str(&at,members,mn);
+ ((void(*)(struct sdk_shared*))(sdk_base+0x60421e0))(&hub);
+ if(hub.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x619ce90))(&center,hub.object);
+ if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
+ if(manager.object){
+  unsigned char scratch[64]={0};
+  ((void(*)(struct sdk_shared*,void*))(sdk_base+0x4a040a0))(&message,scratch);
+  uintptr_t vtable=0;
+  if(message.object&&rd(&vtable,message.object,8)&&vtable==sdk_base+0xa8a10c8){
+   uint32_t type=1;memcpy((char*)message.object+0xe4,&type,4);
+   void(*assign)(void*,const struct sdk_string*)=(void*)(sdk_base+0x450fdb0);
+   assign((char*)message.object+0x90,&to);assign((char*)message.object+0x5c8,&content);
+   assign((char*)message.object+0x5e0,&at);
+   ((void(*)(struct native_media_status*,void*,struct sdk_shared*))(sdk_base+0x64ccca0))(&status,manager.object,&message);
+   invoked=1;
+  }
+ }
+ if(invoked&&!status.error_type&&!status.error_code)sdk_finish_success();
+ else sdk_finish_error(invoked?"native mention send failed":"native text message unavailable");
+ if(invoked)((void(*)(struct native_media_status*))(sdk_base+0x64cdaa0))(&status);
+ sdk_release(&message);sdk_release(&manager);sdk_release(&center);sdk_release(&hub);
+ sdk_string_destroy(&at);sdk_string_destroy(&content);sdk_string_destroy(&to);
 #endif
 }
 /* Retain the exact message context exported by the native DTO constructor. */
@@ -173,23 +329,53 @@ static atomic_int sdk_image_capture_enabled,sdk_voice_capture_enabled;
 static struct sdk_shared sdk_voice_context;
 static atomic_uint sdk_image_scoped_seen,sdk_image_cached_total;
 static pthread_mutex_t sdk_image_mutex=PTHREAD_MUTEX_INITIALIZER;
-static char sdk_image_peer[128],sdk_image_account[128];
+static char sdk_image_peers[64][128],sdk_image_account[128];
+static unsigned sdk_image_peer_count;static uint64_t sdk_image_generation;static int sdk_image_multi_scope;
 struct sdk_image_context {char md5[33];struct sdk_shared value;};
 static struct sdk_image_context sdk_images[16];static unsigned sdk_image_next;
 static int sdk_md5_valid(const char*value){if(strlen(value)!=32)return 0;for(int i=0;i<32;i++)if(unhex(value[i])<0)return 0;return 1;}
 static void sdk_shared_retain(struct sdk_shared*value){if(value->control)__atomic_add_fetch((int64_t*)((char*)value->control+8),1,__ATOMIC_SEQ_CST);}
+/* Caller holds sdk_image_mutex. The group form is conservative: source+0x18
+ * must equal an explicitly allowed room, source+0x30 must equal this account.
+ * These fields copy to DTO+0x10/+0x28 at 0x605ea7d/0x605ea8a. */
+static int sdk_image_matches(const char*peer,const char*account){
+ if(!atomic_load(&sdk_image_capture_enabled)||strcmp(account,sdk_image_account))return 0;
+ for(unsigned i=0;i<sdk_image_peer_count;i++)if(!strcmp(peer,sdk_image_peers[i]))return 1;
+ return 0;
+}
+static int sdk_clear_image_scope(uint64_t expected,int force){
+ struct sdk_shared old[16],voice={0};pthread_mutex_lock(&sdk_image_mutex);
+ if(!force&&expected!=sdk_image_generation){pthread_mutex_unlock(&sdk_image_mutex);return 0;}
+ atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
+ voice=sdk_voice_context;memset(&sdk_voice_context,0,sizeof(sdk_voice_context));
+ for(unsigned i=0;i<16;i++){old[i]=sdk_images[i].value;memset(&sdk_images[i],0,sizeof(sdk_images[i]));}
+ memset(sdk_image_peers,0,sizeof(sdk_image_peers));sdk_image_peer_count=0;sdk_image_account[0]=0;
+ sdk_image_next=0;sdk_image_multi_scope=0;sdk_image_generation++;
+ atomic_store(&sdk_image_scoped_seen,0);atomic_store(&sdk_image_cached_total,0);pthread_mutex_unlock(&sdk_image_mutex);
+ for(unsigned i=0;i<16;i++)sdk_release(&old[i]);
+ sdk_release(&voice);return 1;
+}
+static int sdk_image_scope_current(uint64_t generation){
+ char account[128],current[128],name[512];pthread_mutex_lock(&sdk_image_mutex);
+ int active=atomic_load(&sdk_image_capture_enabled)&&generation==sdk_image_generation;
+ strcpy(account,sdk_image_account);pthread_mutex_unlock(&sdk_image_mutex);
+ if(!active)return 0;
+ if(!sdk_profile(current,name)||strcmp(current,account)){sdk_clear_image_scope(generation,0);return 0;}
+ pthread_mutex_lock(&sdk_image_mutex);active=atomic_load(&sdk_image_capture_enabled)&&generation==sdk_image_generation;
+ pthread_mutex_unlock(&sdk_image_mutex);return active;
+}
 static void*sdk_capture_image_dto(void*output,void*source){
  void*result=sdk_original_image_dto(output,source);
  uint32_t type=0;if(!atomic_load(&sdk_image_capture_enabled)||!rd(&type,(char*)output+8,4)||(type!=3&&(!atomic_load(&sdk_voice_capture_enabled)||type!=34)))return result;
  char peer[128],account[128],md5[33];
  if(!sdk_copy(peer,sizeof(peer),(struct sdk_string*)((char*)source+0x18))||!sdk_copy(account,sizeof(account),(struct sdk_string*)((char*)source+0x30)))return result;
- pthread_mutex_lock(&sdk_image_mutex);int scoped=!strcmp(peer,sdk_image_peer)&&!strcmp(account,sdk_image_account);pthread_mutex_unlock(&sdk_image_mutex);
- if(!scoped)return result;
+ pthread_mutex_lock(&sdk_image_mutex);uint64_t generation=sdk_image_generation;int scoped=sdk_image_matches(peer,account);pthread_mutex_unlock(&sdk_image_mutex);
+ if(!scoped||!sdk_image_scope_current(generation))return result;
  if(type==34){
   struct sdk_shared voice={0},previous={0};
   if(!rd(&voice,(char*)output+0x238,sizeof(voice))||!voice.object||!voice.control)return result;
   sdk_shared_retain(&voice);pthread_mutex_lock(&sdk_image_mutex);
-  if(!atomic_load(&sdk_voice_capture_enabled)||strcmp(peer,sdk_image_peer)||strcmp(account,sdk_image_account)||sdk_voice_context.object){pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&voice);return result;}
+  if(!atomic_load(&sdk_voice_capture_enabled)||generation!=sdk_image_generation||!sdk_image_matches(peer,account)||sdk_voice_context.object){pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&voice);return result;}
   previous=sdk_voice_context;sdk_voice_context=voice;pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&previous);return result;
  }
  atomic_fetch_add(&sdk_image_scoped_seen,1);
@@ -197,7 +383,7 @@ static void*sdk_capture_image_dto(void*output,void*source){
  if(!rd(&metadata,(char*)source+0x220,8)||!metadata||sdk_copy(md5,sizeof(md5),(struct sdk_string*)((char*)metadata+0x1c8))!=32||!sdk_md5_valid(md5)||!rd(&context,(char*)output+0x238,sizeof(context))||!context.object||!context.control)return result;
  sdk_shared_retain(&context);struct sdk_shared previous={0};
  pthread_mutex_lock(&sdk_image_mutex);
- if(!atomic_load(&sdk_image_capture_enabled)||strcmp(peer,sdk_image_peer)||strcmp(account,sdk_image_account)){pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&context);return result;}
+ if(generation!=sdk_image_generation||!sdk_image_matches(peer,account)){pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&context);return result;}
  unsigned slot=sdk_image_next++%16;for(unsigned i=0;i<16;i++)if(!strcmp(sdk_images[i].md5,md5)){slot=i;break;}
  previous=sdk_images[slot].value;strcpy(sdk_images[slot].md5,md5);sdk_images[slot].value=context;atomic_fetch_add(&sdk_image_cached_total,1);
  pthread_mutex_unlock(&sdk_image_mutex);sdk_release(&previous);return result;
@@ -227,35 +413,83 @@ static int sdk_install_image_context_capture(void){
  }
  return 1; /* Mapped for the process lifetime; scope remains disabled until A. */
 }
-static int sdk_get_image_context(const char*md5,struct sdk_shared*out){
+static int sdk_get_image_context(const char*md5,uint64_t generation,struct sdk_shared*out){
  int found=0;pthread_mutex_lock(&sdk_image_mutex);
+ if(!atomic_load(&sdk_image_capture_enabled)||generation!=sdk_image_generation){pthread_mutex_unlock(&sdk_image_mutex);return 0;}
  for(unsigned i=0;i<16;i++)if(!strcmp(sdk_images[i].md5,md5)&&sdk_images[i].value.object){found=1;if(out){*out=sdk_images[i].value;sdk_shared_retain(out);}break;}
  pthread_mutex_unlock(&sdk_image_mutex);return found;
 }
-static void sdk_perform_image_scope(const char*payload,int voice_test){
+static int sdk_scope_target(const char*value){
+ size_t n=strlen(value);if(!n||n>127)return 0;
+ for(size_t i=0;i<n;i++)if(!((value[i]>='a'&&value[i]<='z')||(value[i]>='A'&&value[i]<='Z')||(value[i]>='0'&&value[i]<='9')||strchr("_.@-",value[i])))return 0;
+ const char*at=strchr(value,'@');return !at||(at!=value&&!strcmp(at,"@chatroom"));
+}
+static void sdk_scope_success(uint64_t generation){
+ pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"scope_generation\":%"PRIu64"}",generation);
+ sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
+}
+static void sdk_perform_image_scope(const char*payload,int voice_test,int multi){
  if(!sdk_download_hook_ready){sdk_finish_error("native image context capture unavailable");return;}
- const char*separator=strchr(payload,'\n');if(!separator||separator==payload||separator-payload>127||strlen(separator+1)>127||strchr(separator+1,'\n')){sdk_finish_error("invalid image scope");return;}
- char peer[128],account[128];memcpy(peer,payload,(size_t)(separator-payload));peer[separator-payload]=0;strcpy(account,separator+1);
- if(strncmp(peer,"wxid_",5)||strncmp(account,"wxid_",5)){sdk_finish_error("image scope requires account identifiers");return;}
- struct sdk_shared old[16],old_voice={0};pthread_mutex_lock(&sdk_image_mutex);atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
- old_voice=sdk_voice_context;memset(&sdk_voice_context,0,sizeof(sdk_voice_context));
- for(unsigned i=0;i<16;i++){old[i]=sdk_images[i].value;memset(&sdk_images[i],0,sizeof(sdk_images[i]));}
- strcpy(sdk_image_peer,peer);strcpy(sdk_image_account,account);sdk_image_next=0;atomic_store(&sdk_image_scoped_seen,0);atomic_store(&sdk_image_cached_total,0);atomic_store(&sdk_image_capture_enabled,1);atomic_store(&sdk_voice_capture_enabled,voice_test);pthread_mutex_unlock(&sdk_image_mutex);
- for(unsigned i=0;i<16;i++){sdk_release(&old[i]);}
- sdk_release(&old_voice);
+ if(!payload||strlen(payload)>8320){sdk_finish_error("invalid image scope");return;}
+ const char*separator=strchr(payload,'\n');if(!separator||separator==payload||separator-payload>127){sdk_finish_error("invalid image scope");return;}
+ char peers[64][128]={{0}},account[128]={0},current[128],name[512];unsigned count=0;
+ if(multi){
+  memcpy(account,payload,(size_t)(separator-payload));const char*start=separator+1;
+  while(*start){const char*end=strchr(start,'\n');size_t n=end?(size_t)(end-start):strlen(start);
+   if(!n||n>127||count==64){sdk_finish_error("invalid image targets");return;}
+   memcpy(peers[count],start,n);if(!sdk_scope_target(peers[count])){sdk_finish_error("invalid image target");return;}
+   for(unsigned i=0;i<count;i++)if(!strcmp(peers[i],peers[count])){sdk_finish_error("duplicate image target");return;}
+   count++;if(!end)break;start=end+1;if(!*start){sdk_finish_error("empty image target");return;}
+  }
+ }else{
+  if(strlen(separator+1)>127||strchr(separator+1,'\n')){sdk_finish_error("invalid image scope");return;}
+  memcpy(peers[0],payload,(size_t)(separator-payload));strcpy(account,separator+1);count=1;
+  if(strncmp(peers[0],"wxid_",5)||!sdk_scope_target(peers[0])){sdk_finish_error("image scope requires account identifiers");return;}
+ }
+ if(!count||!sdk_scope_target(account)||strchr(account,'@')||!sdk_profile(current,name)||strcmp(current,account)){
+  sdk_finish_error("image scope account is not logged in");return;
+ }
+ pthread_mutex_lock(&sdk_image_mutex);uint64_t generation=sdk_image_generation;
+ int same=multi&&sdk_image_multi_scope&&atomic_load(&sdk_image_capture_enabled)&&!strcmp(account,sdk_image_account)&&count==sdk_image_peer_count;
+ for(unsigned i=0;same&&i<count;i++){int found=0;for(unsigned j=0;j<count;j++)if(!strcmp(peers[i],sdk_image_peers[j]))found=1;if(!found)same=0;}
+ pthread_mutex_unlock(&sdk_image_mutex);
+ if(same){if(sdk_image_scope_current(generation))sdk_scope_success(generation);else sdk_finish_error("image scope account changed");return;}
+ if(!sdk_clear_image_scope(generation,0)){sdk_finish_error("image scope superseded");return;}
+ /* A switch during preparation must never arm a stale account. */
+ if(!sdk_profile(current,name)||strcmp(current,account)){sdk_finish_error("image scope account changed");return;}
+ pthread_mutex_lock(&sdk_image_mutex);
+ if(sdk_image_generation!=generation+1){pthread_mutex_unlock(&sdk_image_mutex);sdk_finish_error("image scope superseded");return;}
+ memcpy(sdk_image_peers,peers,sizeof(peers));strcpy(sdk_image_account,account);sdk_image_peer_count=count;sdk_image_multi_scope=multi;
+ generation=sdk_image_generation;atomic_store(&sdk_image_capture_enabled,1);atomic_store(&sdk_voice_capture_enabled,voice_test);pthread_mutex_unlock(&sdk_image_mutex);
 #ifdef SDK_FIXTURE
- void(*ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_image_scope_ready");if(ready)ready(peer,account);
- if(voice_test){void(*voice_ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_voice_scope_ready");if(voice_ready)voice_ready(peer,account);}
+ void(*ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_image_scope_ready");if(ready)for(unsigned i=0;i<count;i++)ready(peers[i],account);
+ if(voice_test){void(*voice_ready)(const char*,const char*)=(void*)dlsym(RTLD_DEFAULT,"fixture_voice_scope_ready");if(voice_ready)voice_ready(peers[0],account);}
 #endif
- sdk_finish_success();
+ if(sdk_image_scope_current(generation))sdk_scope_success(generation);else sdk_finish_error("image scope account changed");
+}
+static int sdk_parse_generation(const char*value,size_t n,uint64_t*out){
+ if(!n||n>20)return 0;
+ uint64_t result=0;for(size_t i=0;i<n;i++){unsigned digit=(unsigned)(value[i]-'0');if(digit>9||result>(UINT64_MAX-digit)/10)return 0;result=result*10+digit;}
+ if(!result)return 0;
+ *out=result;return 1;
+}
+static int sdk_image_query(const char*payload,const char**md5,uint64_t*generation){
+ const char*sep=payload?strchr(payload,'\n'):NULL;
+ pthread_mutex_lock(&sdk_image_mutex);int multi=sdk_image_multi_scope;*generation=sdk_image_generation;pthread_mutex_unlock(&sdk_image_mutex);
+ if(sep){if(!sdk_parse_generation(payload,(size_t)(sep-payload),generation))return 0;*md5=sep+1;}
+ else {if(multi)return 0;*md5=payload;}
+ return *md5&&sdk_md5_valid(*md5);
 }
 struct sdk_image_options {uint32_t mode,padding;unsigned char path_a[24],path_b[24];};
 _Static_assert(sizeof(struct sdk_image_options)==56,"native image options ABI");
-static void sdk_perform_message_download(const char*md5,int voice_test){
- if(!sdk_download_hook_ready||(!voice_test&&!sdk_md5_valid(md5))){sdk_finish_error("native image context capture unavailable or invalid checksum");return;}
+static void sdk_perform_message_download(const char*payload,int voice_test){
+ const char*md5=NULL;uint64_t generation;
+ pthread_mutex_lock(&sdk_image_mutex);generation=sdk_image_generation;pthread_mutex_unlock(&sdk_image_mutex);
+ if(!sdk_download_hook_ready||(!voice_test&&!sdk_image_query(payload,&md5,&generation))){sdk_finish_error("native image context capture unavailable or invalid scope/checksum");return;}
+ if(!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed");return;}
  struct sdk_shared image={0};
  if(voice_test){pthread_mutex_lock(&sdk_image_mutex);if(atomic_load(&sdk_voice_capture_enabled)){image=sdk_voice_context;sdk_shared_retain(&image);}pthread_mutex_unlock(&sdk_image_mutex);}
- else sdk_get_image_context(md5,&image);
+ else sdk_get_image_context(md5,generation,&image);
  if(!image.object){sdk_finish_error("native media context not ready");return;}
  int kind=voice_test?11:3,scene=voice_test?0:100;
 #ifdef SDK_FIXTURE
@@ -281,24 +515,37 @@ static void sdk_perform_message_download(const char*md5,int voice_test){
  ((void(*)(void*))(sdk_base+0x4539690))(options.path_b);((void(*)(void*))(sdk_base+0x4539690))(options.path_a);
  if(!ok){char error[160];snprintf(error,sizeof(error),"native message image download failed: type=%u code=%d",errors[0],(int32_t)errors[1]);sdk_finish_error(error);return;}
 #endif
+ if(!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed during download");return;}
  pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_completed\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
 }
 static void sdk_perform(char operation,const char *json_body){
- if((operation=='S'||operation=='G'||operation=='I'||operation=='F')&&sdk_expected_account[0]){
+ if((operation=='M'||operation=='O'||operation=='W')&&!sdk_expected_account[0]){sdk_finish_error("bind the logged-in account before mention, emoticon or voice send");return;}
+ if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W')&&sdk_expected_account[0]){
   char account[128],name[512];if(!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){
    sdk_finish_error("WeChat account changed; refusing stale send");return;
   }
  }
 
  if(operation!='V'&&!sdk_has_coroutine()){sdk_finish_error("native coroutine context unavailable; no send attempted");return;}
+ if(operation=='M'){sdk_perform_mention(json_body);return;}
+ if(operation=='W'){sdk_perform_voice(json_body);return;}
  if(operation=='T'){
   pthread_mutex_lock(&sdk_image_mutex);int available=atomic_load(&sdk_voice_capture_enabled)&&sdk_voice_context.object;pthread_mutex_unlock(&sdk_image_mutex);
   pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"available\":%s}",available?"true":"false");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
  }
- if(operation=='A'||operation=='B'){sdk_perform_image_scope(json_body,operation=='B');return;}
- if(operation=='K'){char result[200];int available=sdk_md5_valid(json_body)&&sdk_get_image_context(json_body,NULL);snprintf(result,sizeof(result),"{\"success\":true,\"available\":%s,\"scoped_seen\":%u,\"cached\":%u}",available?"true":"false",atomic_load(&sdk_image_scoped_seen),atomic_load(&sdk_image_cached_total));pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,result);sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;}
+ if(operation=='A'||operation=='B'||operation=='C'){sdk_perform_image_scope(json_body,operation=='B',operation=='C');return;}
+ if(operation=='K'){
+  const char*md5=NULL;uint64_t generation;char result[200];
+  if(!sdk_image_query(json_body,&md5,&generation)){sdk_finish_error("invalid image scope/checksum");return;}
+  pthread_mutex_lock(&sdk_image_mutex);int active=atomic_load(&sdk_image_capture_enabled);pthread_mutex_unlock(&sdk_image_mutex);
+  if((active||strchr(json_body,'\n'))&&!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed");return;}
+  int available=active&&sdk_get_image_context(md5,generation,NULL);
+  if(active&&!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed");return;}
+  snprintf(result,sizeof(result),"{\"success\":true,\"available\":%s,\"scoped_seen\":%u,\"cached\":%u}",available?"true":"false",atomic_load(&sdk_image_scoped_seen),atomic_load(&sdk_image_cached_total));
+  pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,result);sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
+ }
  if(operation=='D'||operation=='U'){sdk_perform_message_download(json_body,operation=='U');return;}
- if(operation=='I'||operation=='F'){sdk_perform_media(operation,json_body);return;}
+ if(operation=='I'||operation=='F'||operation=='O'){sdk_perform_media(operation,json_body);return;}
  if(operation=='N'){
   atomic_store(&sdk_context_verified,1);pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_coroutine\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
  }
@@ -351,8 +598,8 @@ static void sdk_schedule(char operation,const char *json){
  if(fn.callable){struct sdk_callable*c=fn.callable;((void(*)(void*))c->vtable[5])(c);}
 }
 static void sdk_handle(int client,char operation,const char *json){
- if(operation!='V'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
- if((operation=='S'||operation=='G'||operation=='I'||operation=='F'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
+ if(operation!='V'&&operation!='W'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
+ if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
  pthread_mutex_lock(&sdk_mutex);
  /* A timed-out caller does not retry; a completed late callback must not block later work. */
  if(sdk_running&&sdk_done)sdk_running=0;
@@ -382,16 +629,20 @@ static void*sdk_serve(void*unused){
   if(getsockopt(c,SOL_SOCKET,SO_PEERCRED,&peer,&size)||peer.pid!=sdk_parent||peer.uid!=geteuid()){close(c);continue;}
   struct timeval timeout={5,0};setsockopt(c,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
   char op=0;if(recv(c,&op,1,0)==1){
-   if(op=='Q'){atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
+   if(op=='Q'){sdk_clear_image_scope(0,1);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
    if(op=='P'){
     char account[128],name[512],a[1024],n[4096],response[5500];int logged=sdk_profile(account,name);
     sdk_escape(a,sizeof(a),logged?account:"");sdk_escape(n,sizeof(n),logged?name:"");
     snprintf(response,sizeof(response),"{\"logged_in\":%s,\"wxid\":\"%s\",\"name\":\"%s\"}\n",logged?"true":"false",a,n);sdk_write(c,response);
-   }else if(op=='H'){char ready[180];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"local_media\":true,\"image_download\":%s,\"image_context\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
-   else if(op=='S'||op=='G'||op=='I'||op=='F'||op=='D'||op=='A'||op=='B'||op=='K'||op=='E'){
+   }else if(op=='H'){char ready[512];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"group_mentions\":true,\"local_media\":true,\"local_emoticons\":true,\"local_voice\":true,\"image_download\":%s,\"image_context\":%s,\"image_scope_groups\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
+   else if(op=='S'||op=='M'||op=='G'||op=='I'||op=='F'||op=='O'||op=='W'||op=='D'||op=='A'||op=='B'||op=='C'||op=='X'||op=='K'||op=='E'){
     uint32_t net=0;char*body=NULL;
-    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
-     if(op=='E'){
+    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n&&(op!='W'||n<=2181)){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
+     if(op=='X'){
+      uint64_t generation=0;
+      int cleared=sdk_parse_generation(body,n,&generation)&&sdk_clear_image_scope(generation,0);
+      sdk_write(c,cleared?"{\"callback\":true,\"result\":\"{\\\"success\\\":true,\\\"cleared\\\":true}\"}\n":"{\"callback\":true,\"result\":\"{\\\"success\\\":true,\\\"cleared\\\":false}\"}\n");
+     }else if(op=='E'){
       char account[128],name[512];
       if(n<128&&sdk_profile(account,name)&&!strcmp(account,body)){
        pthread_mutex_lock(&sdk_mutex);int busy=sdk_running&&!sdk_done;
@@ -406,7 +657,7 @@ static void*sdk_serve(void*unused){
    }else sdk_handle(c,op,NULL);
   }close(c);
  }
- atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
+ sdk_clear_image_scope(0,1);
  close(sdk_listener);sdk_listener=-1;unlink(sdk_path);return NULL;
 }
 __attribute__((constructor))static void sdk_init(void){

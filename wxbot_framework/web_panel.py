@@ -804,15 +804,7 @@ class PanelController:
         def deliver():
             try:
                 if mentions:
-                    rows = app.service.group_members(target, expected_session=session)
-                    if rows is None:
-                        raise ValueError('群成员缓存尚未就绪，请刷新成员后重试')
-                    directory = {row['wxid']: row for row in rows}
-                    if any(member not in directory for member in mentions):
-                        raise ValueError('所选成员已不在群里，请刷新成员后重试')
-                    names = [directory[member].get('nickname') or member for member in mentions]
-                    result = app.service.send_at_text(target, content, mentions,
-                        expected_session=session, display_names=names)
+                    result = self._deliver_at_text(app.service, target, content, mentions, session)
                 else:
                     result = app.service.send_text(target, content, expected_session=session)
                 if result is False:
@@ -826,6 +818,16 @@ class PanelController:
                     self.send_jobs[identifier].update(status='sent')
         threading.Thread(target=deliver, name='PanelTextSend', daemon=True).start()
         return self.send_status(identifier)
+
+    def _deliver_at_text(self, service, target, content, mentions, session):
+        rows = service.group_members(target, expected_session=session)
+        if rows is None:
+            raise ValueError('群成员缓存尚未就绪，请刷新成员后重试')
+        directory = {row['wxid']: row for row in rows}
+        if any(member not in directory for member in mentions):
+            raise ValueError('所选成员已不在群里，请刷新成员后重试')
+        names = [directory[member].get('nickname') or member for member in mentions]
+        return service.send_at_text(target, content, mentions, expected_session=session, display_names=names)
 
     def send_connection(self):
         def query(app):

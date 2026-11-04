@@ -9,7 +9,7 @@ from .sdk import Message
 
 CAPABILITIES = frozenset({"text.receive", "text.send"})
 TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.text.send",
-                                           "message.recall",
+                                           "message.recall", "image.recall.receive", "file.recall.receive",
                                            "group.text.receive", "group.text.send", "group.text.mention",
                                            "image.receive", "image.send",
                                            "forwarded.receive",
@@ -19,16 +19,17 @@ TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.tex
                                            "friend.request.receive", "friend.request.accept",
                                            "contact.read",
                                            "group.member.invite", "group.create", "group.members.read", "group.events",
-                                           "voice.receive", "voice.send", "friend.voice.send", "group.voice.send",
+                                           "voice.receive", "voice.recall.receive", "voice.send", "friend.voice.send", "group.voice.send",
                                            "emoticon.send", "emoticon.extract"})
 
 TEXT_42011_CAPABILITIES = CAPABILITIES | frozenset({
     "friend.text.receive", "friend.text.send", "friend.request.receive", "friend.request.accept",
     "group.text.receive", "group.text.send",
     "group.text.mention", "group.members.read", "group.events", "message.recall",
+    "image.recall.receive", "file.recall.receive",
     "image.receive", "image.send", "file.receive", "file.send",
     "friend.file.receive", "friend.file.send", "group.file.receive", "group.file.send",
-    "voice.receive", "voice.send", "friend.voice.send", "group.voice.send"})
+    "voice.receive", "voice.recall.receive", "voice.send", "friend.voice.send", "group.voice.send"})
 
 
 # 新版只公布已验证的功能；其他能力必须单独适配并完成实测。
@@ -37,8 +38,9 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "group.text.receive", "group.text.send",
     "group.text.mention", "message.recall", "group.members.read", "group.events", "image.receive", "image.send",
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
-    "group.file.receive", "group.file.send", "voice.receive", "voice.send",
+    "group.file.receive", "group.file.send", "voice.receive", "voice.recall.receive", "voice.send",
     "friend.voice.send", "group.voice.send",
+    "image.recall.receive", "file.recall.receive",
 })
 
 

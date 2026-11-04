@@ -8,7 +8,7 @@
     10002
   ],
   "requires": [
-    "file.receive",
+    "file.recall.receive",
     "file.send",
     "message.recall"
   ],

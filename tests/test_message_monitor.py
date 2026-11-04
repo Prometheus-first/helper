@@ -23,6 +23,26 @@ ROOM = '12345678@chatroom'
 
 
 class BufferTests(unittest.TestCase):
+    def test_linux_media_cache_updates_same_row_without_losing_recall_or_exposing_paths(self):
+        from dataclasses import replace
+        buffer = MessageBuffer()
+        source = Message('', ROOM, FRIEND, type=3, is_group=True, session_id='fixture', sequence=1,
+            data={'self_wxid': ACCOUNT, 'native_message_id': '77', 'media_cache_only': True,
+                  'image_status': 'pending'})
+        buffer.append(source)
+        original = buffer.tail()['rows'][0]
+        self.assertEqual(original['content'], '[图片] 等待缓存')
+        buffer.append(Message('', ROOM, type=10002, session_id='fixture', sequence=2,
+            data={'self_wxid': ACCOUNT, 'recall': {'message_id': '77', 'chat_id': ROOM}}))
+        buffer.append(replace(source, data=dict(source.data, image_status='ready',
+            image_path='/private/SECRET.png', raw_content='SECRET_XML')))
+        rows = buffer.tail()['rows']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['id'], original['id'])
+        self.assertEqual(rows[0]['content'], '[图片] 已缓存')
+        self.assertTrue(rows[0]['recalled'])
+        self.assertNotIn('SECRET', repr(rows))
+
     def test_text_keeps_conversation_sender_and_multiline_content(self):
         buffer = MessageBuffer(clock=lambda: 1792540800)
         buffer.append(Message('第一行\n第二行', ROOM, FRIEND, is_group=True), account=ACCOUNT, sender_name='群友甲')
@@ -101,6 +121,35 @@ class BufferTests(unittest.TestCase):
         rows = buffer.tail()['rows']
         self.assertEqual(len(rows), 2)
         self.assertEqual((rows[1]['sender_id'], rows[1]['sender_name'], rows[1]['direction']), (ACCOUNT, '机器人', 'outgoing'))
+
+    def test_confirmed_group_changes_show_summaries_and_preserve_join_then_leave(self):
+        buffer = MessageBuffer(sanitize=redact)
+        secret = '<sysmsg aeskey="private-event-token">private-system-content</sysmsg>'
+        for kind, nickname in (('join', '群友甲'), ('leave', '')):
+            buffer.append(Message(secret, ROOM, FRIEND, type=10002, is_group=True,
+                session_id='group-session', sequence=0, data={
+                    'system_content':secret,
+                    'group_event':{'kind':kind, 'room_id':ROOM, 'member_id':FRIEND,
+                        'nickname':nickname, 'source':'membership', 'extra':secret}}), account=ACCOUNT)
+        rows = buffer.tail()['rows']
+        self.assertEqual([row['content'] for row in rows], ['[成员入群] 群友甲', '[成员退群] ' + FRIEND])
+        self.assertEqual([row['id'] for row in rows], [1, 2])
+        serialized = json.dumps(rows, ensure_ascii=False)
+        for forbidden in ('sysmsg', 'aeskey', 'private-event-token', 'private-system-content', 'system_content', 'group_event'):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_unconfirmed_or_unrelated_system_metadata_stays_generic(self):
+        buffer = MessageBuffer()
+        secret = '<sysmsg>待确认内容</sysmsg>'
+        for event in (None, {'kind':'join', 'room_id':'999@chatroom', 'member_id':FRIEND},
+                      {'kind':'rename', 'room_id':ROOM, 'member_id':FRIEND},
+                      {'kind':['join'], 'room_id':ROOM, 'member_id':FRIEND},
+                      {'kind':'join', 'room_id':ROOM}, 'invalid'):
+            buffer.append(Message(secret, ROOM, FRIEND, type=10000, is_group=True,
+                data={'system_content':secret, 'group_event':event}))
+        buffer.append(Message(secret, FRIEND, FRIEND, type=10002,
+            data={'group_event':{'kind':'join', 'room_id':FRIEND, 'member_id':FRIEND}}))
+        self.assertTrue(all(row['content'] == '[系统消息]' for row in buffer.tail()['rows']))
 
     def test_cursor_pages_in_order_and_bounded_cache_reports_eviction(self):
         buffer = MessageBuffer()

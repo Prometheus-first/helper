@@ -463,24 +463,46 @@ $('#discover-chats').onclick=()=>action(async()=>{
 $('#discovered-chats').onclick=e=>{const button=e.target.closest('[data-room]');if(!button)return;const field=$('#groups-form').elements.groups;field.value=[...new Set([...lines(field.value),button.dataset.room])].join('\n');renderGroupNames();toast('已填入，停止机器人后保存群聊配置');};
 
 const roleLabels = {owner:'群主', admin:'群管理员', member:'普通群友', unknown:'身份未知'};
+function linuxMentionTargets() {
+  if(!isLinux||!$('#send-chat').value.endsWith('@chatroom')||($('#linux-send-kind').value||'text')!=='text')return [];
+  const members=$('#linux-mentions').value.trim().split(/[\s,，]+/).filter(Boolean);
+  if(new Set(members).size!==members.length)throw new Error('手工填写的艾特成员不能重复。');
+  if(members.some(id=>!(/^[A-Za-z0-9_.@-]{1,127}$/).test(id)||id.endsWith('@chatroom')||id.startsWith('gh_')||['filehelper','weixin','fmessage','newsapp','floatbottle','notify@all'].includes(id)))throw new Error('请填写成员的真实微信 ID。');
+  const combined=[...new Set([...mentionSelection,...members])];
+  if(combined.length>8)throw new Error('勾选与手工填写的艾特成员合计最多 8 人。');
+  return combined;
+}
 function sendFeedback(text, error=false) {
   $('#send-status').textContent=text;$('#send-status').classList.toggle('error',error);
 }
+function renderLinuxSendKind() {
+  const kind=$('#linux-send-kind').value||'text',media=kind!=='text';
+  $('#linux-path-field').classList.toggle('hidden',!media);
+  $('#send-content').classList.toggle('hidden',media);$('#send-content-label').classList.toggle('hidden',media);
+  $('#send-content').required=!media;$('#linux-send-path').required=media;
+  $('#linux-send-path').placeholder=kind==='voice'?'/home/user/Audio/voice.wav':kind==='file'?'/home/user/Documents/file.pdf':'/home/user/Pictures/photo.png';
+  $('#linux-path-hint').textContent=kind==='voice'?'SILK v3 或单声道 16-bit PCM WAV，最长 60 秒。WAV 需先安装语音编码依赖；填写 Linux 本机绝对路径。':'填写运行微信的 Linux 本机路径。';
+  renderSendState();
+}
 function renderSendState() {
   const ready=serviceAvailable&&!!state?.connected&&!busy;
+  const groupText=$('#send-chat').value.endsWith('@chatroom')&&(!isLinux||($('#linux-send-kind').value||'text')==='text');
+  $('#send-group').classList.toggle('hidden',!groupText);
   $('#refresh-send-chats').disabled=!ready||sendLoading||!!pendingSend;
-  $('#refresh-send-members').disabled=!ready||sendLoading||!!pendingSend||!$('#send-chat').value.endsWith('@chatroom');
+  $('#refresh-send-members').disabled=!ready||sendLoading||!!pendingSend||!groupText;
   $('#send-chat').disabled=!ready||sendLoading||!!pendingSend;
   $('#send-content').disabled=!ready||!!pendingSend;
-  if(isLinux){$('#linux-send-kind').disabled=!ready||!!pendingSend;$('#linux-send-path').disabled=!ready||!!pendingSend;}
+  if(isLinux){$('#linux-send-kind').disabled=!ready||!!pendingSend;$('#linux-send-path').disabled=!ready||!!pendingSend;$('#linux-mentions').disabled=!ready||!!pendingSend;$('#linux-mentions-field').classList.toggle('hidden',!$('#send-chat').value.endsWith('@chatroom')||($('#linux-send-kind').value||'text')!=='text');}
   $('#send-text').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#send-chat').value||!(isLinux&&$('#linux-send-kind').value!=='text'?$('#linux-send-path').value.trim():$('#send-content').value.trim());
   $('#send-text').textContent=pendingSend?'发送中…':'发送';
-  $('#mention-count').textContent=`已选 ${mentionSelection.size} / 8`;
-  $('#send-members').querySelectorAll('input').forEach(node=>node.disabled=!ready||!!pendingSend);
+  let mentionCount=mentionSelection.size;
+  if(isLinux){try{mentionCount=linuxMentionTargets().length;}catch(_){$('#send-text').disabled=true;}}
+  $('#mention-count').textContent=`${isLinux?'艾特':'已选'} ${mentionCount} / 8`;
+  $('#send-members').querySelectorAll('input').forEach(node=>node.disabled=!ready||!!pendingSend||!groupText);
 }
 function renderSendMembers() {
   const query=$('#member-search').value.trim().toLowerCase();
-  const rows=sendMembers.filter(row=>[row.nickname,row.wxid,roleLabels[row.role]||roleLabels.unknown].some(value=>String(value||'').toLowerCase().includes(query)));
+  const rows=sendMembers.filter(row=>[row.nickname,row.group_nickname,row.wechat_name,row.wxid,roleLabels[row.role]||roleLabels.unknown].some(value=>String(value||'').toLowerCase().includes(query)));
   $('#send-members').innerHTML=rows.map(row=>`<tr><td><label class="member-choice"><input type="checkbox" data-mention="${escape(row.wxid)}" ${mentionSelection.has(row.wxid)?'checked':''} aria-label="艾特 ${escape(row.nickname||row.wxid)}"></label></td><td><span class="message-sender">${escape(row.nickname||row.wxid)}</span><span class="message-id">${escape(row.wxid)}</span></td><td class="member-role">${escape(roleLabels[row.role]||roleLabels.unknown)}</td></tr>`).join('')||'<tr><td colspan="3" class="table-empty">'+(query?'没有匹配的成员。':'暂无可用的成员，请在微信打开该群后刷新。')+'</td></tr>';
   renderSendState();
 }
@@ -488,6 +510,7 @@ function resetComposer() {
   sendGeneration++;sendMembers=[];mentionSelection.clear();sendSession='';sendLoading=false;pendingSend=null;
   sendChatsAttempted=false;
   $('#send-chat').innerHTML='<option value="">选择会话</option>';$('#send-content').value='';$('#member-search').value='';
+  if(isLinux)$('#linux-mentions').value='';
   $('#send-group').classList.add('hidden');sendFeedback('');renderSendMembers();
 }
 async function loadSendChats() {
@@ -512,13 +535,14 @@ async function loadSendChats() {
 async function selectSendChat() {
   const room=$('#send-chat').value,requested=robot,generation=++sendGeneration;
   sendMembers=[];mentionSelection.clear();$('#member-search').value='';
-  $('#send-group').classList.toggle('hidden',isLinux||!room.endsWith('@chatroom'));renderSendMembers();
+  if(isLinux)$('#linux-mentions').value='';
+  sendSession='';renderSendMembers();
   if(!room){renderSendState();return;}
   sendSession='';sendLoading=true;sendFeedback('正在读取…');renderSendState();
   try {
     const connection=await api('send-connection',undefined,requested);
     if(requested!==robot||generation!==sendGeneration)return;
-    if(room.endsWith('@chatroom')&&!isLinux) {
+    if(room.endsWith('@chatroom')) {
       try {
         const data=await api('group-members?room='+encodeURIComponent(room),undefined,requested);
         if(requested!==robot||generation!==sendGeneration)return;
@@ -527,7 +551,7 @@ async function selectSendChat() {
       } catch(error) {
         if(requested!==robot||generation!==sendGeneration)return;
         if(error.status!==409||error.message!=='群成员缓存尚未就绪，请在微信打开该群后重试')throw error;
-        sendSession=connection.session_id;sendFeedback('群成员尚未加载，可发送文字；在微信打开群聊后刷新成员。');renderSendMembers();return;
+        sendSession=connection.session_id;sendFeedback(isLinux?'群成员尚未加载，可发送文字或填写成员 ID 艾特；在微信打开群聊后刷新成员。':'群成员尚未加载，可发送文字；在微信打开群聊后刷新成员。');renderSendMembers();return;
       }
     }
     sendSession=connection.session_id;sendFeedback('');renderSendMembers();
@@ -539,8 +563,14 @@ $('#send-chat').onchange=selectSendChat;$('#refresh-send-members').onclick=selec
 $('#member-search').oninput=renderSendMembers;$('#send-content').oninput=renderSendState;
 $('#send-members').onchange=event=>{
   const node=event.target;if(!node.matches('[data-mention]'))return;
-  if(node.checked&&mentionSelection.size>=8){node.checked=false;sendFeedback('每条消息最多艾特 8 人',true);return;}
   if(node.checked)mentionSelection.add(node.dataset.mention);else mentionSelection.delete(node.dataset.mention);
+  try {
+    if(isLinux)linuxMentionTargets();
+    else if(mentionSelection.size>8)throw new Error('每条消息最多艾特 8 人');
+  } catch(error) {
+    if(node.checked){mentionSelection.delete(node.dataset.mention);node.checked=false;}
+    sendFeedback(error.message,true);renderSendState();return;
+  }
   sendFeedback('');renderSendState();
 };
 async function pollSendStatus() {
@@ -559,8 +589,10 @@ async function pollSendStatus() {
 }
 $('#send-form').onsubmit=async event=>{
   event.preventDefault();if($('#send-text').disabled||pendingSend)return;
+  let atList;
+  try{atList=isLinux?linuxMentionTargets():[...mentionSelection];}catch(error){sendFeedback(error.message,true);return;}
   const requested=robot,job={id:crypto.randomUUID(),robot:requested};pendingSend=job;
-  const body={request_id:job.id,session_id:sendSession,chat_id:$('#send-chat').value,content:$('#send-content').value,at_list:[...mentionSelection]};
+  const body={request_id:job.id,session_id:sendSession,chat_id:$('#send-chat').value,content:$('#send-content').value,at_list:atList};
   sendFeedback('正在发送…');renderSendState();
   try {
     const kind=isLinux?$('#linux-send-kind').value:'text';
@@ -923,13 +955,13 @@ if(isLinux){
     loginAttempt=r.id;await loadRobots();await loadAccounts();await switchRobot(r.id);
     await pollLinuxLogin(r.id,generation);
   });
-  $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.add('hidden');
+  $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.remove('hidden');
   const modelsLink=$('[data-page="models"]');modelsLink.lastChild.textContent='模型设置';$('#models-heading').textContent='模型设置';
   for(const page of ['tasks','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
   $('#linux-start').onclick=()=>action(async()=>{await api('start',{});resetComposer();});
   $('#linux-stop').onclick=()=>action(async()=>{await api('stop',{});resetComposer();});
-  const kindChanged=()=>{const media=$('#linux-send-kind').value!=='text';$('#linux-path-field').classList.toggle('hidden',!media);$('#send-content').classList.toggle('hidden',media);$('#send-content-label').classList.toggle('hidden',media);$('#send-content').required=!media;$('#linux-send-path').required=media;renderSendState();};
-  $('#linux-send-kind').onchange=kindChanged;$('#linux-send-path').oninput=renderSendState;
+  $('#linux-send-kind').onchange=renderLinuxSendKind;$('#linux-send-path').oninput=renderSendState;
+  $('#linux-mentions').oninput=()=>{try{linuxMentionTargets();sendFeedback('');}catch(error){sendFeedback(error.message,true);}renderSendState();};
 }
 (async()=>{renderState();try{await loadRobots();await loadConfig();await loadAccounts();await poll();}catch(error){serviceDisconnected();toast(error.message,true);}setInterval(poll,2000);})();
 

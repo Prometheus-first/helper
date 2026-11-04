@@ -52,7 +52,7 @@ class ManagedLinuxBackend(LinuxPanelBackend):
         if self.account and self.account != account:
             raise RuntimeError('登录账号发生变化，请关闭该微信会话后重新登录')
         self.account = account
-        self.adapter = LinuxTextAdapter(account, self.session_id)
+        self.adapter = LinuxTextAdapter(account, self.session_id, include_self_groups=True)
         self.identity_ready = True
 
     def convert_event(self, event):
@@ -75,8 +75,16 @@ class SessionLease:
     def __init__(self, owner, allowed):
         self.owner, self.allowed = owner, frozenset(allowed)
         self.account = owner.profile['wxid']
+        self.capabilities = getattr(owner.backend, 'capabilities', PANEL_CAPABILITIES)
         self.session_id = uuid.uuid4().hex
         self.closed = False
+        self._native_backend = owner.backend
+        self._delivery_lock = threading.RLock()
+        self._media_receiver = None
+        self._voice_receiver = None
+        self._pending_media = {}
+        self._emitter = None
+        self._image_scope_generation = None
 
     @property
     def pid(self):
@@ -91,26 +99,150 @@ class SessionLease:
         return self.owner.backend.last_error
 
     def start(self, emit):
+        self._emitter = emit
         self.owner.attach(self, emit)
+        configure = getattr(self._native_backend, 'configure_image_downloads', None)
+        if callable(configure):
+            try:
+                self._image_scope_generation = configure(self.allowed)
+            except (OSError, ValueError, RuntimeError):
+                # 旧桥接或上下文未就绪时仍可接收文字与已经落盘的附件。
+                self._image_scope_generation = None
         return True
 
     def stop(self):
         self.closed = True
         self.owner.detach(self)
+        with self._delivery_lock:
+            receiver, self._media_receiver = self._media_receiver, None
+            voice_receiver, self._voice_receiver = self._voice_receiver, None
+            for gate in self._pending_media.values():
+                gate.set()
+            self._pending_media.clear()
+        if receiver is not None:
+            receiver.close()
+        if voice_receiver is not None:
+            voice_receiver.close()
+        if self._image_scope_generation is not None:
+            try:
+                self._native_backend.clear_image_downloads(self._image_scope_generation)
+            except (OSError, ValueError, RuntimeError):
+                pass
         return {'capture_stopped': True, 'wechat_left_running': self.owner.wechat_running()}
 
-    def _send(self, method, chat_id, body):
+    def _request_image(self, message, metadata):
+        if (self._image_scope_generation is None or not self.allowed or
+                message.session_id != self.session_id or message.chat_id not in self.allowed or
+                not self._is_current()):
+            return False
+        return self._native_backend.request_image(message, metadata,
+            self._image_scope_generation, self._is_current)
+
+    def _is_current(self):
+        with self.owner.lock:
+            return bool(not self.closed and self.owner.active_lease is self and
+                self.owner.backend is self._native_backend and self.owner.wechat_running() and
+                self.owner.profile.get('logged_in') and self.owner.profile.get('wxid') == self.account)
+
+    @staticmethod
+    def _media_key(message):
+        return message.chat_id, message.data.get('native_message_id'), message.type
+
+    def _emit_current(self, message):
+        # 保存本 lease 的 emitter，不能在检查后再读取 owner 的新 emitter。
+        if message.session_id == self.session_id and self._is_current() and self._emitter:
+            self._emitter(message)
+
+    def _media_ready(self, message):
+        with self._delivery_lock:
+            gate = self._pending_media.get(self._media_key(message))
+        # emit 可能进入服务锁；等待和投递都不能持有 delivery/owner 锁。
+        if gate is not None:
+            while not gate.wait(.1):
+                if not self._is_current():
+                    return
+        self._emit_current(message)
+
+    def receive(self, message):
+        if message.session_id != getattr(self._native_backend, 'session_id', message.session_id):
+            return
+        if not self._is_current():
+            return
+        message = replace(message, session_id=self.session_id)
+        payload = message.data.get('_linux_voice') if message.type == 34 else message.data.get('_linux_media')
+        if payload is None:
+            self._emit_current(message)
+            return
+        gate, key = threading.Event(), self._media_key(message)
+        with self._delivery_lock:
+            if not self._is_current():
+                return
+            permitted = not self.allowed or message.chat_id in self.allowed
+            home = getattr(self._native_backend, 'instance_home', None)
+            self._pending_media[key] = gate
+            try:
+                if permitted and home is not None:
+                    if message.type == 34:
+                        if self._voice_receiver is None:
+                            from .linux_voice_receiver import LinuxVoiceReceiver
+                            from .linux_voice_database import LinuxVoiceDatabaseReader
+                            from .linux_backend import LINUX_WECHAT_SHA256
+                            source = LinuxVoiceDatabaseReader(self.pid, expected_account=self.account,
+                                expected_sha256=LINUX_WECHAT_SHA256, instance_home=home)
+                            self._voice_receiver = LinuxVoiceReceiver(account=self.account,
+                                session_id=self.session_id, cache_root=self.owner.workspace / 'recall_voice',
+                                is_current=self._is_current, allowed_targets=self.allowed,
+                                callback=self._media_ready, source=source)
+                        message = self._voice_receiver.submit(message)
+                    elif self._media_receiver is None:
+                        from .linux_media_receiver import LinuxMediaReceiver
+                        self._media_receiver = LinuxMediaReceiver(account=self.account,
+                            session_id=self.session_id, pid=self.pid,
+                            storage_root=Path(home) / 'xwechat_files',
+                            cache_root=self.owner.workspace / 'recall_media',
+                            is_current=self._is_current, callback=self._media_ready,
+                            request_image=self._request_image if self._image_scope_generation is not None else None)
+                    if message.type != 34:
+                        message = self._media_receiver.submit(message)
+            except (OSError, ValueError, RuntimeError):
+                data = dict(message.data)
+                media = 'voice' if message.type == 34 else 'image' if message.type == 3 else 'file'
+                data.update({media + '_status': 'failed', media + '_error': '媒体缓存暂不可用'})
+                data['media_cache_only'] = True
+                message = replace(message, data=data)
+            data = dict(message.data)
+            data.pop('_linux_media', None)
+            data.pop('_linux_voice', None)
+            message = replace(message, data=data)
+        try:
+            self._emit_current(message)
+        finally:
+            gate.set()
+            with self._delivery_lock:
+                if self._pending_media.get(key) is gate:
+                    self._pending_media.pop(key)
+
+    def _send(self, method, chat_id, *args):
         with self.owner.lock:
             if self.closed or self.owner.active_lease is not self or self.last_error:
                 raise RuntimeError('这条消息所属的机器人连接已停止')
             if self.allowed and chat_id not in self.allowed:
                 raise ValueError('该会话不在收发白名单中')
             backend = self.owner.backend
-        return getattr(backend, method)(chat_id, body)
+        return getattr(backend, method)(chat_id, *args)
 
     def send_text(self, chat_id, text): return self._send('send_text', chat_id, text)
+    def send_at_text(self, chat_id, text, at_list): return self._send('send_at_text', chat_id, text, at_list)
     def send_image(self, chat_id, path): return self._send('send_image', chat_id, path)
     def send_file(self, chat_id, path): return self._send('send_file', chat_id, path)
+    def send_emoticon(self, chat_id, path): return self._send('send_emoticon', chat_id, path)
+    def send_voice(self, chat_id, path): return self._send('send_voice', chat_id, path)
+    def group_members(self, room):
+        result = self._send('group_members', room)
+        with self.owner.lock:
+            if self.closed or self.owner.active_lease is not self or self.last_error:
+                raise RuntimeError('群成员读取所属的微信连接已结束')
+        return result
     def chats(self): return self.owner.backend.chats() if self.owner.backend else []
 
     def contacts(self):
@@ -284,7 +416,7 @@ class LinuxSessionController:
                 return
             if self.profile['wxid'] != lease.account:
                 return
-        emit(replace(message, session_id=lease.session_id))
+        lease.receive(message)
 
     def lease(self, allowed):
         with self.lock:
@@ -370,6 +502,7 @@ class LinuxSessionController:
             self.capture_stop.set()
             backend = self.backend
             if backend is not None:
+                sender = getattr(backend, '_sender', None)
                 backend.stop()
                 process = backend.process
                 if process is not None and process.poll() is None:
@@ -385,6 +518,9 @@ class LinuxSessionController:
                         process.wait(timeout=8)
                     except subprocess.TimeoutExpired:
                         raise PanelError('微信尚未退出，请在该微信窗口手动退出', 409) from None
+                cleanup = getattr(sender, 'cleanup_retained_files', None)
+                if callable(cleanup) and process is not None and process.poll() is not None:
+                    cleanup()
             if self.login_thread is not None:
                 self.login_thread.join(3)
             self._close_display()

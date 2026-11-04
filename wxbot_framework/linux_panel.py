@@ -11,10 +11,17 @@ from .runtime import BotApplication
 from .web_panel import PanelController
 
 
+def _backend_capabilities(backend):
+    capabilities = getattr(backend, 'capabilities', None)
+    if isinstance(capabilities, (set, frozenset)) and all(isinstance(item, str) for item in capabilities):
+        return frozenset(capabilities)
+    return PANEL_CAPABILITIES
+
+
 class LinuxBotApplication(BotApplication):
     def __init__(self, root, store, backend):
         super().__init__(root, store, backend_factory=lambda: backend,
-                         initial_capabilities=PANEL_CAPABILITIES, defer_members=True)
+                         initial_capabilities=_backend_capabilities(backend), defer_members=True)
         self.config['wechat_account'] = None
         self._identity_lock = threading.Lock()
         self._attempted_connection = False
@@ -87,6 +94,15 @@ class LinuxPanelController(PanelController):
         self.messages.reset()
         return self.store.load()
 
+    def _capabilities(self):
+        # 运行中的 lease 优先；未启动机器人时使用已登录微信的握手结果。
+        # 不获取 session.lock，避免与会话侧的 panel 调用形成反向锁顺序。
+        with self.lock:
+            backend = getattr(self.app, 'backend', None)
+            if backend is None:
+                backend = getattr(self.session, 'backend', None)
+            return _backend_capabilities(backend)
+
     def snapshot(self):
         result = super().snapshot()
         backend = getattr(self.app, 'backend', None)
@@ -96,7 +112,7 @@ class LinuxPanelController(PanelController):
         return dict(result, platform='linux', account=account or self._last_account,
             connected=bool(result['connected'] and account),
             login_pending=bool((self.session is not None and self.session.wechat_running() and not account) or (result['connected'] and not account)),
-            capabilities=sorted(PANEL_CAPABILITIES))
+            capabilities=sorted(self._capabilities()))
 
     def linux_contact_labels(self):
         def query(app):
@@ -118,16 +134,17 @@ class LinuxPanelController(PanelController):
         return {'robots': [dict(snapshot, id='default', name='Linux 微信')]}
 
     def guard_route(self, path, write):
-        unsupported = ('/api/moments', '/api/article', '/api/contact', '/api/group-members',
+        unsupported = ('/api/moments', '/api/article', '/api/contact',
                        '/api/scheduled-', '/api/wechat-login', '/api/accounts/', '/api/account')
         if any(path.startswith(prefix) for prefix in unsupported) and path not in ('/api/accounts', '/api/contacts'):
             raise PanelError('Linux 版尚未适配此功能', 409)
 
     def plugin_rows(self):
         rows = super().plugin_rows()
+        capabilities = self._capabilities()
         for row in rows:
             manifest = json.loads((self.plugin_sources.path(row['name']) / 'plugin.json').read_text())
-            missing = sorted(set(manifest.get('requires', ())) - PANEL_CAPABILITIES)
+            missing = sorted(set(manifest.get('requires', ())) - capabilities)
             row['supported'] = not missing
             if missing:
                 row['error'] = 'Linux 暂缺能力：' + ', '.join(missing)
@@ -147,9 +164,19 @@ class LinuxPanelController(PanelController):
 
     def send_text(self, data):
         self.send_connection()
-        if data.get('at_list'):
-            raise PanelError('Linux 版暂不支持真实群艾特', 409)
         return super().send_text(data)
+
+    def _deliver_at_text(self, service, target, content, mentions, session):
+        rows = service.group_members(target, expected_session=session)
+        names = None
+        if rows is not None:
+            directory = {row['wxid']: row for row in rows}
+            if any(member not in directory for member in mentions):
+                raise ValueError('所选成员已不在群里，请刷新成员后重试')
+            names = [directory[member].get('nickname') or member for member in mentions]
+        # An unavailable cache still permits the explicit ID fallback. It never
+        # resolves ambiguous display names to identities or guesses membership.
+        return service.send_at_text(target, content, mentions, expected_session=session, display_names=names)
 
     def send_media(self, data):
         """本机路径发送；单号去重和会话检查与文字发送保持一致。"""
@@ -158,8 +185,8 @@ class LinuxPanelController(PanelController):
         target = validate_target(data.get('chat_id'))
         kind, path = data.get('kind'), data.get('path')
         identifier, session = data.get('request_id'), data.get('session_id')
-        if kind not in ('image', 'file') or not isinstance(path, str) or not path or not Path(path).is_absolute():
-            raise PanelError('请选择图片或文件，并填写 Linux 本机的绝对路径')
+        if kind not in ('image', 'file', 'voice') or not isinstance(path, str) or not path or not Path(path).is_absolute():
+            raise PanelError('请选择图片、文件或语音，并填写 Linux 本机的绝对路径')
         if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
             raise PanelError('发送请求编号无效')
         if session != self.send_connection()['session_id']:
@@ -174,6 +201,12 @@ class LinuxPanelController(PanelController):
             if any(job['status'] == 'sending' for job in self.send_jobs.values()):
                 raise PanelError('上一条消息仍在发送，请等待结果', 409)
             app = self.app
+            if kind == 'voice':
+                backend = getattr(app, 'backend', None)
+                if backend is None or backend.session_id != session:
+                    raise PanelError('微信连接已变化，请刷新会话', 409)
+                if 'voice.send' not in getattr(backend, 'capabilities', ()):
+                    raise PanelError('当前 Linux 微信连接尚未开放语音发送，请更新桥接并重新登录', 409)
             allowed = app.config.get('chat_allowlist', [])
             if allowed and target not in allowed:
                 raise PanelError('该会话不在收发白名单中')

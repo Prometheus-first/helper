@@ -5,6 +5,7 @@ import ctypes as c
 import json
 from pathlib import Path
 import struct
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -116,6 +117,7 @@ class ArticleBuildPairTests(unittest.TestCase):
             check_pair('4.2.0.12', '4.2.0.11')
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows process snapshots require WinDLL')
 class SessionSnapshotTests(unittest.TestCase):
     def snapshot(self, *, replace_host=False):
         initial = {'weixin.dll': (0x100000, 'synthetic-core.dll'),

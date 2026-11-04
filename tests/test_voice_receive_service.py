@@ -7,6 +7,9 @@ from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'native'))
+if sys.platform != 'win32':
+    raise unittest.SkipTest('Windows native service requires WinDLL')
+
 from filehelper_service import ReceivedMediaMessageV5, ReceivedMediaMessageV6
 from text_service import NativeTextService
 

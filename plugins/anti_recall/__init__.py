@@ -9,7 +9,7 @@ import threading
 from wxbot_framework.recall import message_id
 from wxbot_framework.media_recall import is_file_attachment
 from wxbot_framework.summary import split_text
-from .stickers import StickerCache, StickerError, parse_sticker
+from .stickers import Sticker, StickerCache, StickerError, parse_sticker
 
 
 @dataclass
@@ -121,8 +121,10 @@ class Plugin:
         sticker = None
         if message.type == 47 and 'emoticon.send' in ctx.capabilities:
             try:
-                sticker = parse_sticker(message.data.get('raw_content') or message.data.get('content') or
-                                        message.data.get('msg') or '')
+                sticker = message.data.get('sticker_metadata')
+                if not isinstance(sticker, Sticker):
+                    sticker = parse_sticker(message.data.get('raw_content') or message.data.get('content') or
+                                            message.data.get('msg') or '')
             except StickerError:
                 pass
             if sticker is not None:

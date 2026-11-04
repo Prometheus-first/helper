@@ -41,6 +41,7 @@ class LinuxNativeTextBackend:
             sending = {"text.send"}
             if any(target.endswith("@chatroom") for target in self.send_targets):
                 sending.add("group.text.send")
+                sending.add("group.text.mention")
             if any(target != "filehelper" and not target.endswith("@chatroom") for target in self.send_targets):
                 sending.add("friend.text.send")
             self.capabilities = type(self).capabilities | frozenset(sending)
@@ -226,6 +227,14 @@ class LinuxNativeTextBackend:
         if self._sender is None or self._stopping.is_set() or self.process is None or self.process.poll() is not None:
             raise RuntimeError("Linux 原生发送桥接没有运行")
         return self._sender.send_text(chat_id, text)
+
+    def send_at_text(self, chat_id, text, at_list):
+        if self._sender is None or self._stopping.is_set() or self.process is None or self.process.poll() is not None:
+            raise RuntimeError("Linux 原生发送桥接没有运行")
+        if self.adapter is None:
+            raise RuntimeError("Linux 微信账号尚未确认")
+        self._sender.bind_account(self.adapter.account)
+        return self._sender.send_at_text(chat_id, text, at_list)
 
     def stop(self):
         self._stopping.set()

@@ -7,6 +7,9 @@ from unittest.mock import Mock, patch
 NATIVE = Path(__file__).resolve().parents[1] / 'native'
 if str(NATIVE) not in sys.path:
     sys.path.insert(0, str(NATIVE))
+if sys.platform != 'win32':
+    raise unittest.SkipTest('Windows native service requires WinDLL')
+
 from text_service import NativeTextService
 from wxbot_framework.backend import TEXT_42011_CAPABILITIES
 

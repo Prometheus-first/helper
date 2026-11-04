@@ -1,5 +1,9 @@
 # 语音发送
 
+Linux 4.1.13.26 已接入原生 type 34 发送：网页“群聊与会话”选择“语音（WAV / SILK）”，填写 Linux 本机绝对路径；插件沿用 `ctx.send_voice()`。群测试音播放、收到短语音后的完整缓存及撤回单次补发已实机通过。编码后 SILK 最多 256 KiB、60 秒；私聊仅离线验证，时长和大小极限未实测。Linux `main.py` 不是此功能入口，安装与运行见 [Linux 实验版](../guide/linux.md)，实现边界见 [Linux 语音](https://github.com/Prometheus-first/helper/blob/linux/native/linux/VOICE.md)。
+
+以下控制台与 DLL 说明适用于 Windows；WAV/SILK 格式要求和 Fish Audio 插件配置由两端共用，Linux 在线 TTS 尚未实测。
+
 已在微信 4.1.15.13 的文件传输助手完成 2 秒合成测试音发送，手机端确认收到并可正常播放。好友、群聊共用目标 ID 接口，尚未分别实机验证。
 
 控制台输入 `send-voice 会话ID "完整语音路径"`；会话 ID 可为 `filehelper`、好友 ID 或群 ID。
