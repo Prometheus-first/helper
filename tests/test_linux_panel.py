@@ -18,6 +18,7 @@ from wxbot_framework.message_monitor import MessageBuffer
 from wxbot_framework.panel_common import PanelError
 from wxbot_framework.panel_http import PanelServer
 from wxbot_framework.sdk import Message
+from wxbot_framework.emoticons import ExportedEmoticon
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -514,6 +515,146 @@ class PanelTests(unittest.TestCase):
             urlopen(request)
         self.assertEqual(error.exception.code, 403)
         self.assertEqual(self.instances, [])
+
+    def prepare_emoticon_export(self, method=None):
+        self.start_identified()
+        backend = self.instances[0]
+        backend.capabilities = frozenset(backend.capabilities) | {'emoticon.extract'}
+        calls = []
+        def export(*, convert=True):
+            calls.append(convert)
+            if method is not None:
+                return method()
+            path = self.root / 'exports' / 'account-fixture' / 'item' / 'original.gif'
+            return (ExportedEmoticon(identifier='a' * 32, original_path=path, gif_path=path,
+                    format='GIF', sendable=True),
+                    ExportedEmoticon(identifier='b' * 32, error='original:decode_failed'))
+        backend.export_emoticons = export
+        data = dict(request_id='fixture-emoticon-export-01', session_id=backend.session_id, convert=False)
+        return backend, calls, data
+
+    def test_emoticon_export_is_bounded_background_job_and_deduplicated(self):
+        _, calls, data = self.prepare_emoticon_export()
+        self.controller.export_emoticons(data)
+        wait_for(lambda: self.controller.emoticon_export_status(data['request_id'])['status'] == 'done')
+        result = self.controller.export_emoticons(data)['result']
+        self.assertEqual(calls, [False])
+        self.assertEqual((result['count'], result['sendable_count']), (2, 1))
+        self.assertEqual(result['output_directories'], [str(self.root / 'exports' / 'account-fixture')])
+        self.assertEqual(result['items'][1]['error'], 'original:decode_failed')
+        self.assertNotIn('identifier', json.dumps(result))
+        with self.assertRaises(PanelError):
+            self.controller.export_emoticons(dict(data, convert=True))
+        self.assertEqual(self.instances[0].calls, [])
+
+    def test_emoticon_export_rejects_missing_capability_session_and_bad_arguments(self):
+        backend, calls, data = self.prepare_emoticon_export()
+        for change in (dict(convert=1), dict(request_id='bad'), dict(session_id='old-session')):
+            with self.assertRaises(PanelError):
+                self.controller.export_emoticons(dict(data, **change))
+        backend.capabilities = PANEL_CAPABILITIES - {'emoticon.extract'}
+        with self.assertRaises(PanelError):
+            self.controller.export_emoticons(data)
+        self.assertEqual(calls, [])
+
+    def test_emoticon_export_busy_and_stop_hide_late_result(self):
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def slow():
+            started.set()
+            release.wait(3)
+            return ()
+        _, _, data = self.prepare_emoticon_export(slow)
+        self.controller.export_emoticons(data)
+        self.assertTrue(started.wait(1))
+        with self.assertRaisesRegex(PanelError, '上一项'):
+            self.controller.export_emoticons(dict(data, request_id='fixture-emoticon-export-02'))
+        self.controller.stop()
+        wait_for(lambda: self.controller.snapshot()['state'] == 'stopped')
+        release.set()
+        result = self.controller.emoticon_export_status(data['request_id'])
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertNotIn('result', result)
+
+    def test_emoticon_export_never_returns_exception_secrets(self):
+        def failure():
+            raise RuntimeError('private-key-fixture should never be returned')
+        _, _, data = self.prepare_emoticon_export(failure)
+        self.controller.export_emoticons(data)
+        wait_for(lambda: self.controller.emoticon_export_status(data['request_id'])['status'] == 'failed')
+        result = self.controller.emoticon_export_status(data['request_id'])
+        self.assertNotIn('private-key', json.dumps(result))
+        self.assertIsNone(result['result'])
+
+    def test_emoticon_export_http_uses_token_and_no_store(self):
+        _, calls, data = self.prepare_emoticon_export()
+        server = PanelServer(self.controller, 0)
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        base = 'http://127.0.0.1:' + str(server.server_address[1])
+        headers = {'X-Helper-Token': server.token, 'Content-Type': 'application/json'}
+        with self.assertRaises(HTTPError) as error:
+            urlopen(Request(base + '/api/emoticons-export', data=json.dumps(data).encode(),
+                            headers={'Content-Type': 'application/json'}))
+        self.assertEqual(error.exception.code, 403)
+        error.exception.close()
+        with urlopen(Request(base + '/api/emoticons-export', data=json.dumps(data).encode(), headers=headers)) as response:
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        wait_for(lambda: self.controller.emoticon_export_status(data['request_id'])['status'] == 'done')
+        with urlopen(Request(base + '/api/emoticons-export-status?id=' + data['request_id'], headers=headers)) as response:
+            self.assertEqual(json.load(response)['status'], 'done')
+        self.assertEqual(calls, [False])
+
+    def test_emoticon_export_hub_proxy_forwards_to_worker_http(self):
+        from wxbot_framework.robot_hub import RobotProxy
+        _, calls, data = self.prepare_emoticon_export()
+        worker = PanelServer(self.controller, 0)
+        self.addCleanup(worker.server_close)
+        threading.Thread(target=worker.serve_forever, daemon=True).start()
+        self.addCleanup(worker.shutdown)
+        worker_url = 'http://127.0.0.1:' + str(worker.server_address[1])
+        forwarded = []
+        class Hub:
+            root = ROOT
+            platform = 'linux'
+            def robot(hub, identifier):
+                if identifier != 'export-fixture':
+                    raise PanelError('unknown fixture robot', 404)
+                return RobotProxy(hub, identifier)
+            def request(hub, identifier, route, body=None):
+                forwarded.append((identifier, route))
+                request = Request(worker_url + '/api/' + route,
+                    data=None if body is None else json.dumps(body).encode(),
+                    headers={'X-Helper-Token': worker.token, 'Content-Type': 'application/json'})
+                with urlopen(request) as response:
+                    return json.load(response)
+        hub = Hub()
+        server = PanelServer(hub, 0)
+        self.addCleanup(server.server_close)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        base = 'http://127.0.0.1:' + str(server.server_address[1])
+        headers = {'X-Helper-Token': server.token, 'Content-Type': 'application/json'}
+        with urlopen(Request(base + '/api/emoticons-export?robot=export-fixture',
+                data=json.dumps(data).encode(), headers=headers)) as response:
+            self.assertIn(json.load(response)['status'], ('exporting', 'done'))
+        wait_for(lambda: self.controller.emoticon_export_status(data['request_id'])['status'] == 'done')
+        with urlopen(Request(base + '/api/emoticons-export-status?robot=export-fixture&id=' + data['request_id'],
+                headers=headers)) as response:
+            self.assertEqual(json.load(response)['result']['count'], 2)
+        self.assertEqual(calls, [False])
+        self.assertEqual(forwarded, [('export-fixture', 'emoticons-export'),
+            ('export-fixture', 'emoticons-export-status?id=' + data['request_id'])])
+
+    def test_emoticon_proxy_status_urlencodes_identifiers(self):
+        from wxbot_framework.robot_hub import RobotProxy
+        from unittest.mock import Mock
+        hub = Mock()
+        RobotProxy(hub, 'fixture-robot').emoticon_export_status('one & two?')
+        hub.request.assert_called_once_with('fixture-robot',
+            'emoticons-export-status?id=one+%26+two%3F', None)
 
 
 if __name__ == '__main__':

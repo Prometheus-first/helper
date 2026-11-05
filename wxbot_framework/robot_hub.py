@@ -145,6 +145,10 @@ class RobotProxy:
         return self.request('group-members?' + urlencode({'room': room}))
     def send_text(self, data): return self.request('send-text', data)
     def send_media(self, data): return self.request('send-media', data)
+    def export_emoticons(self, data): return self.request('emoticons-export', data)
+    def emoticon_export_status(self, identifier):
+        from urllib.parse import urlencode
+        return self.request('emoticons-export-status?' + urlencode({'id': identifier}))
     def linux_login_qr(self): return self.request('linux-login-qr')
     def list_scheduled_tasks(self): return self.request('scheduled-tasks')
     def save_scheduled_task(self, data): return self.request('scheduled-tasks', data)

@@ -77,6 +77,23 @@ def _members(raw):
     return members
 
 
+def _admin_flags(raw):
+    """4.1.13.26 ChatroomMemberLocalData field 3 contains member flags.
+
+    Missing or malformed flags remain unknown; membership validation is separate.
+    """
+    result = {}
+    for number, wire, child in _fields(raw):
+        if number != 1 or wire != 2:
+            continue
+        fields = list(_fields(child))
+        identifier = _member_id(next(value for n, w, value in fields if n == 1 and w == 2))
+        flags = [(w, value) for n, w, value in fields if n == 3]
+        result[identifier] = (bool(flags[0][1] & 0x10) if len(flags) == 1 and
+            flags[0][0] == 0 and 0 <= flags[0][1] <= 0xffffffff else None)
+    return result
+
+
 def read_group_snapshot(conn, room, expected_account):
     """事务内核对 protobuf 完整名单与独立 SQL 成员索引；未就绪返回 None。"""
     validate_group_id(room)
@@ -103,14 +120,15 @@ def read_group_snapshot(conn, room, expected_account):
         names = {_member_id(identifier): _name(name) for identifier, name in rows}
         if len(names) != len(rows) or names.keys() != members.keys():
             return None
-        # Owner has a dedicated verified SQL column. Admin-list interpretation
-        # is not assumed from member order, names, or an unrelated member flag.
+        admins = _admin_flags(raw)
         owner = owner if isinstance(owner, str) and owner in members else None
         return tuple(dict(wxid=identifier, group_nickname=members[identifier], wechat_name=names[identifier],
-            nickname=members[identifier] or names[identifier], role='owner' if identifier == owner else 'unknown',
+            nickname=members[identifier] or names[identifier], role='owner' if identifier == owner else
+                'admin' if admins.get(identifier) is True else 'member' if admins.get(identifier) is False else 'unknown',
             is_owner=True if identifier == owner else False if owner else None,
-            is_admin=False if identifier == owner else None,
-            role_source='wechat_database' if identifier == owner else '') for identifier in sorted(members))
+            is_admin=False if identifier == owner else admins.get(identifier),
+            role_source='wechat_database' if identifier == owner or admins.get(identifier) is not None else '')
+            for identifier in sorted(members))
     except (ValueError, TypeError, UnicodeError):
         return None
 

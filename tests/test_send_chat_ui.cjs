@@ -24,6 +24,7 @@ function fixture(handler, linux = false) {
   const scope = { $, api:handler, isLinux:linux, state:{connected:true}, serviceAvailable:true, busy:false,
     robot:'a', sendMembers:[], mentionSelection:new Set(), sendSession:'', sendGeneration:0,
     sendLoading:false, pendingSend:null, sendChatsAttempted:false, sendPolling:false,
+    pendingEmoticonExport:null,emoticonExportGeneration:0,emoticonExportPolling:false,emoticonExportIdentity:null,emoticonExportFeedback:false,
     setInterval(){}, crypto:{randomUUID:()=> 'fixture-request-' + (++request)},
     escape:s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) };
   vm.createContext(scope);
@@ -252,4 +253,72 @@ test('Linux 初始化保留已有 Fish TTS 设置表单和语音类型', () => {
   assert.equal($('#linux-send-kind').onchange,scope.renderLinuxSendKind);
   const html=fs.readFileSync(path.join(__dirname,'../webui/index.html'),'utf8');
   assert.match(html,/<option value="voice">语音（WAV \/ SILK）<\/option>/);
+});
+
+test('Linux 表情导出使用独立后台任务并显示本机路径，错误内容转义', async () => {
+  const calls=[];
+  const {scope,$}=fixture(async(endpoint,body)=>{
+    calls.push([endpoint,body]);
+    if(endpoint==='send-connection')return {session_id:'export-session'};
+    if(endpoint==='emoticons-export')return {status:'exporting'};
+    if(endpoint.startsWith('emoticons-export-status'))return {status:'done',result:{count:2,sendable_count:1,
+      output_directories:['/tmp/export<fixture>'],items:[{number:1,format:'GIF',gif_path:'/tmp/test.gif',error:''},
+        {number:2,error:'<script>fixture</script>'}]}};
+    throw Error(endpoint);
+  },true);
+  scope.state={connected:true,account:'wxid_fixture',capabilities:['emoticon.extract']};
+  $('#emoticon-export-convert').checked=false;
+  scope.renderEmoticonExport();
+  assert.equal($('#export-emoticons').disabled,false);
+  await scope.startEmoticonExport();
+  assert.equal(calls.find(row=>row[0]==='emoticons-export')[1].convert,false);
+  assert.equal(calls.find(row=>row[0]==='emoticons-export')[1].session_id,'export-session');
+  assert.match($('#emoticon-export-status').textContent,/导出 2 项.*1 项/);
+  assert.match($('#emoticon-export-results').innerHTML,/export&lt;fixture&gt;/);
+  assert.doesNotMatch($('#emoticon-export-results').innerHTML,/<script>/);
+  assert.equal(calls.some(row=>row[0].startsWith('send-media')),false);
+});
+
+test('Linux 表情导出切换账号后忽略旧任务结果，未开放能力时禁用', async () => {
+  let resolveStatus;
+  const {scope,$}=fixture(async(endpoint)=>{
+    if(endpoint==='send-connection')return {session_id:'export-session'};
+    if(endpoint==='emoticons-export')return {status:'exporting'};
+    if(endpoint.startsWith('emoticons-export-status'))return new Promise(resolve=>{resolveStatus=resolve;});
+    throw Error(endpoint);
+  },true);
+  scope.renderEmoticonExport();assert.equal($('#export-emoticons').disabled,true);
+  scope.state={connected:true,account:'wxid_fixture',capabilities:['emoticon.extract']};
+  scope.renderEmoticonExport();
+  const sending=scope.startEmoticonExport();
+  while(!resolveStatus)await Promise.resolve();
+  scope.resetComposer();scope.robot='b';
+  resolveStatus({status:'done',result:{count:1,sendable_count:1,items:[{number:1,gif_path:'private-old-account-path'}]}});
+  await sending;
+  assert.equal($('#emoticon-export-results').innerHTML,'');
+  assert.doesNotMatch($('#emoticon-export-status').textContent,/导出 1 项/);
+});
+
+test('Linux 表情导出失败与空缓存结果在刷新按钮状态后仍可见', async () => {
+  let fail=true;
+  const {scope,$}=fixture(async(endpoint)=>{
+    if(endpoint==='send-connection')return {session_id:'export-session'};
+    if(endpoint==='emoticons-export') {
+      if(fail)throw Object.assign(Error('任务接口不存在'),{status:404});
+      return {status:'exporting'};
+    }
+    if(endpoint.startsWith('emoticons-export-status'))return {status:'done',result:{count:0,sendable_count:0,items:[],output_directories:[]}};
+    throw Error(endpoint);
+  },true);
+  scope.state={connected:true,account:'wxid_fixture',capabilities:['emoticon.extract']};
+  scope.renderEmoticonExport();
+  await scope.startEmoticonExport();
+  scope.renderEmoticonExport();
+  assert.equal($('#emoticon-export-status').textContent,'任务接口不存在');
+  fail=false;
+  await scope.startEmoticonExport();
+  scope.renderEmoticonExport();
+  assert.match($('#emoticon-export-status').textContent,/导出 0 项/);
+  scope.resetEmoticonExport();scope.renderEmoticonExport();
+  assert.match($('#emoticon-export-status').textContent,/仅导出已缓存/);
 });

@@ -15,7 +15,7 @@
 
 ## 能力与用途
 
-Linux 后端提供专用 `voice.recall.receive`，完整音频只供消息监控和 `anti_recall_voice` 使用，不声明通用 `voice.receive`。发送桥接握手 `H` 报告 `local_voice: true` 后，后端开放 `voice.send`、`friend.voice.send`、`group.voice.send`。
+Linux 后端保留专用 `voice.recall.receive`，并已开放 `voice.receive` 与好友/群接收能力；完整 ready 音频单次投递普通插件，未完成或失败状态仍只供监控和防撤回。发送桥接握手 `H` 报告 `local_voice: true` 后，后端开放 `voice.send`、`friend.voice.send`、`group.voice.send`。
 
 防撤回直接重新发送缓存的原 SILK，不进行 ASR、LLM 或 TTS。已有 `voice_reply` 是文字输入经配置的模型回复及 TTS 合成语音的另一条链路，需要自己的模型、TTS 服务和群音色设置；提供原生发送能力不代表能够识别收到的语音。
 

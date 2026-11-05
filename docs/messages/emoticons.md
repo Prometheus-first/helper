@@ -1,5 +1,9 @@
 # 本地表情与动态发送
 
+Linux 4.1.13.26 已开放本地表情缓存导出。启动机器人后，在网页“群聊与会话”点击“导出本地表情”，可选生成可发送 GIF；页面显示统计和 Linux 本机路径。账号目录由当前受管微信进程核对，不需要填写 Windows 数据路径。原件、缩略图及 GIF 转换已通过实机验证，仅覆盖当前账号已有缓存。接口与限制见 [Linux 通用媒体与表情导出](https://github.com/Prometheus-first/helper/blob/linux/native/linux/MEDIA.md)。
+
+以下控制台命令和手动数据目录配置适用于 Windows；媒体格式与转换限额由两端共享。
+
 `native_text` 后端支持 `emoticon.extract`、`emoticon.send`。发送 GIF 走微信原生表情消息（类型 47）；在文件传输助手上已验证收到后能够播放动画。`send-image` 仍是普通图片接口。
 
 发送已有 GIF 不需要配置数据目录：

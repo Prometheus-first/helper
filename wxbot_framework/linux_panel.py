@@ -67,6 +67,87 @@ class LinuxPanelController(PanelController):
         super().__init__(root, workspace=workspace,
                          app_factory=self._application, scan=lambda _: [], **kwargs)
         self._last_account = ''
+        self.emoticon_jobs = {}
+
+    def _emoticon_current(self, app, backend, session, account):
+        return bool(self.app is app and getattr(app, '_connection_ready', False) and
+            app.backend is backend and backend.session_id == session and
+            app.config.get('wechat_account') == account and app.service.session_is_current(session))
+
+    def emoticon_export_status(self, identifier):
+        with self.lock:
+            job = self.emoticon_jobs.get(identifier)
+            if job is None:
+                raise PanelError('表情导出任务不存在，请重新导出', 404)
+            if not self._emoticon_current(*job['identity']):
+                return dict(request_id=identifier, status='cancelled', error='微信连接已变化，已隐藏旧账号的导出结果')
+            return {key: job[key] for key in ('request_id', 'status', 'error', 'result')}
+
+    def export_emoticons(self, data):
+        """账号绑定的后台导出，不发送消息，也不开放任意本地文件读取。"""
+        import re
+        identifier, session, convert = data.get('request_id'), data.get('session_id'), data.get('convert', True)
+        if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
+            raise PanelError('导出请求编号无效')
+        if type(convert) is not bool:
+            raise PanelError('请选择是否生成 GIF 预览')
+        if session != self.send_connection()['session_id']:
+            raise PanelError('微信连接已变化，请刷新页面', 409)
+        with self.lock:
+            app, backend = self.app, self.app.backend
+            account = app.config.get('wechat_account')
+            if backend is None or 'emoticon.extract' not in getattr(backend, 'capabilities', ()):
+                raise PanelError('当前 Linux 微信连接尚未开放表情导出', 409)
+            identity = (app, backend, session, account)
+            if not self._emoticon_current(*identity):
+                raise PanelError('微信连接已变化，请刷新页面', 409)
+            payload = (session, account, convert)
+            previous = self.emoticon_jobs.get(identifier)
+            if previous is not None:
+                if previous['payload'] != payload:
+                    raise PanelError('导出编号已使用，请重新提交', 409)
+                return self.emoticon_export_status(identifier)
+            if any(job['status'] == 'exporting' for job in self.emoticon_jobs.values()):
+                raise PanelError('上一项表情导出仍在处理，请等待完成', 409)
+            self.emoticon_jobs[identifier] = dict(request_id=identifier, payload=payload,
+                identity=identity, status='exporting', error='', result=None)
+            while len(self.emoticon_jobs) > 16:
+                del self.emoticon_jobs[next(iter(self.emoticon_jobs))]
+
+        def export():
+            result, failed = None, False
+            try:
+                rows = app.service.export_emoticons(convert=convert, expected_session=session)
+                if not isinstance(rows, (list, tuple)) or len(rows) > 256:
+                    raise ValueError('invalid export result')
+                items, directories = [], set()
+                for number, row in enumerate(rows, 1):
+                    item = dict(number=number, format=str(row.format)[:16], sendable=bool(row.sendable))
+                    for key in ('original_path', 'thumbnail_path', 'gif_path'):
+                        path = getattr(row, key, None)
+                        if path is not None:
+                            path = Path(path)
+                            if not path.is_absolute():
+                                raise ValueError('invalid export path')
+                            item[key] = str(path)
+                            directories.add(str(path.parent.parent))
+                    error = str(row.error)
+                    item['error'] = error if re.fullmatch(r'[a-z0-9_:;, .-]{0,256}', error) else 'export_failed'
+                    items.append(item)
+                result = dict(count=len(items), sendable_count=sum(item['sendable'] for item in items),
+                    output_directories=sorted(directories), items=items)
+            except Exception:
+                failed = True
+            with self.lock:
+                job = self.emoticon_jobs[identifier]
+                if not self._emoticon_current(*identity):
+                    job.update(status='cancelled', error='微信连接已变化，已隐藏旧账号的导出结果', result=None)
+                elif failed:
+                    job.update(status='failed', error='表情导出未完成，请检查本地缓存和当前微信连接', result=None)
+                else:
+                    job.update(status='done', result=result)
+        threading.Thread(target=export, name='LinuxEmoticonExport', daemon=True).start()
+        return self.emoticon_export_status(identifier)
 
     def _application(self, root, store):
         config = store.load()

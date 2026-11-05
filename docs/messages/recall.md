@@ -68,7 +68,7 @@ Linux 复用以上插件和按账号、连接、会话、原始消息编号匹�
 
 图片自动下载使用 1–64 个精确白名单私聊或群会话，范围必须在接收前绑定，查询和下载使用 `scope_generation` 拒绝旧连接请求。群图片已在不点开 Linux 端图片的条件下完成后台下载和完整校验；撤回后以原生 type 3 补发，接收端确认能够正常打开。群文件撤回补发也已实机通过：识别微信重名保存的附件，完整 MD5 和长度校验后缓存，撤回后按原文件名补发一次，接收端确认收到且能下载打开。发送快照保留到微信进程退出，避免原生接口返回后删除仍可能上传中的源文件；每个发送器最多 64 个、合计 64 MiB，满额拒绝新请求而不淘汰在途文件。
 
-Linux 提供专用能力 `image.recall.receive` / `file.recall.receive` / `voice.recall.receive`，媒体状态仅分发到防撤回插件与消息监控；这不等于普通 `image.receive` / `file.receive` / `voice.receive` 可用。支持 `local_voice` 的桥接开放 `voice.send`，1 秒测试音已在群接收端确认可播放。
+Linux 保留专用能力 `image.recall.receive` / `file.recall.receive` / `voice.recall.receive`，同时开放普通 `image.receive` / `file.receive` / `voice.receive`。只有当前连接完整校验的 ready 媒体投递普通插件一次，未完成和失败状态仍用于监控与防撤回。支持 `local_voice` 的桥接开放 `voice.send`，1 秒测试音已在群接收端确认可播放。
 
 Linux 语音原件最多 60 秒、256 KiB，私有接收缓存默认最多 128 条、合计 32 MiB，随机器人连接隔离。新消息未携带完整音频时，从当前账号 `VoiceInfo` 数据库补充读取完整音频；按精确会话及原消息 `svr_id` 查询，数据库密钥仅留内存，结果仍需通过完整 SILK、长度和时长校验。新群短语音已通过真实 SessionLease 链路自动缓存；撤回后仅补发一条 type 34，接收端确认原声可播放。元数据识别和原生发送回执仍不单独作为原音恢复成功的依据。本轮实测为 1 秒测试音和约 2–5 秒群短语音，Linux 私聊仅离线验证，60 秒/256 KiB 极限与付费 TTS 在线链路未实测。此链路不执行 ASR；`voice_reply` 是文字输入经配置的模型回复及 TTS 生成语音的独立功能。详见[Linux 实现与验证记录](https://github.com/Prometheus-first/helper/blob/linux/native/linux/RECALL.md)及 [Linux 语音](https://github.com/Prometheus-first/helper/blob/linux/native/linux/VOICE.md)。
 

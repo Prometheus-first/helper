@@ -21,7 +21,7 @@
 3. `LinuxMediaReceiver` 删除私有载荷，先发布清理后的 `pending`，后台验证原件后再发布 `ready` 或固定摘要的失败状态。完成回调等待初始投递结束，等待和 emitter 调用均不持有 delivery/owner 锁；初始化失败不会使文字接收流退出。
 4. `anti_recall_image` / `anti_recall_file` 按账号、连接、会话、原消息编号关联撤回。撤回先到时等待本条媒体完成，成功后最多补发一次；缺少缓存、校验失败或连接已停止时不补发。
 
-Linux 声明 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive`。这些事件供消息监控和防撤回插件使用，不向普通插件宣称 `image.receive` / `file.receive` / `voice.receive`。加载报告 `local_voice` 的发送桥接后开放 `voice.send`；语音完整闭环仍以本页的实机验收状态为准。Windows 后端保留现有通用能力，并提供专用别名供共同插件声明依赖。
+Linux 声明 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive`。未完成与失败状态供消息监控和防撤回插件使用；当前连接完整校验的 ready 媒体另通过 `image.receive` / `file.receive` / `voice.receive` 向普通插件单次分发。加载报告 `local_voice` 的发送桥接后开放 `voice.send`；语音完整闭环仍以本页的实机验收状态为准。Windows 后端保留现有通用能力，并提供专用别名供共同插件声明依赖。
 
 ## 语音原件与语音条
 

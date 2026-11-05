@@ -1,5 +1,6 @@
 """受管 Linux 微信会话：登录与机器人运行分离，停止机器人可复用登录。"""
 from dataclasses import replace
+from collections import OrderedDict
 import hashlib
 import json
 import os
@@ -83,6 +84,7 @@ class SessionLease:
         self._media_receiver = None
         self._voice_receiver = None
         self._pending_media = {}
+        self._delivered_media = OrderedDict()
         self._emitter = None
         self._image_scope_generation = None
 
@@ -119,6 +121,7 @@ class SessionLease:
             for gate in self._pending_media.values():
                 gate.set()
             self._pending_media.clear()
+            self._delivered_media.clear()
         if receiver is not None:
             receiver.close()
         if voice_receiver is not None:
@@ -151,7 +154,31 @@ class SessionLease:
     def _emit_current(self, message):
         # 保存本 lease 的 emitter，不能在检查后再读取 owner 的新 emitter。
         if message.session_id == self.session_id and self._is_current() and self._emitter:
+            message = self._prepare_media_delivery(message)
             self._emitter(message)
+
+    def _prepare_media_delivery(self, message):
+        """只有完整 ready 缓存交给普通插件，最近 1000 条媒体每条只交付一次。"""
+        media = {3: 'image', 49: 'file', 34: 'voice'}.get(message.type)
+        if media is None or not message.data.get('media_cache_only'):
+            return message
+        data = dict(message.data, monitor_only=True, dispatch_to_plugins=False)
+        from .recall import message_id
+        key = self._media_key(message)
+        receiver = self._voice_receiver if message.type == 34 else self._media_receiver
+        if (message.is_self or data.get('bot_generated') or not message_id(data.get('native_message_id')) or
+                data.get('self_wxid') != self.account or
+                (self.allowed and message.chat_id not in self.allowed) or
+                media + '.receive' not in self.capabilities or receiver is None or
+                not callable(getattr(receiver, 'owns_ready', None)) or not receiver.owns_ready(message)):
+            return replace(message, data=data)
+        with self._delivery_lock:
+            if not self.closed and key not in self._delivered_media:
+                self._delivered_media[key] = None
+                while len(self._delivered_media) > 1000:
+                    self._delivered_media.popitem(last=False)
+                data.update(monitor_only=False, dispatch_to_plugins=True)
+        return replace(message, data=data)
 
     def _media_ready(self, message):
         with self._delivery_lock:
@@ -257,6 +284,16 @@ class SessionLease:
                     result.get('account') != self.account):
                 raise RuntimeError('联系人所属的微信连接已结束')
         return dict(result, session_id=self.session_id)
+
+    def export_emoticons(self, *, convert=True):
+        with self.owner.lock:
+            if self.closed or self.owner.active_lease is not self or self.last_error:
+                raise RuntimeError('表情导出所属的微信连接已结束')
+            backend = self.owner.backend
+        result = backend.export_emoticons(convert=convert, is_current=self._is_current)
+        if not self._is_current():
+            raise RuntimeError('表情导出所属的微信连接已结束')
+        return result
 
     def contact_labels(self):
         with self.owner.lock:

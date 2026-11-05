@@ -238,7 +238,7 @@ class ReceiverTests(unittest.TestCase):
             entered.set();release.wait(2);return None
         with patch.object(receiver,'_find',side_effect=find):
             raw=file_xml(b'fixture')
-            first=replace(self.message(raw),data={'native_message_id':'123'})
+            first=replace(self.message(raw),data={'native_message_id':'123','self_wxid':ACCOUNT})
             result=receiver.submit(first,raw)
             self.assertEqual(result.data['file_status'],'pending')
             self.assertTrue(entered.wait(1))

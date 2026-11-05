@@ -1,5 +1,6 @@
 """Linux 管理台后端：收信确认账号，文本业务和媒体类型监控。"""
 from collections import OrderedDict
+from pathlib import Path
 import threading
 
 from .account import validate_account
@@ -12,12 +13,15 @@ from .text import validate_target
 PANEL_CAPABILITIES = frozenset({"text.receive", "text.send", "friend.text.receive", "friend.text.send",
     "group.text.receive", "group.text.send", "group.text.mention", "image.send", "file.send", "friend.file.send", "group.file.send",
     "contact.read", "contact.labels.read", "group.members.read", "group.events", "message.recall",
-    "image.recall.receive", "file.recall.receive", "voice.recall.receive"})
+    "image.recall.receive", "file.recall.receive", "voice.recall.receive",
+    "image.receive", "friend.image.receive", "group.image.receive",
+    "file.receive", "friend.file.receive", "group.file.receive",
+    "voice.receive", "friend.voice.receive", "group.voice.receive", "emoticon.extract"})
 
 
 class LinuxPanelBackend(LinuxNativeTextBackend):
     capabilities = PANEL_CAPABILITIES
-    scope = "Linux 文本收发与防撤回、图片和文件发送"
+    scope = "Linux 文本与媒体收发、群艾特和防撤回"
 
     def __init__(self, wechat_path, bridge_path, send_bridge_path, *, allowed_targets=(), **kwargs):
         super().__init__(wechat_path, bridge_path, "wxid_linux_pending", test_markers_only=False,
@@ -72,7 +76,7 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                 sequence=event['sequence'], msg_type=event['type'])
             if routed is None:
                 return None
-            # 媒体只交给防撤回插件；群系统消息先进入成员状态验证。
+            # 原始媒体先只供监控与防撤回；完整私有缓存由 SessionLease 提升为普通事件。
             metadata = {'self_wxid': identified, 'monitor_only': True,
                         'dispatch_to_plugins': False, 'dispatch_to_recall_plugins': True}
             native_id = message_id(event.get('native_message_id'))
@@ -149,6 +153,22 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
         result = read_process_linux_labels(self.pid, expected_account=self.account,
                                            expected_sha256=self.expected_hash)
         return dict(result, account=self.account, session_id=self.session_id)
+
+    def export_emoticons(self, *, convert=True, is_current=None):
+        from .linux_emoticons import export_linux_emoticons
+        if 'emoticon.extract' not in self.capabilities:
+            raise RuntimeError('当前 Linux 会话未开放表情导出')
+        process, account, session = self.process, self.account, self.session_id
+        home = getattr(self, 'instance_home', None)
+        if process is None or process.poll() is not None or not account or home is None:
+            raise RuntimeError('请先登录当前 Linux 微信')
+        def current():
+            return bool(not self._stopping.is_set() and self.process is process and
+                process.poll() is None and self.account == account and self.session_id == session and
+                (is_current is None or is_current()))
+        return export_linux_emoticons(self.pid, expected_account=account,
+            expected_sha256=self.expected_hash, instance_home=home,
+            output_directory=Path(home).parent / 'emoticons', convert=convert, is_current=current)
 
     def group_members(self, room):
         from .group_management import validate_group_id

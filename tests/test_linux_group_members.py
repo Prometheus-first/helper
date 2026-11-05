@@ -63,6 +63,29 @@ class SnapshotTests(unittest.TestCase):
         self.conn.execute('DELETE FROM chatroom_member WHERE member_id=2')
         self.assertIsNone(self.snapshot())
 
+    def test_admin_bit_owner_precedence_and_other_flags(self):
+        for flags, expected in ((17, 'admin'), (25, 'admin'), (8209, 'admin'),
+                                (1, 'member'), (9, 'member'), (8193, 'member'), (0, 'member')):
+            with self.subTest(flags=flags):
+                raw = field(1, field(1, SELF) + varint(24) + varint(17))
+                raw += field(1, field(1, PEER) + varint(24) + varint(flags))
+                self.conn.execute('UPDATE chat_room SET ext_buffer=?', (raw,))
+                rows = {row['wxid']: row for row in self.snapshot()}
+                self.assertEqual(rows[SELF]['role'], 'owner')
+                self.assertFalse(rows[SELF]['is_admin'])
+                self.assertEqual(rows[PEER]['role'], expected)
+                self.assertEqual(rows[PEER]['is_admin'], expected == 'admin')
+                self.assertEqual(rows[PEER]['role_source'], 'wechat_database')
+
+    def test_missing_duplicate_wrong_wire_or_overflow_flags_remain_unknown(self):
+        for flag in (b'', field(3, b'17'), varint(24) + varint(1 << 32),
+                     varint(24) + varint(17) + varint(24) + varint(1)):
+            raw = field(1, field(1, SELF)) + field(1, field(1, PEER) + flag)
+            self.conn.execute('UPDATE chat_room SET ext_buffer=?', (raw,))
+            peer = next(row for row in self.snapshot() if row['wxid'] == PEER)
+            self.assertEqual(peer['role'], 'unknown')
+            self.assertIsNone(peer['is_admin'])
+
     def test_index_disagreement_duplicate_or_unresolved_member_is_unavailable(self):
         for sql in ('DELETE FROM chatroom_member WHERE member_id=3',
                     'INSERT INTO chatroom_member VALUES (1,3)',

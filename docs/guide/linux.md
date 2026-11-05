@@ -12,7 +12,7 @@ Linux 版正在适配中，尚不能替代 Windows 版。已接入本地网页�
 | 私聊、群聊文本回复 | 实机通过，经过框架插件 `ctx.reply()` |
 | 真实群艾特接收 | 实机识别微信提供的成员名单和当前账号，插件可读取 `message.data["at_members"]` 与 `is_at_self` |
 | 真实群艾特发送 | 已接入原生文本对象的 `at_user_list`，插件与网页可指定 1–8 位成员；单成员网页发送已实机通过，接收端确认真实提醒；多成员及长文本通过离线测试 |
-| 群成员读取与选择 | 从当前账号联系人库读取完整群成员，独立索引与扩展名单交叉验证；微信名、群主、网页选择已实机通过，管理员仍标记未知 |
+| 群成员读取与选择 | 从当前账号联系人库读取完整群成员，独立索引与扩展名单交叉验证；微信名、群主、网页选择已实机通过，管理员与普通成员按已验证权限位识别，异常或缺失标记保持未知 |
 | 群成员进退事件 | 已接入原生 10000/10002 通知及完整名单差分；首次名单不补发，两次完整快照确认变化，离线验证通过，真实入退群待验证 |
 | 本地图片、文件发送 | 实机通过，手机确认内容正确 |
 | 好友私聊图片自动下载 | 实机通过；无需进入私聊或点开图片，完整 MD5 校验后可回发 |
@@ -31,6 +31,8 @@ Linux 版正在适配中，尚不能替代 Windows 版。已接入本地网页�
 | 文件防撤回 | 类型 6/74 附件缓存恢复与补发离线通过；重名附件群撤回后单次补发实机通过，接收端确认可下载打开 |
 | 表情包发送 | 已开放受能力检查保护的原生发送接口，用于动态表情防撤回；需更新并重新加载 Linux 桥接 |
 | 语音条发送 | 原生 type 34 已接入，1 秒测试音已在群接收端确认可播放；最多 60 秒、256 KiB |
+| 普通插件媒体接收 | 完整图片、文件、语音校验后单次分发，保留原有下载与缓存边界 |
+| 本地表情缓存导出 | 已接入原件保存、可选 GIF 转换及网页后台任务；不代表完整收藏 |
 | 朋友圈、公众号 | 尚未适配 |
 
 Windows 版的功能列表不代表 Linux 版具备相同能力。Linux 使用独立 ELF 桥接，不能加载 Windows DLL，也不能复用 Windows 偏移。
@@ -78,7 +80,7 @@ gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread native/linux/send_
 
 “联系人”页面支持扫描当前机器人账号的好友，按昵称、备注、微信 ID 和标签搜索，并查看好友资料。扫描只读取微信已同步到本机的联系人；离线或未同步的数据可能不完整。读取时临时使用当前微信进程中的数据库密钥，密钥和解密后的数据库不会写入文件或日志。运行用户需要有读取该受管微信进程内存的权限。Linux 微信账号变更、进程退出或文件指纹不匹配时，读取会终止。
 
-群成员只读当前登录账号的本地群数据。每次查询使用新事务，要求扩展名单与 `chatroom_member` 索引的成员集合一致、没有重复且含机器人自己；缺失或不完整返回“未就绪”，不会当作空群。首次查询准备只读数据库连接，之后复用连接但不缓存成员结果；账号、进程或数据库变更后立即弃用。群主取自独立字段，未核对的管理员身份保持未知，不按名字或排列顺序猜测。
+群成员只读当前登录账号的本地群数据。每次查询使用新事务，要求扩展名单与 `chatroom_member` 索引的成员集合一致、没有重复且含机器人自己；缺失或不完整返回“未就绪”，不会当作空群。首次查询准备只读数据库连接，之后复用连接但不缓存成员结果；账号、进程或数据库变更后立即弃用。群主取自独立字段；管理员按已验证并与手机名单核对的成员权限位识别，缺失或异常字段保持未知，不按名字或排列顺序猜测。
 
 运行期间约每 15 秒检查已配置或已发现的群（仍受收发白名单限制）。初始快照只建立基线，成员变化至少连续两次完整快照确认，读取失败会中断确认；已验证的系统通知只有得到当前完整名单佐证才提前发布。系统通知和名单差分去重，重启不补发历史入群事件。消息监控显示“成员入群/成员退群”摘要，不保存原始系统 XML。`group_notice` 插件现在可用，默认关闭；启用后按其配置发送欢迎和离群提示。被移出沿用 `leave` 事件，不另行推测离群原因。
 
@@ -86,7 +88,7 @@ gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread native/linux/send_
 
 Linux 管理台现已接入 `anti_recall`、`anti_recall_image`、`anti_recall_file` 和 `anti_recall_voice`，可在插件管理分别开关。文字、动态表情、群图片和群文件均已实机恢复成功并通过接收端验收；文件发送保留独立快照直到微信进程退出，并支持微信重名缓存格式。语音发送已用 1 秒测试音确认可播放，完整入站音频的数据库补充读取已完成，新群短语音自动缓存、撤回后单次补发与接收端原声播放均通过实机验收。媒体的可恢复范围取决于完整原件是否已进入本轮缓存。功能的通用规则见[防撤回与自动补发](../messages/recall.md)，实现与验证边界见[Linux 防撤回](https://github.com/Prometheus-first/helper/blob/linux/native/linux/RECALL.md)及 [Linux 语音](https://github.com/Prometheus-first/helper/blob/linux/native/linux/VOICE.md)。
 
-语音防撤回只补发缓存原音频，不做语音识别。Linux 不声明通用 `voice.receive`；`voice_reply` 使用文字输入、已配置的模型回复及 TTS 生成语音，仍需单独配置模型、TTS 服务和群音色，不能据此自动听懂收到的语音。本轮仅实测 1 秒测试音和约 2–5 秒群短语音；私聊仅离线验证，60 秒/256 KiB 极限和付费 TTS 在线链路未实测。
+语音防撤回只补发缓存原音频，不做语音识别。Linux 已开放完整原音频的通用 `voice.receive`，此能力不包含 ASR；`voice_reply` 使用文字输入、已配置的模型回复及 TTS 生成语音，仍需单独配置模型、TTS 服务和群音色，不能据此自动听懂收到的语音。本轮仅实测 1 秒测试音和约 2–5 秒群短语音；私聊仅离线验证，60 秒/256 KiB 极限和付费 TTS 在线链路未实测。
 
 文字缓存沿用每条 2000 字符的上限，超过部分不能保证恢复。媒体缓存按账号和机器人连接隔离，最多 128 个文件、合计 256 MiB；图片每张最多 20 MiB，文件预算最多 256 MiB，但默认每次扫描只读取 64 MiB，不能据此宣称可恢复任意 256 MiB 附件。只处理原消息明确指定且通过完整 MD5 校验的媒体；缺少完整缓存、校验失败、缓存被淘汰或机器人已重启时不能恢复。
 
@@ -162,7 +164,7 @@ python -B -m tools.linux_media_test --receive-voice --watch-files --file-name WX
 - `LinuxNativeSender` 提供 `send_text()`、`send_at_text()`、`send_image()`、`send_file()`、`send_emoticon()`、`send_voice()`，以及受控的图片范围绑定、上下文查询与下载接口。表情发送需桥接报告 `local_emoticons`，语音发送需报告 `local_voice`，管理台才开放相应能力。
 - 群艾特复用 `ctx.reply_at(message, text)` 和 `ctx.send_at_text(room, text, members)`，声明 `group.text.mention` 能力；长文本由框架按 1023 个 UTF-8 字节分段，仅第一段携带艾特名单。原生名单与可见标签分别传入，不依赖昵称反查。艾特对话、成语接龙等插件现可通过该能力检查，仍需自行配置并启用。
 - `LinuxImageDownloader` 保留受控好友图片验证入口；管理台防撤回使用独立 `LinuxMediaReceiver`，在本连接内发布 `pending` / `ready` / `failed` 状态。原生群图片下载、完整校验与撤回补发已实机通过。
-- Linux 声明 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive`，只允许防撤回插件接收这些媒体事件；不声明普通 `image.receive` / `file.receive` / `voice.receive`。报告 `local_voice` 的桥接另开放 `voice.send`、`friend.voice.send`、`group.voice.send`。Windows 后端保留原能力并提供专用别名。
+- Linux 声明 `image.receive`、`file.receive`、`voice.receive` 及对应好友/群作用域；完整 ready 缓存投递普通插件一次，未完成和失败状态仅供监控与防撤回。专用 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive` 继续可用。报告 `local_voice` 的桥接另开放 `voice.send`、`friend.voice.send`、`group.voice.send`。Windows 后端保留原能力并提供专用别名。
 - `ctx.contacts()` 返回当前账号已同步的好友资料、备注和标签；`ctx.contact_labels()` 单独读取已加载的标签缓存。插件需分别声明 `contact.read` 或 `contact.labels.read`，结果的 `complete` 为 `false`，不能视为服务端完整名单。
 - `ctx.group_members(room)` 复用现有群成员接口，能力为 `group.members.read`；返回标准成员元组或 `None`，后者表示无法提供完整快照。`group.events` 使用现有 `message.data['group_event']` 的 `join` / `leave` 结构，账号和连接隔离规则与 Windows 相同。
 - 原生图片上下文最多缓存 16 条。好友验证入口绑定测试双方账号；管理台扩展使用当前账号和显式会话白名单，绑定、查询及下载核对 `scope_generation`。未知版本、账号或代次不匹配、未完成下载或校验失败都会拒绝返回图片。
@@ -187,3 +189,5 @@ python -B -m unittest discover -s tests -p 'test_linux_*.py'
 若测试曾直接启动独立 Linux 微信，还需清理该测试用户的 `~/xwechat_files/` 与 `~/.xwechat/`。仅处理已经确认属于本次测试的目录；其他日常微信安装及数据目录不在项目清理范围内。另行删除本次测试截图、安装包缓存、反汇编临时输出，以及已退出进程留下的 `helper-*` 私有临时目录。
 
 `native/linux/build/` 是可重建的本地桥接产物，可以删除；保留源码、合成测试 fixture、依赖环境和示例配置。发布时从 Git 待提交文件导出独立目录，检查真实账号/群标记、密钥、个人路径及运行产物，再提交和推送。忽略规则只防止误提交，不能替代本机隐私数据清理。
+
+通用媒体事件字段、缓存生命周期与表情导出说明见 [Linux 通用媒体与表情导出](https://github.com/Prometheus-first/helper/blob/linux/native/linux/MEDIA.md)。

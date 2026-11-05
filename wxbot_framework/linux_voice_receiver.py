@@ -163,6 +163,27 @@ class LinuxVoiceReceiver:
     def _signature(info):
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
+    def owns_ready(self, message):
+        """验证尚未淘汰且未被替换的本连接完整 SILK 缓存。"""
+        if (message.type != 34 or message.session_id != self.session_id or
+                message.data.get('self_wxid') != self.account or
+                message.data.get('voice_status') != 'ready' or not self._active()):
+            return False
+        try:
+            path = Path(message.data.get('voice_path', ''))
+            with self._lock:
+                saved = self._saved.get(path)
+            if (saved is None or saved[2] != self._key(message) or
+                    not path.is_absolute() or path.parent != self._workspace):
+                return False
+            self._private(self._workspace)
+            info = path.lstat()
+            return bool(path.resolve(strict=True) == path and stat.S_ISREG(info.st_mode) and
+                info.st_uid == os.geteuid() and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600 and self._signature(info) == saved[1])
+        except (OSError, ValueError, TypeError, RuntimeError):
+            return False
+
     def _remove(self, path, signature):
         try:
             self._private(self._root)

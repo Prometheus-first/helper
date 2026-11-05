@@ -176,7 +176,7 @@ class LinuxMediaReceiver:
             return message
         clean = self._clean(message)
         if (message.session_id != self.session_id or not self._active() or
-                message.data.get('self_wxid', self.account) != self.account or
+                message.data.get('self_wxid') != self.account or
                 message.is_self or message.data.get('bot_generated')):
             return self._status(clean, 'unavailable', error='媒体消息不属于当前接收会话')
         identifier = message_id(message.data.get('native_message_id'))
@@ -237,6 +237,28 @@ class LinuxMediaReceiver:
         self._seen.move_to_end(key)
         while len(self._seen) > 2048:
             self._seen.popitem(last=False)
+
+    def owns_ready(self, message):
+        """仅确认当前连接仍拥有的完整缓存；不重新下载或扩大读取范围。"""
+        media = 'image' if message.type == 3 else 'file' if message.type == 49 else None
+        if (media is None or message.session_id != self.session_id or
+                message.data.get('self_wxid') != self.account or
+                message.data.get(media + '_status') != 'ready' or not self._active()):
+            return False
+        try:
+            path = Path(message.data.get(media + '_path', ''))
+            with self._lock:
+                saved = self._saved.get(path)
+            if (saved is None or saved[0] != (message.chat_id, message.data.get('native_message_id'), message.type) or
+                    not path.is_absolute() or not path.is_relative_to(self._workspace)):
+                return False
+            self._private(self._workspace)
+            info = path.lstat()
+            return bool(path.resolve(strict=True) == path and stat.S_ISREG(info.st_mode) and
+                info.st_uid == os.geteuid() and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600 and self._signature(info) == saved[1])
+        except (OSError, ValueError, TypeError, RuntimeError):
+            return False
 
     @staticmethod
     def _signature(info):

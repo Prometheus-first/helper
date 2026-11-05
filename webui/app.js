@@ -39,6 +39,7 @@ let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accou
 let loginAttempt = '', loginGeneration = 0, loginTimer = null, loginStarting = false;
 let sendMembers = [], mentionSelection = new Set(), sendSession = '', sendGeneration = 0, sendLoading = false, pendingSend = null, sendPolling = false;
 let sendChatsAttempted = false;
+let pendingEmoticonExport=null, emoticonExportGeneration=0, emoticonExportPolling=false, emoticonExportIdentity=null, emoticonExportFeedback=false;
 let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskLoading=false, taskLastFetch=0, taskSignature='';
 let groupNameDraft = new Map(), discoveredGroups = [];
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
@@ -125,6 +126,7 @@ function renderState() {
   document.querySelectorAll('form:not(#send-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
+  renderEmoticonExport();
   renderContacts();
   moments.render();
   articles.render();
@@ -507,11 +509,65 @@ function renderSendMembers() {
   renderSendState();
 }
 function resetComposer() {
+  resetEmoticonExport();
   sendGeneration++;sendMembers=[];mentionSelection.clear();sendSession='';sendLoading=false;pendingSend=null;
   sendChatsAttempted=false;
   $('#send-chat').innerHTML='<option value="">选择会话</option>';$('#send-content').value='';$('#member-search').value='';
   if(isLinux)$('#linux-mentions').value='';
   $('#send-group').classList.add('hidden');sendFeedback('');renderSendMembers();
+}
+function resetEmoticonExport() {
+  emoticonExportGeneration++;pendingEmoticonExport=null;emoticonExportIdentity=null;emoticonExportFeedback=false;
+  $('#emoticon-export-results').innerHTML='';
+  $('#emoticon-export-status').textContent='请先启动并连接当前账号。';
+}
+function renderEmoticonExport() {
+  if(!isLinux)return;
+  const ready=serviceAvailable&&!!state?.connected&&!busy;
+  const supported=state?.capabilities?.includes('emoticon.extract');
+  $('#export-emoticons').disabled=!ready||!supported||!!pendingEmoticonExport;
+  $('#emoticon-export-convert').disabled=!ready||!supported||!!pendingEmoticonExport;
+  if(!pendingEmoticonExport&&!emoticonExportFeedback&&!$('#emoticon-export-results').innerHTML)
+    $('#emoticon-export-status').textContent=!ready?'请先启动并连接当前账号。':!supported?'当前连接尚未开放表情导出。':'仅导出已缓存表情，不会发送消息。';
+}
+async function pollEmoticonExport() {
+  if(!pendingEmoticonExport||emoticonExportPolling)return;
+  const job=pendingEmoticonExport;
+  emoticonExportPolling=true;
+  try {
+    const result=await api('emoticons-export-status?id='+encodeURIComponent(job.id),undefined,job.robot);
+    if(pendingEmoticonExport!==job||job.robot!==robot||job.generation!==emoticonExportGeneration)return;
+    if(result.status==='exporting')return;
+    pendingEmoticonExport=null;
+    emoticonExportFeedback=true;
+    if(result.status==='done') {
+      const output=result.result;
+      $('#emoticon-export-status').textContent=`导出 ${output.count} 项，其中 ${output.sendable_count} 项可发送 GIF。`;
+      $('#emoticon-export-results').innerHTML=(output.output_directories||[]).map(path=>`<p>本机目录：<code>${escape(path)}</code></p>`).join('')+
+        (output.items||[]).map(item=>`<details><summary>表情 ${escape(item.number)} · ${escape(item.format||'未导出')} ${item.error?'· 部分失败':''}</summary>${['original_path','thumbnail_path','gif_path'].filter(key=>item[key]).map(key=>`<p><code>${escape(item[key])}</code></p>`).join('')}${item.error?`<p>错误：${escape(item.error)}</p>`:''}</details>`).join('');
+    } else $('#emoticon-export-status').textContent=result.error||'表情导出未完成。';
+  } catch(error) {
+    if(pendingEmoticonExport!==job||job.robot!==robot||job.generation!==emoticonExportGeneration)return;
+    if(error.status===404||error.status===409)pendingEmoticonExport=null;
+    emoticonExportFeedback=true;
+    $('#emoticon-export-status').textContent=error.message;
+  } finally {emoticonExportPolling=false;renderEmoticonExport();}
+}
+async function startEmoticonExport() {
+  if($('#export-emoticons').disabled)return;
+  const job={id:crypto.randomUUID(),robot,generation:++emoticonExportGeneration,account:state?.account};
+  emoticonExportIdentity={account:state?.account,startedAt:state?.started_at};
+  pendingEmoticonExport=job;emoticonExportFeedback=false;$('#emoticon-export-results').innerHTML='';
+  $('#emoticon-export-status').textContent='正在导出本地缓存，生成 GIF 可能需要一些时间…';renderEmoticonExport();
+  try {
+    const connection=await api('send-connection',undefined,job.robot);
+    if(pendingEmoticonExport!==job||job.robot!==robot)return;
+    await api('emoticons-export',{request_id:job.id,session_id:connection.session_id,convert:$('#emoticon-export-convert').checked},job.robot);
+    if(pendingEmoticonExport===job)await pollEmoticonExport();
+  } catch(error) {
+    if(pendingEmoticonExport!==job||job.robot!==robot)return;
+    pendingEmoticonExport=null;emoticonExportFeedback=true;$('#emoticon-export-status').textContent=error.message;renderEmoticonExport();
+  }
 }
 async function loadSendChats() {
   const requested=robot,generation=++sendGeneration;
@@ -741,6 +797,7 @@ $('#contact-list').onclick=event=>{const button=event.target.closest('[data-cont
 for(const [id,direction] of [['previous',-1],['next',1]])$('#contact-'+id).onclick=()=>{contactPage+=direction;contactDetail='';renderContacts();$('#contact-list').closest('table').scrollIntoView({block:'start'});};
 function serviceDisconnected() {
   serviceAvailable=false;
+  if(isLinux)resetEmoticonExport();
   resetContacts('管理服务连接中断，恢复后请重新扫描。');
   $('#service-banner').textContent='连接中断，状态待更新。服务重启后请刷新页面。';
   $('#service-banner').classList.remove('hidden'); renderState();
@@ -751,6 +808,7 @@ async function poll(){
   try{
     const [next,tail]=await Promise.all([api('state'),api('logs?after='+logCursor)]);
     if(requested!==robot||generation!==messageGeneration)return;
+    if(isLinux&&emoticonExportIdentity&&(!next.connected||next.account!==emoticonExportIdentity.account||next.started_at!==emoticonExportIdentity.startedAt))resetEmoticonExport();
     state=next;serviceAvailable=true;
     if(isLinux && next.account && config?.account!==next.account)await loadConfig();
     if(!next.connected)sendChatsAttempted=false;
@@ -761,6 +819,7 @@ async function poll(){
     if(tail.rows.length){logs=[...logs,...tail.rows].slice(-1000);renderLogs();}
     await pollMessages(requested,generation);
     await validateContactSession(requested,generation);
+    if(isLinux)await pollEmoticonExport();
     if(requested!==robot||generation!==messageGeneration)return;
     if(Date.now()-lastRobotFetch>4000){lastRobotFetch=Date.now();await loadRobots();}
     if(Date.now()-lastAccountFetch>(isLinux?2000:10000))await loadAccounts(true);
@@ -852,7 +911,7 @@ document.querySelectorAll('[data-page]').forEach(link=>link.addEventListener('cl
 window.addEventListener('hashchange',navigate);navigate();
 async function loadRobots(){
   const data=await api('robots');robotRows=data.robots;
-  if(!robotRows.some(row=>row.id===robot)&&robot!=='default'){robot='default';state=null;config=null;articles.reset();}
+  if(!robotRows.some(row=>row.id===robot)&&robot!=='default'){resetEmoticonExport();robot='default';state=null;config=null;articles.reset();}
   renderState();
 }
 async function switchRobot(identifier){
@@ -956,6 +1015,7 @@ if(isLinux){
     await pollLinuxLogin(r.id,generation);
   });
   $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.remove('hidden');
+  $('#linux-emoticon-export').classList.remove('hidden');$('#export-emoticons').onclick=startEmoticonExport;
   const modelsLink=$('[data-page="models"]');modelsLink.lastChild.textContent='模型设置';$('#models-heading').textContent='模型设置';
   for(const page of ['tasks','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
   $('#linux-start').onclick=()=>action(async()=>{await api('start',{});resetComposer();});

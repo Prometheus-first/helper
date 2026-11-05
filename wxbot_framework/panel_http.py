@@ -130,6 +130,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.wechat_login().cancel(data))
                 if path == '/api/send-media' and hasattr(controller, 'send_media'):
                     return self.send(200, controller.send_media(data))
+                if path == '/api/emoticons-export' and hasattr(controller, 'export_emoticons'):
+                    return self.send(200, controller.export_emoticons(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
                 if path == '/api/scheduled-tasks':
@@ -187,6 +189,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, {'chats': controller.chats()})
             if path == '/api/group-members':
                 return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
+            if path == '/api/emoticons-export-status' and hasattr(controller, 'emoticon_export_status'):
+                return self.send(200, controller.emoticon_export_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/contacts':
                 return self.send(200, controller.contacts())
             if path == '/api/linux-contact-labels' and hasattr(controller, 'linux_contact_labels'):
