@@ -232,7 +232,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(len(receiver._saved),1)
 
     def test_queue_is_bounded_and_raw_submit_uses_same_sanitized_contract(self):
-        receiver=self.receiver(queue_size=1)
+        receiver=self.receiver(queue_size=1, worker_count=1)
         entered,release=threading.Event(),threading.Event()
         def find(*args):
             entered.set();release.wait(2);return None
@@ -247,6 +247,29 @@ class ReceiverTests(unittest.TestCase):
             self.assertEqual(rejected.data['file_status'],'failed')
             self.assertIn('队列已满',rejected.data['file_error'])
             receiver._stop.set();release.set();receiver.close()
+
+    def test_slow_media_does_not_block_following_cached_file(self):
+        first_entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        receiver = self.receiver(worker_count=2)
+        original_find = receiver._find
+        body = b'available now'
+        self.cached_file(body, name='second.txt')
+        def slow_first(payload, deadline):
+            if payload.metadata.title == 'first.txt':
+                first_entered.set()
+                release.wait(2)
+                return None
+            return original_find(payload, deadline)
+        with patch.object(receiver, '_find', side_effect=slow_first):
+            receiver.submit(self.message(file_xml(b'not ready', name='first.txt')))
+            self.assertTrue(first_entered.wait(1))
+            receiver.submit(self.message(file_xml(body, name='second.txt'), identifier='124'))
+            ready = self.updates.get(timeout=1)
+            self.assertEqual(ready.data['native_message_id'], '124')
+            self.assertEqual(ready.data['file_status'], 'ready')
+            self.assertEqual(Path(ready.file_path).read_bytes(), body)
+            release.set()
 
     def test_scan_budget_and_exception_details_are_not_exposed(self):
         self.cached_file(b'fixture')

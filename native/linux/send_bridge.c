@@ -335,12 +335,19 @@ struct sdk_image_context {char md5[33];struct sdk_shared value;};
 static struct sdk_image_context sdk_images[16];static unsigned sdk_image_next;
 static int sdk_md5_valid(const char*value){if(strlen(value)!=32)return 0;for(int i=0;i<32;i++)if(unhex(value[i])<0)return 0;return 1;}
 static void sdk_shared_retain(struct sdk_shared*value){if(value->control)__atomic_add_fetch((int64_t*)((char*)value->control+8),1,__ATOMIC_SEQ_CST);}
-/* Caller holds sdk_image_mutex. The group form is conservative: source+0x18
- * must equal an explicitly allowed room, source+0x30 must equal this account.
+/* Caller holds sdk_image_mutex. source+0x18 must be in the selected scope;
+ * source+0x30 must equal this account.
  * These fields copy to DTO+0x10/+0x28 at 0x605ea7d/0x605ea8a. */
+static int sdk_scope_target(const char*value);
 static int sdk_image_matches(const char*peer,const char*account){
  if(!atomic_load(&sdk_image_capture_enabled)||strcmp(account,sdk_image_account))return 0;
- for(unsigned i=0;i<sdk_image_peer_count;i++)if(!strcmp(peer,sdk_image_peers[i]))return 1;
+ for(unsigned i=0;i<sdk_image_peer_count;i++){
+  if(!strcmp(peer,sdk_image_peers[i]))return 1;
+  /* Empty application allowlist permits regular peers for this account only. */
+  if(!strcmp(sdk_image_peers[i],"*")&&sdk_scope_target(peer)&&
+     strcmp(peer,"filehelper")&&strcmp(peer,"weixin")&&strcmp(peer,"fmessage")&&
+     strcmp(peer,"newsapp")&&strcmp(peer,"floatbottle")&&strncmp(peer,"gh_",3))return 1;
+ }
  return 0;
 }
 static int sdk_clear_image_scope(uint64_t expected,int force){
@@ -437,7 +444,8 @@ static void sdk_perform_image_scope(const char*payload,int voice_test,int multi)
   memcpy(account,payload,(size_t)(separator-payload));const char*start=separator+1;
   while(*start){const char*end=strchr(start,'\n');size_t n=end?(size_t)(end-start):strlen(start);
    if(!n||n>127||count==64){sdk_finish_error("invalid image targets");return;}
-   memcpy(peers[count],start,n);if(!sdk_scope_target(peers[count])){sdk_finish_error("invalid image target");return;}
+   memcpy(peers[count],start,n);if(!sdk_scope_target(peers[count])&&strcmp(peers[count],"*")){sdk_finish_error("invalid image target");return;}
+   if(!strcmp(peers[count],"*")&&(count||end)){sdk_finish_error("invalid image target");return;}
    for(unsigned i=0;i<count;i++)if(!strcmp(peers[i],peers[count])){sdk_finish_error("duplicate image target");return;}
    count++;if(!end)break;start=end+1;if(!*start){sdk_finish_error("empty image target");return;}
   }

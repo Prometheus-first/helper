@@ -86,7 +86,7 @@ class LinuxMediaReceiver:
     def __init__(self, *, account, session_id, pid, storage_root, cache_root, is_current,
                  callback=None, request_image=None, timeout=12.0, queue_size=16, max_files=128,
                  max_cache_bytes=256 * 1024 * 1024, scan_paths=4096,
-                 scan_bytes=64 * 1024 * 1024):
+                 scan_bytes=64 * 1024 * 1024, worker_count=4):
         self.account = validate_account(account)
         if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
             raise ValueError('Linux 媒体接收需要有效会话')
@@ -96,7 +96,7 @@ class LinuxMediaReceiver:
             raise ValueError('Linux 媒体等待时间必须在 0 到 300 秒之间')
         for value, minimum, maximum in ((queue_size, 1, 128), (max_files, 1, 1000),
                 (max_cache_bytes, 1, 1024 * 1024 * 1024), (scan_paths, 1, 100000),
-                (scan_bytes, 1, 1024 * 1024 * 1024)):
+                (scan_bytes, 1, 1024 * 1024 * 1024), (worker_count, 1, 8)):
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ValueError('Linux 媒体缓存预算无效')
         self.session_id, self.pid = session_id, pid
@@ -126,8 +126,12 @@ class LinuxMediaReceiver:
             obj = store(directory, account)
             obj.directory.mkdir(mode=0o700)
             self._stores[media] = obj
-        self._worker = threading.Thread(target=self._run, name='linux-media-receiver', daemon=True)
-        self._worker.start()
+        self._workers = [threading.Thread(target=self._run, name=f'linux-media-receiver-{i}', daemon=True)
+                         for i in range(worker_count)]
+        self._worker = self._workers[0]  # 兼容已有调用方
+        self._running_workers = worker_count
+        for worker in self._workers:
+            worker.start()
 
     @staticmethod
     def _private(path):
@@ -143,7 +147,7 @@ class LinuxMediaReceiver:
 
     @property
     def is_alive(self):
-        return self._worker.is_alive()
+        return any(worker.is_alive() for worker in self._workers)
 
     def _active(self):
         if self._stop.is_set():
@@ -488,7 +492,11 @@ class LinuxMediaReceiver:
                 finally:
                     self._queue.task_done()
         finally:
-            self._cleanup()
+            with self._lock:
+                self._running_workers -= 1
+                last = self._running_workers == 0
+            if last:
+                self._cleanup()
 
     def close(self, timeout=1):
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
@@ -501,5 +509,7 @@ class LinuxMediaReceiver:
                     self._queue.task_done()
                 except queue.Empty:
                     break
-        if threading.current_thread() is not self._worker:
-            self._worker.join(min(timeout, 60))
+        deadline = time.monotonic() + min(timeout, 60)
+        for worker in self._workers:
+            if threading.current_thread() is not worker:
+                worker.join(max(0, deadline - time.monotonic()))

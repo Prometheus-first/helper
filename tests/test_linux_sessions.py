@@ -57,6 +57,21 @@ class LinuxSessionTests(unittest.TestCase):
         self.assertFalse(lease._request_image(source, metadata))
         self.assertEqual(owner.backend.request_image.call_count, 1)
 
+    def test_empty_allowlist_permits_regular_scoped_image_downloads(self):
+        owner = self.sessions[0]
+        owner.backend.configure_image_downloads = Mock(return_value=8)
+        owner.backend.clear_image_downloads = Mock()
+        owner.backend.request_image = Mock(return_value=True)
+        lease = owner.lease([])
+        lease.start(lambda message: None)
+        owner.backend.configure_image_downloads.assert_called_once_with(frozenset())
+        for chat in ('123@chatroom', 'wxid_peer'):
+            self.assertTrue(lease._request_image(Message('', chat, type=3, session_id=lease.session_id), object()))
+        for chat in ('filehelper', 'gh_public', 'weixin'):
+            self.assertFalse(lease._request_image(Message('', chat, type=3, session_id=lease.session_id), object()))
+        lease.stop()
+        owner.backend.clear_image_downloads.assert_called_once_with(8)
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)

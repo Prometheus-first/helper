@@ -62,6 +62,17 @@ class LinuxImageScopeTests(unittest.TestCase):
         self.assertFalse(sender.image_context_available('c'*32, scope_generation=generation))
         self.assertTrue(sender.download_message_image('d'*32, scope_generation=generation))
 
+    def test_unrestricted_scope_accepts_regular_peers_only_for_current_account(self):
+        sender, profile = self.spawn()
+        generation = sender.bind_all_image_scopes('wxid_self_fixture')
+        for md5 in ('a' * 32, 'd' * 32):
+            self.assertTrue(sender.image_context_available(md5, scope_generation=generation))
+        for md5 in ('b' * 32, 'c' * 32, 'e' * 32):
+            self.assertFalse(sender.image_context_available(md5, scope_generation=generation))
+        profile.write_text('wxid_other')
+        with self.assertRaises(LinuxSendError):
+            sender.image_context_available('a' * 32, scope_generation=generation)
+
     def test_same_scope_is_idempotent_including_target_order(self):
         sender, _ = self.spawn()
         generation = sender.bind_image_scopes(['123@chatroom', 'wxid_friend_fixture'], 'wxid_self_fixture')
@@ -105,7 +116,7 @@ class LinuxImageScopeTests(unittest.TestCase):
             with self.subTest(targets=targets[:2]), self.assertRaises(ValueError):
                 sender.bind_image_scopes(targets, 'wxid_self_fixture')
         sender.ensure_context()
-        for value in ('wxid_self_fixture\n', 'wxid_self_fixture\n*', 'wxid_self_fixture\n123@chatroom\n123@chatroom',
+        for value in ('wxid_self_fixture\n', 'wxid_self_fixture\n*\n123@chatroom', 'wxid_self_fixture\n123@chatroom\n*', 'wxid_self_fixture\n123@chatroom\n123@chatroom',
                 'wxid_self_fixture\n'+'\n'.join(f'{i}@chatroom' for i in range(65))):
             with self.assertRaises(LinuxSendError):
                 sender._result(sender._request(b'C', value.encode()))

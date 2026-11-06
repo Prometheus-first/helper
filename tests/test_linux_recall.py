@@ -111,6 +111,37 @@ class LinuxRecallTests(unittest.TestCase):
         self.drain()
         self.backend.send_text.assert_not_called()
 
+    def test_file_recalled_while_cache_pending_is_restored_after_download(self):
+        from wxbot_framework.linux_media_receiver import LinuxMediaReceiver
+        self.app.plugins.enable('anti_recall_file')
+        storage = self.directory / 'xwechat_files'
+        result = []
+        self.backend.send_file.side_effect = lambda chat, path: result.append(
+            (chat, Path(path).read_bytes())) or True
+        receiver = LinuxMediaReceiver(account=SELF, session_id=self.adapter.session_id,
+            pid=1234, storage_root=storage, cache_root=self.directory / 'cache',
+            is_current=lambda: True, callback=self.app._emit, timeout=2)
+        self.addCleanup(receiver.close)
+        body = b'delayed test file'
+        md5 = hashlib.md5(body).hexdigest()
+        xml = (f'<msg><appmsg><type>6</type><title>late.txt</title><md5>{md5}</md5>'
+               f'<appattach><totallen>{len(body)}</totallen></appattach></appmsg></msg>')
+        self.app._emit(receiver.submit(self.event(xml, kind=49, identifier='49')))
+        self.app._emit(self.revoke(identifier='49'))
+        self.drain()
+        self.assertEqual(result, [])
+        path = storage / SELF / 'msg/file/2026-01/late.txt'
+        path.parent.mkdir(parents=True)
+        path.write_bytes(body)
+        deadline = time.monotonic() + 3
+        while not result and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.drain()
+        self.assertEqual(result, [(ROOM, body)])
+        self.app._emit(self.revoke(identifier='49'))
+        self.drain()
+        self.assertEqual(len(result), 1)
+
     def test_cached_image_and_file_survive_source_removal_and_restore_once(self):
         from wxbot_framework.linux_media_receiver import LinuxMediaReceiver
         for plugin in ('anti_recall_image', 'anti_recall_file'):

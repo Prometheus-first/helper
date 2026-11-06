@@ -443,6 +443,23 @@ class LinuxNativeSender:
             self.image_scope_generation = generation
             return generation
 
+    def bind_all_image_scopes(self, account):
+        """Arm regular incoming conversations when the configured allowlist is empty."""
+        from .account import validate_account
+        account = validate_account(account)
+        with self._lock:
+            if 'image_scope_groups' not in self.features:
+                raise LinuxSendError('当前桥接不支持群图片下载范围，请重新编译并重启微信会话')
+            if not self._context_ready:
+                self.ensure_context()
+            result = self._result(self._request(b'C', (account + '\n*').encode('ascii')))
+            generation = result.get('scope_generation')
+            if type(generation) is not int or not 0 < generation <= 2**64-1:
+                raise LinuxSendError('图片范围回执缺少有效代号')
+            self.image_account = account
+            self.image_scope_generation = generation
+            return generation
+
     def clear_image_scope(self, scope_generation):
         """Only cancel the lease that owns this generation, never a newer one."""
         if type(scope_generation) is not int or not 0 < scope_generation <= 2**64-1:

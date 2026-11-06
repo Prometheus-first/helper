@@ -83,6 +83,14 @@ static void fixture_emit_image_context(const char*peer,const char*account,const 
  free((void*)raw((struct str*)(metadata+0x1c8)));
 }
 void fixture_image_scope_ready(const char*peer,const char*account){
+ if(!strcmp(peer,"*")){
+  fixture_emit_image_context("wxid_friend_fixture",account,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  fixture_emit_image_context("123@chatroom",account,"dddddddddddddddddddddddddddddddd");
+  fixture_emit_image_context("wxid_friend_fixture","wxid_wrong_receiver","cccccccccccccccccccccccccccccccc");
+  fixture_emit_image_context("filehelper",account,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  fixture_emit_image_context("gh_fixture",account,"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+  return;
+ }
  fixture_emit_image_context("wxid_unscoped_fixture",account,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
  fixture_emit_image_context(peer,"wxid_wrong_receiver","cccccccccccccccccccccccccccccccc");
  fixture_emit_image_context(peer,account,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");

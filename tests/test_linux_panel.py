@@ -42,6 +42,20 @@ class AdapterTests(unittest.TestCase):
     def event(self, text='hello', kind=1, receiver='wxid_self_fixture', sender='wxid_friend_fixture'):
         return dict(sender=sender, receiver=receiver, text=text, type=kind, sequence=1)
 
+    def test_image_scope_follows_empty_and_explicit_allowlists(self):
+        from unittest.mock import Mock
+        sender = Mock(features={'image_scope_groups'})
+        sender.bind_all_image_scopes.return_value = 5
+        sender.bind_image_scopes.return_value = 6
+        self.backend._sender = sender
+        self.backend.account = 'wxid_self_fixture'
+        self.assertEqual(self.backend.configure_image_downloads([]), 5)
+        sender.bind_all_image_scopes.assert_called_once_with('wxid_self_fixture')
+        self.assertEqual(self.backend.configure_image_downloads(['123@chatroom']), 6)
+        sender.bind_image_scopes.assert_called_once_with(['123@chatroom'], 'wxid_self_fixture')
+        self.assertIsNone(self.backend.configure_image_downloads(['filehelper']))
+        sender.bind_all_image_scopes.assert_called_once()
+
     def test_identity_is_confirmed_from_incoming_receiver(self):
         self.assertFalse(self.backend.account)
         message = self.backend.convert_event(self.event())

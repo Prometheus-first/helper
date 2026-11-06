@@ -242,14 +242,17 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
 
     def configure_image_downloads(self, targets):
         sender = self._sender
-        if sender is None or 'image_scope_groups' not in sender.features or not targets or len(targets) > 64:
+        if sender is None or 'image_scope_groups' not in sender.features or len(targets) > 64:
             return None
         from .text import SYSTEM_PEERS
+        unrestricted = not targets
         targets = sorted(target for target in targets if target != 'filehelper' and
             not target.startswith('gh_') and target not in SYSTEM_PEERS)
-        if not targets:
+        if not targets and not unrestricted:
             return None
         sender.bind_account(self.account)
+        if unrestricted:
+            return sender.bind_all_image_scopes(self.account)
         return sender.bind_image_scopes(targets, self.account)
 
     def clear_image_downloads(self, generation):

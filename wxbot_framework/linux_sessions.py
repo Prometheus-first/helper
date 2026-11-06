@@ -134,9 +134,12 @@ class SessionLease:
         return {'capture_stopped': True, 'wechat_left_running': self.owner.wechat_running()}
 
     def _request_image(self, message, metadata):
-        if (self._image_scope_generation is None or not self.allowed or
-                message.session_id != self.session_id or message.chat_id not in self.allowed or
-                not self._is_current()):
+        from .text import SYSTEM_PEERS
+        if (self._image_scope_generation is None or
+                message.session_id != self.session_id or
+                (self.allowed and message.chat_id not in self.allowed) or
+                message.chat_id == 'filehelper' or message.chat_id.startswith('gh_') or
+                message.chat_id in SYSTEM_PEERS or not self._is_current()):
             return False
         return self._native_backend.request_image(message, metadata,
             self._image_scope_generation, self._is_current)
