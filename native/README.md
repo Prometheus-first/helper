@@ -18,6 +18,7 @@
 - `voice_send.h`：语音对象构造与原生类型 34 发送，入口为 `WxSendVoice` / `WxInspectVoicePath`；排队前复制音频字节，沿用任务存活和安全卸载检查。
 - `file_download.h`：普通文件附件的 CDN 下载，入口为 `WxDownloadFile`；按声明大小和完成大小校验，原始 CDN 参数不写入报告。
 - `file_send.h`：普通文件附件发送，入口为 `WxSendFile` / `WxInspectFilePath`；排队前复制字节，使用微信自己的 InputTemp 路径供上传任务读取。
+- `file_send.h` 也提供 `WxSendVideo` / `WxInspectVideoPath`，仅限已核对指纹的微信 4.2.0.12。文件传输助手和群聊已实测为可播放视频；暂存路径需保留 `.mp4` 后缀。
 - `friend_receive.h`：独立好友验证接收通道，仅复制实时申请，跳过历史初始化记录；沿用 V3 内存队列。
 - `friend_request.h`：`WxInspectFriendRequest` / `WxAcceptFriendRequest`，核对账号并等待微信原生验证结果；申请凭据不写报告。
 - `group_management.h`：原生邀请好友进群及创建群聊，创建成功时读取服务器返回的群 ID；未进行真实群管理操作测试。

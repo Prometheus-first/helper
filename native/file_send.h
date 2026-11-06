@@ -85,17 +85,19 @@ static void file_release_wide(FileWideString* value, TestResult* report) {
 }
 
 static void file_write_report(const FileTaskLease& lease, const TestResult& report,
-                              DWORD status, bool sent, const char* prepared) {
+                              DWORD status, bool sent, const char* prepared, bool video) {
     FILE* log = nullptr;
     const auto& config = lease.config;
     if (_wfopen_s(&log, config.base.base.log_path, L"wb") || !log) return;
     const bool success = !status && !report.exception &&
         !report.native_status && !report.native_status_high;
-    std::fprintf(log, "{\"operation\":\"%s\",\"message_type\":49,\"app_type\":6,"
+    std::fprintf(log, "{\"operation\":\"%s\",\"message_type\":%u,\"app_type\":%u,"
         "\"sent\":%s,\"stage\":%lu,\"exception\":%lu,\"status\":%lu,"
         "\"native_status\":%u,\"native_status_high\":%u,\"bytes\":%llu,"
         "\"completion_success\":%s,\"target\":",
-        config.send ? "file_send" : "file_probe", sent ? "true" : "false",
+        video ? (config.send ? "video_send" : "video_probe") :
+                (config.send ? "file_send" : "file_probe"), video ? 43u : 49u,
+        video ? 0u : 6u, sent ? "true" : "false",
         report.stage, report.exception, status, report.native_status, report.native_status_high,
         static_cast<unsigned long long>(lease.size), success ? "true" : "false");
     write_json_string(log, config.base.target);
@@ -111,7 +113,7 @@ static void file_write_report(const FileTaskLease& lease, const TestResult& repo
     std::fclose(log);
 }
 
-static void file_send_on_task(const FileTaskLease& lease) {
+static void file_send_on_task(const FileTaskLease& lease, bool video) {
     const FileConfig& config = lease.config;
     SharedMessage context{}, provider{}, manager{}, message{};
     FileWideString directory{}, prepared{};
@@ -154,6 +156,23 @@ static void file_send_on_task(const FileTaskLease& lease) {
                 *reinterpret_cast<const char* const*>(token.data) : token.data;
             struct StringView { const char* data; uint64_t length; } token_view{token_data, token.length};
             reinterpret_cast<Join>(core_address(core_base, 0x9f4b0))(&directory, &prepared, &token_view);
+            if (video) {
+                // Weixin inspects the staged path extension to choose video
+                // upload; an extensionless staging path becomes a file card.
+                const wchar_t* without_suffix = file_wide_data(prepared);
+                wchar_t with_suffix[1024]{};
+                if (!without_suffix || prepared.length + 4 >= std::size(with_suffix) ||
+                    wcscpy_s(with_suffix, without_suffix) ||
+                    wcscat_s(with_suffix, L".mp4")) {
+                    status = ERROR_BAD_PATHNAME; __leave;
+                }
+                FileWideString view{};
+                *reinterpret_cast<const wchar_t**>(view.data) = with_suffix;
+                view.length = wcslen(with_suffix);
+                view.capacity = std::size(with_suffix) - 1;
+                using CopyWidePath = void* (__fastcall*)(void*, const FileWideString*);
+                reinterpret_cast<CopyWidePath>(core_address(core_base, 0x9b5d0))(&prepared, &view);
+            }
             const wchar_t* path = file_wide_data(prepared);
             const wchar_t* root = file_wide_data(directory);
             if (!path || !root || prepared.length <= directory.length ||
@@ -168,13 +187,18 @@ static void file_send_on_task(const FileTaskLease& lease) {
             }
             report.stage = 71;
             using Factory = SharedMessage* (__fastcall*)(SharedMessage*);
-            reinterpret_cast<Factory>(core_address(core_base, 0x2bab360))(&message);
+            // The video factory and vtable are verified only for 4.2.0.12.
+            const uintptr_t factory = video ? core_video_address(core_base, 0x3078f60) : core_address(core_base, 0x2bab360);
+            const uintptr_t vtable = video ? core_video_address(core_base, 0x93bd678) : core_address(core_base, 0x8e53718);
+            if (!factory || !vtable) { status = ERROR_NOT_SUPPORTED; __leave; }
+            reinterpret_cast<Factory>(factory)(&message);
             if (!message.object || !message.control ||
-                *static_cast<const uintptr_t*>(message.object) != core_address(core_base, 0x8e53718)) {
+                *static_cast<const uintptr_t*>(message.object) != vtable) {
                 status = ERROR_INVALID_DATA; __leave;
             }
             auto object = static_cast<unsigned char*>(message.object);
-            *reinterpret_cast<uint64_t*>(object + 0x118) = 0x600000031ull;
+            *reinterpret_cast<uint64_t*>(object + 0x118) = video ? 43ull : 0x600000031ull;
+            if (video) *reinterpret_cast<uint32_t*>(object + 0x76c) = config.reserved;
             using CopyWide = void* (__fastcall*)(void*, const FileWideString*);
             reinterpret_cast<CopyWide>(core_address(core_base, 0x9b5d0))(object + 0x120, &prepared);
             *reinterpret_cast<uint64_t*>(object + 0x1c8) = lease.size;
@@ -240,7 +264,7 @@ static void file_send_on_task(const FileTaskLease& lease) {
         image_free_string(&token, &report);
         file_release_wide(&prepared, &report);
         file_release_wide(&directory, &report);
-        file_write_report(lease, report, status, sent, prepared_utf8);
+        file_write_report(lease, report, status, sent, prepared_utf8, video);
     } __finally { _InterlockedDecrement(&active_callbacks); }
 }
 
@@ -251,7 +275,7 @@ static DWORD file_copy_config(void* parameter, FileConfig* config) {
     return ERROR_SUCCESS;
 }
 
-static DWORD file_send_dispatch(void* parameter, bool send) {
+static DWORD file_send_dispatch(void* parameter, bool send, bool video) {
     if (live_tasks || live_completions) return ERROR_BUSY;
     FileConfig config{};
     DWORD status = file_copy_config(parameter, &config);
@@ -261,7 +285,7 @@ static DWORD file_send_dispatch(void* parameter, bool send) {
     const size_t account_length = strnlen_s(config.account, sizeof(config.account));
     const size_t log_length = wcsnlen_s(config.base.base.log_path, std::size(config.base.base.log_path));
     if (config.base.base.size != sizeof(config) || config.base.base.pid != GetCurrentProcessId() ||
-        config.send != (send ? 1u : 0u) || config.reserved || !path_length ||
+        config.send != (send ? 1u : 0u) || (video ? !config.reserved : config.reserved != 0) || !path_length ||
         path_length >= sizeof(config.base.base.text) || !target_length ||
         target_length >= sizeof(config.base.target) || !account_length ||
         account_length >= sizeof(config.account) || !log_length ||
@@ -270,26 +294,26 @@ static DWORD file_send_dispatch(void* parameter, bool send) {
         std::strchr(config.account, '@') || !std::strcmp(config.account, "filehelper"))
         return ERROR_INVALID_PARAMETER;
     HMODULE core = GetModuleHandleW(L"Weixin.dll");
-    if (!core || !core_fingerprint(core)) return ERROR_NOT_SUPPORTED;
+    if (!core || !core_fingerprint(core) || (video && core_profile_id != 4)) return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     try {
         auto lease = std::make_shared<FileTaskLease>(config);
         // The queued callback owns the open snapshot handle even after timeout.
         status = file_read_source(*lease);
         if (status) return status;
-        std::function<void()> task = [lease]() { file_send_on_task(*lease); };
+        std::function<void()> task = [lease, video]() { file_send_on_task(*lease, video); };
         return schedule_task(config.base.base, &task);
     } catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
     catch (...) { return ERROR_GEN_FAILURE; }
 }
 
-static DWORD file_send_export(void* parameter, bool send) {
+static DWORD file_send_export(void* parameter, bool send, bool video = false) {
     _InterlockedIncrement(&active_callbacks);
     bool admitted = false;
     __try {
         if (_InterlockedCompareExchange(&file_send_admission, 1, 0) != 0) return ERROR_BUSY;
         admitted = true;
-        return file_send_dispatch(parameter, send);
+        return file_send_dispatch(parameter, send, video);
     } __finally {
         if (admitted) _InterlockedExchange(&file_send_admission, 0);
         _InterlockedDecrement(&active_callbacks);
@@ -301,4 +325,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxInspectFilePath(void* parameter)
 }
 extern "C" __declspec(dllexport) DWORD WINAPI WxSendFile(void* parameter) {
     return file_send_export(parameter, true);
+}
+extern "C" __declspec(dllexport) DWORD WINAPI WxInspectVideoPath(void* parameter) {
+    return file_send_export(parameter, false, true);
+}
+extern "C" __declspec(dllexport) DWORD WINAPI WxSendVideo(void* parameter) {
+    return file_send_export(parameter, true, true);
 }

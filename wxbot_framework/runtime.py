@@ -327,6 +327,7 @@ class BotApplication:
             self.stop_event.set()
         elif action == "help" and len(words) == 1:
             logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-file 会话ID \"文件路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
+            logger.info("视频发送：send-video 会话ID \"视频路径\"")
             logger.info("好友与群管理：friend-requests / accept-friend 申请ID / invite-members 群ID 好友ID [好友ID...] / create-group 好友ID 好友ID [好友ID...]")
             logger.info("群成员：group-members 群ID / group-nickname 群ID 微信ID；欢迎提醒：enable group_notice / disable group_notice")
         elif action == "status" and len(words) == 1:
@@ -368,6 +369,10 @@ class BotApplication:
             if not self.service.send_voice(words[1], words[2]):
                 raise RuntimeError("微信未接受语音发送请求，请查看原生结果")
             logger.info("语音发送请求已提交：会话ID=%s", words[1])
+        elif action == "send-video" and len(words) == 3:
+            if not self.service.send_video(words[1], words[2]):
+                raise RuntimeError("微信未接受视频发送请求，请查看原生结果")
+            logger.info("视频发送请求已提交：会话ID=%s", words[1])
         elif action == "send-file" and len(words) == 3:
             if not self.service.send_file(words[1], words[2]):
                 raise RuntimeError("微信未接受文件发送请求，请查看原生结果")

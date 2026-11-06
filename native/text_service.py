@@ -736,6 +736,36 @@ class NativeTextService(NativeFileHelperService):
                 self._check_account(force=True)
                 return self.last_send_result.get("success", False)
 
+    def send_video(self, to_wxid, path):
+        from wxbot_framework.files import prepare_file
+        from wxbot_framework.videos import inspect_video
+        validate_target(to_wxid)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生视频服务没有运行")
+            if self.wechat_version != '4.2.0.12':
+                raise RuntimeError("原生视频发送仅适配微信 4.2.0.12")
+            self._check_account(force=True)
+            account = validate_account(self.self_wxid)
+            root = self.file_directory.resolve()
+            account_directory = (root / account).resolve()
+            if account_directory.parent != root:
+                raise ValueError("视频临时目录必须属于当前账号")
+            with prepare_file(path, account_directory) as file:
+                video = inspect_video(file.path)
+                if not self._owns_bridge or self._stop.is_set():
+                    raise RuntimeError("微信连接已结束，取消待发送视频")
+                self._check_account(force=True)
+                if self.self_wxid != account:
+                    raise RuntimeError("微信账号已发生变化，取消待发送视频")
+                self.last_result = self.last_send_result = self._run(
+                    "--dispatch", pid=self.pid, keep_loaded=True,
+                    preserve_report=self.preserve_reports, target=to_wxid,
+                    video_path=str(video.path), video_duration_seconds=video.duration_seconds,
+                    account=account)
+                self._check_account(force=True)
+                return self.last_send_result.get("success", False)
+
     def export_emoticons(self, *, convert=True):
         from wxbot_framework.emoticon_account import read_emoticon_cache_key
         from wxbot_framework.emoticons import export_local_emoticons

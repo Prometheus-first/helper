@@ -211,6 +211,13 @@ static uintptr_t core_sns_address(uintptr_t base, uintptr_t rva) {
     return 0;
 }
 
+// These two RVAs were observed only in the exact 4.2.0.12 build.
+static uintptr_t core_video_address(uintptr_t base, uintptr_t rva) {
+    if (!base || InterlockedCompareExchange(&core_profile_id, 0, 0) != 4) return 0;
+    if (rva != 0x3078f60 && rva != 0x93bd678) return 0;
+    return base + rva;
+}
+
 // The publishing RVAs are native 4.1.15.56 values; 4.2 has a separate map.
 static uintptr_t core_moments_address(uintptr_t base, uintptr_t rva) {
     const LONG profile = InterlockedCompareExchange(&core_profile_id, 0, 0);

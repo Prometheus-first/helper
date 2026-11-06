@@ -38,7 +38,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "group.text.mention", "message.recall", "group.members.read", "group.events", "image.receive", "image.send",
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
     "group.file.receive", "group.file.send", "voice.receive", "voice.send",
-    "friend.voice.send", "group.voice.send",
+    "friend.voice.send", "group.voice.send", "video.send", "group.video.send",
 })
 
 
@@ -135,6 +135,9 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def send_file(self, chat_id, path):
         return self.raw.send_file(chat_id, path)
+
+    def send_video(self, chat_id, path):
+        return self.raw.send_video(chat_id, path)
 
     def friend_requests(self):
         return self.raw.friend_requests()

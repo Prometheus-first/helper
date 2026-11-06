@@ -105,6 +105,8 @@ def scheduled_greeting(self, params, ctx):
 | `ctx.send_image(chat_id, path)` | 发送本地图片 |
 | `ctx.reply_file(message, path)` | 回复本地文件附件 |
 | `ctx.send_file(chat_id, path)` | 发送本地文件附件 |
+| `ctx.reply_video(message, path)` | 以微信视频消息回复 MP4 |
+| `ctx.send_video(chat_id, path)` | 以微信视频消息发送 MP4 |
 | `ctx.reply_emoticon(message, path)` | 回复 GIF 表情 |
 | `ctx.send_emoticon(chat_id, path)` | 发送 GIF 表情 |
 | `ctx.reply_voice(message, path)` | 回复语音条 |
@@ -116,6 +118,8 @@ def scheduled_greeting(self, params, ctx):
 | `ctx.group_member_role(room, wxid, expected_session=message.session_id)` | 查询群主、群管理员或普通群友身份，未确认时返回 `unknown` |
 
 每类文件有独立限制，见对应的消息章节。`ctx.send_voice` 发送已有音频；可选的 `voice_reply` 插件通过 Fish Audio 合成艾特对话的语音，见[语音回复](../messages/voice.md#fish-audio-文字转语音)。
+
+视频发送目前支持微信 4.2.0.12 的本地 MP4 文件。可在插件的 `requires` 中声明 `video.send`；框架会读取容器时长，并将副本放入微信暂存目录。文件传输助手和群聊已验证，好友私聊尚未单独实测。
 
 ## 处理图片
 

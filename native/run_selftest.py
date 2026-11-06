@@ -206,12 +206,24 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         download_image=None, emoticon_path=None, emoticon_probe=False, account=None,
         voice_path=None, voice_duration_ms=None, voice_probe=False,
         file_path=None, file_probe=False, download_file=None,
+        video_path=None, video_duration_seconds=None, video_probe=False,
         group_operation=None, group_members=None, group_probe=False,
         friend_request=None, friend_probe=False):
     dll = Path(bridge_path or DLL).resolve()
     if dll not in (DLL.resolve(), TEXT_DLL.resolve()):
         raise ValueError("不支持的桥接 DLL 路径")
     generic = dll == TEXT_DLL.resolve()
+    is_video = video_path is not None
+    if is_video:
+        if file_path is not None or file_probe or type(video_probe) is not bool:
+            raise ValueError("视频参数不能与文件参数混用")
+        from wxbot_framework.videos import inspect_video
+        video = inspect_video(video_path)
+        if type(video_duration_seconds) is not int or video_duration_seconds != video.duration_seconds:
+            raise ValueError("视频时长必须与 MP4 内容一致")
+        file_path, file_probe = str(video.path), video_probe
+    elif video_probe or video_duration_seconds is not None:
+        raise ValueError("视频检查和时长需要视频路径")
     accepting_friend = mode == "--accept-friend"
     if accepting_friend:
         if (not generic or type(friend_probe) is not bool or
@@ -404,6 +416,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                 any(value is not None for value in (emoticon_path, group_operation)))
             if unsupported:
                 raise RuntimeError('微信 4.2.0.12 此功能尚未适配')
+        elif is_video:
+            raise RuntimeError('原生视频发送仅适配微信 4.2.0.12')
         if build.get('wechat_version') == '4.2.0.11':
             unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend') or
                 any(value is not None for value in (emoticon_path, group_operation)))
@@ -437,7 +451,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             if voice_path is not None:
                 name = b"WxInspectVoicePath" if voice_probe else b"WxSendVoice"
             if file_path is not None:
-                name = b"WxInspectFilePath" if file_probe else b"WxSendFile"
+                name = ((b"WxInspectVideoPath" if file_probe else b"WxSendVideo") if is_video else
+                        (b"WxInspectFilePath" if file_probe else b"WxSendFile"))
         export = next(item.address for item in pe.DIRECTORY_ENTRY_EXPORT.symbols if item.name == name)
 
         def allocate(data):
@@ -496,6 +511,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         if file_path is not None:
             config.account = account.encode("ascii")
             config.send = 0 if file_probe else 1
+            if is_video:
+                config.reserved = video_duration_seconds
         config_parameter = allocate(bytes(config))
         exit_code = remote_call(process, loaded[0] + export, config_parameter)
         if mode == "--remove" and exit_code == 0:
@@ -544,10 +561,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                     report.get("operation") == ("voice_probe" if voice_probe else "voice_send"))
             if file_path is not None:
                 report = result.get("report", {})
-                result["success"] = (result["success"] and report.get("message_type") == 49 and
-                    report.get("app_type") == 6 and report.get("file_path") == text and
+                result["success"] = (result["success"] and report.get("message_type") == (43 if is_video else 49) and
+                    report.get("app_type") == (0 if is_video else 6) and report.get("file_path") == text and
                     report.get("sent") is (not file_probe) and
-                    report.get("operation") == ("file_probe" if file_probe else "file_send"))
+                    report.get("operation") == (("video_probe" if file_probe else "video_send") if is_video else
+                                                ("file_probe" if file_probe else "file_send")))
             if downloading_file:
                 report = result.get("report", {})
                 result["success"] = (result["success"] and report.get("operation") == "file_download" and
