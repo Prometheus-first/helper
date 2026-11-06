@@ -53,7 +53,7 @@ const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 
 async function api(path, body, identifier = robot) {
   const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/') || path.startsWith('linux-sessions/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
-  if(isLinux && body !== undefined && scope && ['config','plugin','plugin-source','plugin-business','plugin-reset'].includes(path.split('?')[0])) body={...body,expected_account:config?.account || ''};
+  if(isLinux && body !== undefined && scope && ['config','plugin','plugin-source','plugin-business','plugin-reset','scheduled-tasks','scheduled-tasks/delete','scheduled-tasks/toggle'].includes(path.split('?')[0])) body={...body,expected_account:config?.account || ''};
   const response = await fetch('/api/' + path + scope, {method: body === undefined ? 'GET' : 'POST', cache:'no-store',
     headers:{'X-Helper-Token':token, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
     ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -82,7 +82,7 @@ async function action(callback) {
 }
 function navigate() {
   let name = location.hash.slice(1) in pages ? location.hash.slice(1) : 'overview';
-  if(isLinux && ['tasks','moments','articles'].includes(name))name='overview';
+  if(isLinux && ['moments','articles'].includes(name))name='overview';
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + name));
   document.querySelectorAll('[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === name));
   document.querySelectorAll('[data-page]').forEach(node => node.dataset.page === name ? node.setAttribute('aria-current','page') : node.removeAttribute('aria-current'));
@@ -1017,7 +1017,7 @@ if(isLinux){
   $('#linux-send-options').classList.remove('hidden');$('#tts-form').classList.remove('hidden');
   $('#linux-emoticon-export').classList.remove('hidden');$('#export-emoticons').onclick=startEmoticonExport;
   const modelsLink=$('[data-page="models"]');modelsLink.lastChild.textContent='模型设置';$('#models-heading').textContent='模型设置';
-  for(const page of ['tasks','moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
+  for(const page of ['moments','articles'])$('[data-page="'+page+'"]').classList.add('hidden');
   $('#linux-start').onclick=()=>action(async()=>{await api('start',{});resetComposer();});
   $('#linux-stop').onclick=()=>action(async()=>{await api('stop',{});resetComposer();});
   $('#linux-send-kind').onchange=renderLinuxSendKind;$('#linux-send-path').oninput=renderSendState;

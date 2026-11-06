@@ -100,6 +100,24 @@ class LinuxWireTests(unittest.TestCase):
         finally:
             left.close();right.close()
 
+    def test_friend_request_frame_is_bounded_and_preserves_type(self):
+        sender, receiver, body = b'fmessage', b'wxid_self_fixture', b'<msg opcode="2"/>'
+        frame = struct.pack('!4sQIIIIQI', b'HLE1', 1, len(sender), len(receiver), len(body), 37, 0, 0) + sender + receiver + body
+        left, right = socket.socketpair()
+        try:
+            right.sendall(frame)
+            event = read_text_event(left)
+            self.assertEqual((event['type'], event['text']), (37, body.decode()))
+        finally:
+            left.close(); right.close()
+        left, right = socket.socketpair()
+        try:
+            right.sendall(struct.pack('!4sQIIIIQI', b'HLE1', 1, 1, 1, 16385, 37, 0, 0))
+            with self.assertRaises(LinuxWireError):
+                read_text_event(left)
+        finally:
+            left.close(); right.close()
+
     def test_group_system_frame_rejects_oversized_body_before_reading_it(self):
         for kind in (10000, 10002):
             left,right=socket.socketpair()

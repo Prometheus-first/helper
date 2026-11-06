@@ -69,7 +69,23 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
             if self.account not in (sender, receiver):
                 raise RuntimeError('Linux 微信登录账号已变化，请停止后重新连接')
             identified, adapter = self.account, self.adapter
-        if event.get('type', 1) == 1:
+        if event.get('type') == 37:
+            # The ticket-bearing XML stays in an internal object until the
+            # account-bound lease replaces it with public request metadata.
+            from .friend_requests import FriendRequestError, parse_friend_request
+            if (not getattr(self, 'identity_ready', False) or receiver != identified or
+                    sender == identified or sender.endswith('@chatroom')):
+                return None
+            try:
+                request = parse_friend_request(event['text'])
+                if request.opcode != 2:
+                    return None
+            except (FriendRequestError, ValueError):
+                return None
+            message = Message(text='', chat_id='fmessage', sender_id=request.sender_id,
+                receiver_id=receiver, type=37, sequence=event['sequence'], session_id=self.session_id,
+                data={'self_wxid':identified, '_linux_friend_request':request})
+        elif event.get('type', 1) == 1:
             message = adapter.convert(event)
         else:
             routed = adapter._router.convert(sender, receiver, event['text'],
@@ -125,6 +141,8 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
         if message is not None:
             self.account, self.adapter = identified, adapter
             with self._chat_lock:
+                if message.type == 37:
+                    return message
                 self._chats[message.chat_id] = {'chat_id': message.chat_id, 'name': '', 'is_group': message.is_group}
                 self._chats.move_to_end(message.chat_id)
                 while len(self._chats) > 1000:

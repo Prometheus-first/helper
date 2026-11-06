@@ -56,6 +56,22 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(self.backend.configure_image_downloads(['filehelper']))
         sender.bind_all_image_scopes.assert_called_once()
 
+    def test_friend_request_requires_managed_identity_and_keeps_xml_internal(self):
+        xml = ('<msg fromusername="wxid_friend_fixture" fromnickname="测试好友" '
+               'content="测试" scene="30" opcode="2" encryptusername="v3_SYNTHETIC_USER" '
+               'ticket="v4_SYNTHETIC_TICKET"/>')
+        event = self.event(xml, kind=37, sender='fmessage')
+        self.assertIsNone(self.backend.convert_event(event))
+        self.backend.identity_ready = True
+        message = self.backend.convert_event(event)
+        self.assertEqual((message.type, message.chat_id), (37, 'fmessage'))
+        self.assertNotIn('v3_SYNTHETIC_USER', repr(message))
+        self.assertNotIn('v4_SYNTHETIC_TICKET', repr(message))
+        with self.assertRaises(RuntimeError):
+            self.backend.convert_event(dict(event, receiver='wxid_other'))
+        self.assertIsNone(self.backend.convert_event(dict(event, sender='123@chatroom')))
+        self.assertIsNone(self.backend.convert_event(dict(event, text=xml.replace('opcode="2"', 'opcode="3"'))))
+
     def test_identity_is_confirmed_from_incoming_receiver(self):
         self.assertFalse(self.backend.account)
         message = self.backend.convert_event(self.event())

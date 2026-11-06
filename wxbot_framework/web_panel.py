@@ -723,9 +723,12 @@ class PanelController:
             self._article_account(account, required=True)
         return dict(result, account=account)
 
+    def scheduled_account(self):
+        return self.store.load().get('wechat_account')
+
     def list_scheduled_tasks(self):
         self.scheduled_tasks.start()
-        account = self.store.load().get('wechat_account')
+        account = self.scheduled_account()
         return {'tasks': [row for row in self.scheduled_tasks.list()['tasks'] if row.get('account') == account]}
 
     def scheduled_action_types(self):

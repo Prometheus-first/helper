@@ -214,9 +214,16 @@ class LinuxPanelController(PanelController):
         snapshot = self.snapshot()
         return {'robots': [dict(snapshot, id='default', name='Linux 微信')]}
 
+    def scheduled_account(self):
+        if self.session is not None:
+            profile = self.session.profile
+            return profile.get('wxid', '') if profile.get('logged_in') else ''
+        app = self.app
+        return app.config.get('wechat_account', '') if app and app._connection_ready else ''
+
     def guard_route(self, path, write):
         unsupported = ('/api/moments', '/api/article', '/api/contact',
-                       '/api/scheduled-', '/api/wechat-login', '/api/accounts/', '/api/account')
+                       '/api/wechat-login', '/api/accounts/', '/api/account')
         if any(path.startswith(prefix) for prefix in unsupported) and path not in ('/api/accounts', '/api/contacts'):
             raise PanelError('Linux 版尚未适配此功能', 409)
 

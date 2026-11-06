@@ -34,6 +34,10 @@ class ScheduledTasks:
         self.slots = threading.BoundedSemaphore(8)
         self.inflight = set()
 
+    def _account(self):
+        current = getattr(self.controller, 'scheduled_account', None)
+        return current() if callable(current) else self.controller.store.load().get('wechat_account')
+
     def _read(self):
         if not self.path.exists():
             return []
@@ -107,7 +111,7 @@ class ScheduledTasks:
             interval = 0
         else:
             raise PanelError('请选择执行方式')
-        account = self.controller.store.load().get('wechat_account')
+        account = self._account()
         if account_is_unbound(account):
             raise PanelError('请先选择已登录的微信账号', 409)
         enabled = data.get('enabled', True)
@@ -139,7 +143,7 @@ class ScheduledTasks:
         enabled = data.get('enabled')
         if type(enabled) is not bool:
             raise PanelError('任务状态无效')
-        account = self.controller.store.load().get('wechat_account')
+        account = self._account()
         with self.lock:
             rows = self._read()
             row = next((r for r in rows if r.get('id') == data.get('id') and r.get('account') == account), None)
@@ -153,7 +157,7 @@ class ScheduledTasks:
         return {'ok': True}
 
     def delete(self, data):
-        account = self.controller.store.load().get('wechat_account')
+        account = self._account()
         with self.lock:
             rows = self._read()
             remaining = [r for r in rows if not (r['id'] == data.get('id') and r['account'] == account)]
@@ -219,7 +223,7 @@ class ScheduledTasks:
                 current = next((row for row in self._read() if row['id'] == task['id']), None)
                 if not current or not current.get('enabled') or current.get('claim') != task['claim']:
                     return '已取消'
-                if self.stop_event.is_set() or self.controller.store.load().get('wechat_account') != task['account']:
+                if self.stop_event.is_set() or self._account() != task['account']:
                     return '已跳过（账号已变化）'
             connection = self.controller.send_connection()
             with self.lock:

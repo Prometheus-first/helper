@@ -44,11 +44,11 @@ static int stop_requested(void){
 static void notice(const char *s){ssize_t ignored=write(STDERR_FILENO,s,strlen(s));(void)ignored;}
 static int safe_read(void *out,const void *in,size_t n){struct iovec a={out,n},b={(void*)in,n};return process_vm_readv(getpid(),&a,1,&b,1,0)==(ssize_t)n;}
 static void event_free(struct event *e){if(!e)return;for(int i=0;i<4;i++)free(e->fields[i]);free(e);}
-static int get_field(const void *obj,unsigned off,unsigned char **out,uint32_t *len){
+static int get_field(const void *obj,unsigned off,unsigned char **out,uint32_t *len,uint64_t maxlen){
  uintptr_t child=0,s=0,data=0;unsigned char header=0;uint64_t n=0;
  if(!safe_read(&child,(const char*)obj+off,8)||!child||!safe_read(&s,(void*)(child+8),8)||!s||!safe_read(&header,(void*)s,1))return 0;
  if(header&1){if(!safe_read(&n,(void*)(s+8),8)||!safe_read(&data,(void*)(s+16),8))return 0;}else{n=header>>1;data=s+1;}
- if(!n||n>UINT32_MAX||!data||(off!=32&&n>127))return 0;
+ if(!n||n>UINT32_MAX||n>maxlen||!data||(off!=32&&n>127))return 0;
  unsigned char *buf=malloc((size_t)n);if(!buf)return 0;
  if(!safe_read(buf,(void*)data,(size_t)n)){free(buf);return 0;}
  unsigned char *check=malloc((size_t)n);uintptr_t child2=0,s2=0;unsigned char header2=0;uint64_t n2=0;uintptr_t data2=0;
@@ -102,13 +102,15 @@ static void capture(const void *obj){
  uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4))return;
  if(type!=1){
   int media=(type==3||type==49||type==34);
-  int monitor_only=(type==47||type==10000||type==10002);
+  int monitor_only=(type==37||type==47||type==10000||type==10002);
   if((!media&&!monitor_only)||(monitor_only&&!panel_media)||(media&&!media_test&&!panel_media)||
      (type==34&&!voice_test&&!panel_media))return;
  }
  struct event *e=calloc(1,sizeof(*e));if(!e){notice("helper-linux: event allocation failed\n");return;}
- for(int i=0;i<3;i++)if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i])){event_free(e);return;}
- if((type==34||type==10000||type==10002)&&e->lengths[2]>16384){event_free(e);return;}
+ for(int i=0;i<3;i++){
+  uint64_t maxlen=(i==2&&(type==34||type==37||type==10000||type==10002))?16384:UINT32_MAX;
+  if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i],maxlen)){event_free(e);return;}
+ }
  e->type=type;
  unsigned char present=0,present2=0;uint64_t native_id=0,native_id2=0;
  if(safe_read(&present,(const char*)obj+0x6d,1)&&(present&8)&&safe_read(&native_id,(const char*)obj+0x50,8)&&
@@ -157,7 +159,7 @@ static int connect_socket(void){
 static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
 static int send_event(int fd,const struct event *e){
  unsigned char h[40];int has_source=e->type==1&&e->lengths[3],voice=e->type==34;
- int extended=voice||e->native_id||e->type==47||e->type==10000||e->type==10002;
+ int extended=voice||e->native_id||e->type==37||e->type==47||e->type==10000||e->type==10002;
  size_t header_size=extended?40:e->type==1?(has_source?28:24):28;
  memcpy(h,voice?"HLV1":extended?"HLE1":e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
  for(int i=0;i<3;i++){uint32_t n=htonl(e->lengths[i]);memcpy(h+12+4*i,&n,4);}

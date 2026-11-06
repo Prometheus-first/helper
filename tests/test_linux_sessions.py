@@ -94,6 +94,91 @@ class LinuxSessionTests(unittest.TestCase):
             time.sleep(.02)
         self.fail('timed out')
 
+    def test_scheduled_tasks_use_current_linux_account_and_isolate_sessions(self):
+        first, second = self.sessions
+        task_data = dict(name='测试', chat_id='filehelper', content='测试内容',
+                         kind='interval', interval_seconds=300)
+        with patch.object(first.panel.scheduled_tasks, 'start'), patch.object(second.panel.scheduled_tasks, 'start'):
+            first.panel.guard_route('/api/scheduled-tasks', True)
+            first.validate_request('/api/scheduled-tasks', {'expected_account': 'wxid_one'})
+            with self.assertRaises(PanelError):
+                first.validate_request('/api/scheduled-tasks', {'expected_account': 'wxid_two'})
+            with patch('wxbot_framework.scheduled_tasks.time.time', return_value=1000):
+                task = first.panel.save_scheduled_task(task_data)['task']
+            self.assertEqual(task['account'], 'wxid_one')
+            self.assertEqual(len(first.panel.list_scheduled_tasks()['tasks']), 1)
+            self.assertEqual(second.panel.list_scheduled_tasks()['tasks'], [])
+            with self.assertRaises(PanelError):
+                second.panel.delete_scheduled_task({'id': task['id']})
+            first.panel.send_connection = Mock(return_value={'session_id':'session'})
+            first.panel.send_text = Mock(return_value={'status':'sent'})
+            first.panel.scheduled_tasks.tick(1300)
+            self.assertEqual(first.panel.send_text.call_count, 1)
+            self.assertEqual(first.panel.list_scheduled_tasks()['tasks'][0]['last_status'], '已发送')
+            first.profile = dict(first.profile, logged_in=False)
+            with self.assertRaises(PanelError):
+                first.panel.save_scheduled_task(task_data)
+            self.assertEqual(first.panel.list_scheduled_tasks()['tasks'], [])
+
+    def test_scheduled_task_http_uses_linux_identity_and_rejects_stale_account(self):
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+        from wxbot_framework.panel_http import PanelServer
+        first = self.sessions[0]
+        server = PanelServer(first, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 3)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f'http://127.0.0.1:{server.server_address[1]}'
+        def request(path, data=None):
+            headers = {'X-Helper-Token': server.token}
+            raw = None
+            if data is not None:
+                headers['Content-Type'] = 'application/json'
+                raw = json.dumps(data).encode()
+            with urlopen(Request(base + path, data=raw, headers=headers), timeout=4) as response:
+                return json.load(response)
+        payload = dict(name='提醒', kind='interval', interval_seconds=300,
+                       params={'chat_id':'filehelper', 'content':'测试'}, expected_account='wxid_one')
+        with patch.object(first.panel.scheduled_tasks, 'start'):
+            task = request('/api/scheduled-tasks', payload)['task']
+            self.assertEqual(task['account'], 'wxid_one')
+            self.assertEqual(request('/api/scheduled-tasks')['tasks'][0]['id'], task['id'])
+            with self.assertRaises(HTTPError) as error:
+                request('/api/scheduled-tasks/delete', {'id':task['id'], 'expected_account':'wxid_two'})
+            self.assertEqual(error.exception.code, 409)
+            self.assertTrue(request('/api/scheduled-tasks/delete',
+                {'id':task['id'], 'expected_account':'wxid_one'})['ok'])
+            self.assertEqual(request('/api/scheduled-tasks')['tasks'], [])
+
+    def test_friend_request_credentials_stay_in_own_lease_and_duplicates_are_suppressed(self):
+        from wxbot_framework.friend_requests import parse_friend_request
+        owner = self.sessions[0]
+        owner.backend.configure_image_downloads = Mock(return_value=None)
+        lease = owner.lease([])
+        rows = []
+        lease.start(rows.append)
+        xml = ('<msg fromusername="wxid_peer_fixture" fromnickname="测试好友" '
+               'content="测试验证词" scene="30" opcode="2" encryptusername="v3_SYNTHETIC_USER" '
+               'ticket="v4_SYNTHETIC_TICKET"/>')
+        request = parse_friend_request(xml)
+        message = Message('', 'fmessage', sender_id='wxid_peer_fixture', receiver_id='wxid_one',
+            type=37, session_id=lease.session_id, data={'self_wxid':'wxid_one', '_linux_friend_request':request})
+        lease.receive(message)
+        lease.receive(message)
+        self.assertEqual(len(rows), 1)
+        public = rows[0].data['friend_request']
+        self.assertEqual(public['status'], 'pending')
+        self.assertEqual(lease.friend_requests(), [public])
+        self.assertNotIn('_linux_friend_request', rows[0].data)
+        self.assertNotIn('v3_SYNTHETIC_USER', repr(rows[0]))
+        self.assertNotIn('v4_SYNTHETIC_TICKET', repr(rows[0]))
+        lease.stop()
+        with self.assertRaises(RuntimeError):
+            lease.friend_requests()
+
     def test_two_accounts_have_independent_configuration_and_stop(self):
         first,second=self.sessions
         self.assertNotEqual(first.panel.workspace,second.panel.workspace)

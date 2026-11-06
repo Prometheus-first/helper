@@ -87,6 +87,9 @@ class SessionLease:
         self._delivered_media = OrderedDict()
         self._emitter = None
         self._image_scope_generation = None
+        from .friend_requests import PendingFriendRequests
+        self._friend_requests = PendingFriendRequests(self.account, self.session_id)
+        self._friend_seen = OrderedDict()
 
     @property
     def pid(self):
@@ -122,6 +125,8 @@ class SessionLease:
                 gate.set()
             self._pending_media.clear()
             self._delivered_media.clear()
+            self._friend_requests.close()
+            self._friend_seen.clear()
         if receiver is not None:
             receiver.close()
         if voice_receiver is not None:
@@ -199,6 +204,27 @@ class SessionLease:
         if not self._is_current():
             return
         message = replace(message, session_id=self.session_id)
+        if message.type == 37:
+            request = message.data.get('_linux_friend_request')
+            if request is None:
+                return
+            from .friend_requests import FriendRequestError
+            with self._delivery_lock:
+                if self.closed or not self._is_current():
+                    return
+                try:
+                    public = self._friend_requests.add(request)
+                except (FriendRequestError, TypeError, RuntimeError):
+                    return
+                identifier = public['request_id']
+                if identifier in self._friend_seen:
+                    return
+                self._friend_seen[identifier] = None
+                while len(self._friend_seen) > 512:
+                    self._friend_seen.popitem(last=False)
+            self._emit_current(replace(message, text='', data={'self_wxid':self.account,
+                'friend_request':public, 'dispatch_to_plugins':True}))
+            return
         payload = message.data.get('_linux_voice') if message.type == 34 else message.data.get('_linux_media')
         if payload is None:
             self._emit_current(message)
@@ -260,6 +286,11 @@ class SessionLease:
                 raise ValueError('该会话不在收发白名单中')
             backend = self.owner.backend
         return getattr(backend, method)(chat_id, *args)
+
+    def friend_requests(self):
+        if not self._is_current():
+            raise RuntimeError('好友申请所属的微信连接已结束')
+        return self._friend_requests.list()
 
     def send_text(self, chat_id, text): return self._send('send_text', chat_id, text)
     def send_at_text(self, chat_id, text, at_list): return self._send('send_at_text', chat_id, text, at_list)
@@ -522,7 +553,8 @@ class LinuxSessionController:
     def validate_request(self, path, data):
         if path in ('/api/linux-session/open', '/api/linux-session/close', '/api/start', '/api/stop', '/api/restart'):
             return
-        if path in ('/api/config', '/api/plugin', '/api/plugin-source', '/api/plugin-business', '/api/plugin-reset'):
+        if path in ('/api/config', '/api/plugin', '/api/plugin-source', '/api/plugin-business', '/api/plugin-reset',
+                    '/api/scheduled-tasks', '/api/scheduled-tasks/delete', '/api/scheduled-tasks/toggle'):
             account = self.profile.get('wxid') or self.expected_account
             if not account or data.get('expected_account') != account:
                 raise PanelError('配置所属账号已变化，请刷新当前账号后再保存', 409)
