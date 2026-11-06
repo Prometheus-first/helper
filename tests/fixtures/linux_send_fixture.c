@@ -66,6 +66,15 @@ int fixture_sdk_mention(const char*target,const char*content,const char*members)
  if(strstr(content,"CALLBACK_DELAY"))usleep(180000);
  return strstr(content,"NATIVE_REJECT")==NULL;
 }
+int fixture_sdk_video(const char*target,const char*path,uint32_t duration){
+ if(!in_context)abort();
+ const char*mode=getenv("HELPER_FIXTURE_VIDEO_MODE");
+ if(mode&&!strcmp(mode,"eof"))_exit(0);
+ if(mode&&!strcmp(mode,"delay"))usleep(180000);
+ const char*report=getenv("HELPER_FIXTURE_VIDEO_REPORT");
+ if(report){FILE*f=fopen(report,"wb");if(!f)abort();fprintf(f,"%s\n%u\n%s\n",target,duration,path);fclose(f);}
+ return !mode||strcmp(mode,"reject");
+}
 static unsigned char fixture_image_context[0x280],fixture_voice_context[0x280];
 static int fixture_dto_voice;
 static void fixture_image_destroy(void*p){(void)p;}

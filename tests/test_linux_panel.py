@@ -195,6 +195,10 @@ class FakeBackend:
         self.calls.append(('voice', target, Path(path).read_bytes()))
         return True
 
+    def send_video(self, target, path):
+        self.calls.append(('video', target, Path(path).read_bytes()))
+        return True
+
     def send_at_text(self, target, text, members):
         self.calls.append(('mention', target, text, members))
         return True
@@ -361,6 +365,29 @@ class PanelTests(unittest.TestCase):
             self.controller.send_media(dict(data, kind='file'))
         with self.assertRaisesRegex(PanelError, '连接已变化'):
             self.controller.send_media(dict(data, session_id='old', request_id='fixture-voice-id-00002'))
+
+    def test_video_send_requires_capability_and_deduplicates(self):
+        import struct
+        def box(kind, body):
+            return struct.pack('>I4s', len(body) + 8, kind) + body
+        body = box(b'ftyp', b'isom\0\0\0\0') + box(b'moov',
+            box(b'mvhd', b'\0' * 12 + struct.pack('>II', 1000, 2200)) +
+            box(b'trak', box(b'mdia', box(b'hdlr', b'\0' * 8 + b'vide'))))
+        self.start_identified()
+        path = self.root / 'fixture.mp4'
+        path.write_bytes(body)
+        data = dict(kind='video', path=str(path), chat_id='wxid_friend_fixture',
+                    session_id='linux-fixture-session', request_id='fixture-video-id-00001')
+        with self.assertRaisesRegex(PanelError, '尚未开放视频发送'):
+            self.controller.send_media(data)
+        self.instances[0].capabilities = PANEL_CAPABILITIES | {'video.send'}
+        self.controller.send_media(data)
+        wait_for(lambda: self.controller.send_status(data['request_id'])['status'] != 'sending')
+        self.assertEqual(self.controller.send_status(data['request_id'])['status'], 'sent')
+        self.controller.send_media(data)
+        self.assertEqual(self.instances[0].calls, [('video', data['chat_id'], body)])
+        with self.assertRaisesRegex(PanelError, '连接已变化'):
+            self.controller.send_media(dict(data, session_id='old', request_id='fixture-video-id-00002'))
 
     def test_voice_send_enforces_allowlist_path_and_failed_result_does_not_retry(self):
         self.controller.save_configuration({'chat_allowlist': ['123@chatroom']})

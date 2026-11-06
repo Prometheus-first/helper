@@ -482,8 +482,8 @@ function renderLinuxSendKind() {
   $('#linux-path-field').classList.toggle('hidden',!media);
   $('#send-content').classList.toggle('hidden',media);$('#send-content-label').classList.toggle('hidden',media);
   $('#send-content').required=!media;$('#linux-send-path').required=media;
-  $('#linux-send-path').placeholder=kind==='voice'?'/home/user/Audio/voice.wav':kind==='file'?'/home/user/Documents/file.pdf':'/home/user/Pictures/photo.png';
-  $('#linux-path-hint').textContent=kind==='voice'?'SILK v3 或单声道 16-bit PCM WAV，最长 60 秒。WAV 需先安装语音编码依赖；填写 Linux 本机绝对路径。':'填写运行微信的 Linux 本机路径。';
+  $('#linux-send-path').placeholder=kind==='voice'?'/home/user/Audio/voice.wav':kind==='file'?'/home/user/Documents/file.pdf':kind==='video'?'/home/user/Videos/video.mp4':'/home/user/Pictures/photo.png';
+  $('#linux-path-hint').textContent=kind==='voice'?'SILK v3 或单声道 16-bit PCM WAV，最长 60 秒。WAV 需先安装语音编码依赖；填写 Linux 本机绝对路径。':kind==='video'?'填写 Linux 本机的 MP4 视频绝对路径，最大 64 MiB。':'填写运行微信的 Linux 本机路径。';
   renderSendState();
 }
 function renderSendState() {

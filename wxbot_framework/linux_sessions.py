@@ -296,6 +296,7 @@ class SessionLease:
     def send_at_text(self, chat_id, text, at_list): return self._send('send_at_text', chat_id, text, at_list)
     def send_image(self, chat_id, path): return self._send('send_image', chat_id, path)
     def send_file(self, chat_id, path): return self._send('send_file', chat_id, path)
+    def send_video(self, chat_id, path): return self._send('send_video', chat_id, path)
     def send_emoticon(self, chat_id, path): return self._send('send_emoticon', chat_id, path)
     def send_voice(self, chat_id, path): return self._send('send_voice', chat_id, path)
     def group_members(self, room):

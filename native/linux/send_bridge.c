@@ -270,6 +270,64 @@ static void sdk_perform_voice(const char*payload){
  sdk_string_destroy(&audio);sdk_string_destroy(&to);
 #endif
 }
+/* Video DTO layout from the fingerprinted 4.1.13.26 executable. */
+static void sdk_perform_video(const char*payload){
+ const char*first=strchr(payload,'\n'),*second=first?strchr(first+1,'\n'):NULL;
+ if(!first||!second||!sdk_identifier(payload,(size_t)(first-payload))||
+    second==first+1||second-first>11){sdk_finish_error("invalid video target or duration");return;}
+ uint64_t duration=0;
+ for(const char*p=first+1;p<second;p++){
+  if(*p<'0'||*p>'9'||duration>214748364){sdk_finish_error("invalid video duration");return;}
+  duration=duration*10+(unsigned)(*p-'0');
+ }
+ size_t hexlen=strlen(second+1);
+ if(!duration||duration>2147483647||!hexlen||(hexlen&1)||hexlen>2046){sdk_finish_error("invalid video duration or path");return;}
+ char target[128],path[1024];size_t tn=(size_t)(first-payload);memcpy(target,payload,tn);target[tn]=0;
+ for(size_t i=0;i<hexlen;i+=2){int a=unhex(second[1+i]),b=unhex(second[2+i]);if(a<0||b<0||(!a&&!b)){sdk_finish_error("invalid video path encoding");return;}path[i/2]=(char)((a<<4)|b);}path[hexlen/2]=0;
+ size_t pathlen=hexlen/2;
+ if(path[0]!='/'||pathlen<5||strcasecmp(path+pathlen-4,".mp4")){sdk_finish_error("video path must end in .mp4");return;}
+ int fd=open(path,O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);struct stat st;unsigned char header[12];
+ int valid=fd>=0&&!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_uid==geteuid()&&st.st_nlink==1&&
+  !(st.st_mode&0077)&&st.st_size>12&&st.st_size<=67108864&&pread(fd,header,sizeof(header),0)==(ssize_t)sizeof(header)&&!memcmp(header+4,"ftyp",4);
+ if(fd>=0)close(fd);
+ if(!valid){sdk_finish_error("video requires a private MP4 snapshot");return;}
+ char account[128],name[512];if(!sdk_expected_account[0]||!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){
+  sdk_finish_error("WeChat account changed; refusing stale video send");return;
+ }
+#ifdef SDK_FIXTURE
+ int(*send_video)(const char*,const char*,uint32_t)=(void*)dlsym(RTLD_DEFAULT,"fixture_sdk_video");
+ if(send_video&&send_video(target,path,(uint32_t)duration)==1)sdk_finish_success();else sdk_finish_error("fixture video send rejected");
+#else
+ struct sdk_string to={0},filename={0};unsigned char native_path[24]={0};
+ struct sdk_shared hub={0},center={0},manager={0},message={0};struct native_media_status status={0};
+ const char*basename=strrchr(path,'/');basename=basename?basename+1:path;
+ sdk_str(&to,target,tn);sdk_str(&filename,basename,strlen(basename));
+ ((void(*)(void*,const char*,size_t))(sdk_base+0x453c040))(native_path,path,pathlen);
+ ((void(*)(struct sdk_shared*))(sdk_base+0x60421e0))(&hub);
+ if(hub.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x619ce90))(&center,hub.object);
+ if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
+ int invoked=0;
+ if(manager.object){
+  unsigned char scratch[64]={0};
+  ((void(*)(struct sdk_shared*,void*))(sdk_base+0x53fb010))(&message,scratch);
+  uintptr_t vtable=0;
+  if(message.object&&rd(&vtable,message.object,8)&&vtable==sdk_base+0xa8a1168&&sdk_profile(account,name)&&!strcmp(account,sdk_expected_account)){
+   uint32_t type=43,seconds=(uint32_t)duration;uint64_t bytes=(uint64_t)st.st_size;
+   memcpy((char*)message.object+0xe4,&type,4);memcpy((char*)message.object+0x5dc,&seconds,4);memcpy((char*)message.object+0x170,&bytes,8);
+   ((void(*)(void*,const struct sdk_string*))(sdk_base+0x450fdb0))((char*)message.object+0x90,&to);
+   ((void(*)(void*,const struct sdk_string*))(sdk_base+0x450fdb0))((char*)message.object+0x158,&filename);
+   ((void(*)(void*,const void*))(sdk_base+0x45396a0))((char*)message.object+0xf0,native_path);
+   ((void(*)(struct native_media_status*,void*,struct sdk_shared*))(sdk_base+0x64ccca0))(&status,manager.object,&message);invoked=1;
+  }
+ }
+ if(invoked&&!status.error_type&&!status.error_code)sdk_finish_success();
+ else if(invoked){char error[1024]={0};sdk_copy(error,sizeof(error),&status.error);sdk_finish_error(error[0]?error:"native video send failed");}
+ else sdk_finish_error("native video manager, DTO or account unavailable");
+ if(invoked)((void(*)(struct native_media_status*))(sdk_base+0x64cdaa0))(&status);
+ sdk_release(&message);sdk_release(&manager);sdk_release(&center);sdk_release(&hub);
+ ((void(*)(void*))(sdk_base+0x4539690))(native_path);sdk_string_destroy(&filename);sdk_string_destroy(&to);
+#endif
+}
 static void sdk_perform_mention(const char *payload){
  const char *first=strchr(payload,'\n'),*second=first?strchr(first+1,'\n'):NULL;
  if(!first||!second){sdk_finish_error("invalid mention frame");return;}
@@ -527,8 +585,8 @@ static void sdk_perform_message_download(const char*payload,int voice_test){
  pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_completed\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
 }
 static void sdk_perform(char operation,const char *json_body){
- if((operation=='M'||operation=='O'||operation=='W')&&!sdk_expected_account[0]){sdk_finish_error("bind the logged-in account before mention, emoticon or voice send");return;}
- if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W')&&sdk_expected_account[0]){
+ if((operation=='M'||operation=='O'||operation=='W'||operation=='R')&&!sdk_expected_account[0]){sdk_finish_error("bind the logged-in account before mention, emoticon, voice or video send");return;}
+ if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R')&&sdk_expected_account[0]){
   char account[128],name[512];if(!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){
    sdk_finish_error("WeChat account changed; refusing stale send");return;
   }
@@ -537,6 +595,7 @@ static void sdk_perform(char operation,const char *json_body){
  if(operation!='V'&&!sdk_has_coroutine()){sdk_finish_error("native coroutine context unavailable; no send attempted");return;}
  if(operation=='M'){sdk_perform_mention(json_body);return;}
  if(operation=='W'){sdk_perform_voice(json_body);return;}
+ if(operation=='R'){sdk_perform_video(json_body);return;}
  if(operation=='T'){
   pthread_mutex_lock(&sdk_image_mutex);int available=atomic_load(&sdk_voice_capture_enabled)&&sdk_voice_context.object;pthread_mutex_unlock(&sdk_image_mutex);
   pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"available\":%s}",available?"true":"false");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
@@ -606,8 +665,8 @@ static void sdk_schedule(char operation,const char *json){
  if(fn.callable){struct sdk_callable*c=fn.callable;((void(*)(void*))c->vtable[5])(c);}
 }
 static void sdk_handle(int client,char operation,const char *json){
- if(operation!='V'&&operation!='W'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
- if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
+ if(operation!='V'&&operation!='W'&&operation!='R'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
+ if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
  pthread_mutex_lock(&sdk_mutex);
  /* A timed-out caller does not retry; a completed late callback must not block later work. */
  if(sdk_running&&sdk_done)sdk_running=0;
@@ -642,10 +701,10 @@ static void*sdk_serve(void*unused){
     char account[128],name[512],a[1024],n[4096],response[5500];int logged=sdk_profile(account,name);
     sdk_escape(a,sizeof(a),logged?account:"");sdk_escape(n,sizeof(n),logged?name:"");
     snprintf(response,sizeof(response),"{\"logged_in\":%s,\"wxid\":\"%s\",\"name\":\"%s\"}\n",logged?"true":"false",a,n);sdk_write(c,response);
-   }else if(op=='H'){char ready[512];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"group_mentions\":true,\"local_media\":true,\"local_emoticons\":true,\"local_voice\":true,\"image_download\":%s,\"image_context\":%s,\"image_scope_groups\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
-   else if(op=='S'||op=='M'||op=='G'||op=='I'||op=='F'||op=='O'||op=='W'||op=='D'||op=='A'||op=='B'||op=='C'||op=='X'||op=='K'||op=='E'){
+   }else if(op=='H'){char ready[512];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"group_mentions\":true,\"local_media\":true,\"local_emoticons\":true,\"local_voice\":true,\"local_video\":true,\"image_download\":%s,\"image_context\":%s,\"image_scope_groups\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
+   else if(op=='S'||op=='M'||op=='G'||op=='I'||op=='F'||op=='O'||op=='W'||op=='R'||op=='D'||op=='A'||op=='B'||op=='C'||op=='X'||op=='K'||op=='E'){
     uint32_t net=0;char*body=NULL;
-    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n&&(op!='W'||n<=2181)){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
+    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n&&(op!='W'||n<=2181)&&(op!='R'||n<=2300)){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
      if(op=='X'){
       uint64_t generation=0;
       int cleared=sdk_parse_generation(body,n,&generation)&&sdk_clear_image_scope(generation,0);

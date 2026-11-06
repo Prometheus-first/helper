@@ -53,6 +53,8 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
             self.capabilities = self.capabilities | frozenset({'emoticon.send'})
         if self._sender is not None and 'local_voice' in self._sender.features:
             self.capabilities = self.capabilities | frozenset({'voice.send', 'friend.voice.send', 'group.voice.send'})
+        if self._sender is not None and 'local_video' in self._sender.features:
+            self.capabilities = self.capabilities | frozenset({'video.send', 'friend.video.send', 'group.video.send'})
         return result
 
     def convert_event(self, event):
@@ -243,6 +245,13 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
     def send_file(self, chat_id, path):
         self._authorize(chat_id)
         return self._sender.send_file(chat_id, path)
+
+    def send_video(self, chat_id, path):
+        self._authorize(chat_id)
+        if 'video.send' not in self.capabilities:
+            raise RuntimeError('当前 Linux 桥接尚未开放视频发送')
+        self._sender.bind_account(self.account)
+        return self._sender.send_video(chat_id, path)
 
     def send_emoticon(self, chat_id, path):
         self._authorize(chat_id)

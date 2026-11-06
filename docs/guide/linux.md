@@ -15,12 +15,13 @@ Linux 版正在适配中，尚不能替代 Windows 版。已接入本地网页�
 | 群成员读取与选择 | 从当前账号联系人库读取完整群成员，独立索引与扩展名单交叉验证；微信名、群主、网页选择已实机通过，管理员与普通成员按已验证权限位识别，异常或缺失标记保持未知 |
 | 群成员进退事件 | 已接入原生 10000/10002 通知及完整名单差分；首次名单不补发，两次完整快照确认变化，离线验证通过，真实入退群待验证 |
 | 本地图片、文件发送 | 实机通过，手机确认内容正确 |
+| 本地 MP4 视频发送 | 文件传输助手、私聊和群聊已实机确认显示为可播放视频；目前仅验证 2 秒样本 |
 | 好友私聊图片自动下载 | 实机通过；无需进入私聊或点开图片，完整 MD5 校验后可回发 |
 | 已落盘文件的校验与回发 | 实机通过，校验文件名、大小和 MD5；已验证类型 74 附件在后台自动落盘后回发，手机确认一致 |
 | 语音消息接收与防撤回 | 数据库补充读取与私有缓存已接入；群短语音自动缓存、撤回后原声补发及接收端播放实机通过；私聊仅离线验证 |
 | 群图片自动下载 | 白名单为空时覆盖当前账号普通好友与群会话；配置白名单后仅处理指定会话。快速撤回后的缓存和补发已实机通过 |
 | 未落盘文件主动下载 | 尚未适配 |
-| 网页管理台 | 已接入启停、消息监控、插件配置和业务函数编辑、群备注、模型设置、群成员选择、文字及本地图片/文件/语音发送；已完成离线、浏览器与单账号实机验证 |
+| 网页管理台 | 已接入启停、消息监控、插件配置和业务函数编辑、群备注、模型设置、群成员选择、文字及本地图片/文件/语音/视频发送；已完成离线、浏览器与单账号实机验证 |
 | 登录账号确认 | 微信登录后读取原生账号及昵称，无需发送初始化消息；单账号识别和机器人启停已实机通过 |
 | 多账号 | 独立微信进程与账号配置已接入，模拟隔离测试通过；两个真实微信同时登录仍待验证 |
 | 网页定时任务 | 支持按间隔、每天指定时间执行文字或插件动作；账号隔离与网页交互已离线验证，真实微信定时发送待实测 |
@@ -74,7 +75,7 @@ gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread native/linux/send_
 1. 打开 `http://127.0.0.1:8765`，点击“登录微信”，在 Linux 微信窗口扫码并用手机确认。
 2. 页面自动显示已识别的昵称和微信 ID。再次点击“登录微信”可创建另一个独立会话。
 3. 勾选需要运行的账号并启动，也可以在账号行单独启动或停止。切换顶部账号选择器可查看各自配置和消息。
-4. 发送图片或文件时，填写 Linux 本机的绝对路径。本地发送已在文件传输助手实测，群图片和群文件也通过了防撤回原生补发及接收端验收。
+4. 发送图片、文件、语音或视频时，填写 Linux 本机的绝对路径。视频需为 MP4，单个文件最多 64 MiB；已在文件传输助手、私聊和群聊验证 2 秒视频可直接播放。本地发送已在文件传输助手实测，群图片和群文件也通过了防撤回原生补发及接收端验收。
 5. 发送群文字时可刷新群成员、按名字搜索并勾选艾特；也可补充该群成员的真实微信 ID，用逗号或空白分隔。勾选与手工 ID 合并去重后最多 8 人；留空则发送普通文字。不支持艾特所有人；只写正文中的 `@昵称` 不会产生真实提醒。名单未同步时仍可发普通文字，或用明确的真实成员 ID 手工艾特。
 
 停止机器人后，微信登录窗口保持运行。使用账号行的“退出微信”关闭该会话。每个微信进程使用独立 HOME 和缓存，机器人配置、群备注、插件覆盖及聊天数据按账号保存在 `.runtime/linux/accounts/`。之前单账号配置仍位于 `.runtime/linux/`，不会自动复制到其他账号。
@@ -168,10 +169,10 @@ python -B -m tools.linux_media_test --receive-voice --watch-files --file-name WX
 ## 开发接口
 
 - `LinuxNativeTextBackend` 是实验性文本后端，复用框架消息转换、插件分发和回复链路。发送需要显式提供 `send_bridge_path`，通过 `send_targets` 允许指定会话；默认仅文件传输助手。
-- `LinuxNativeSender` 提供 `send_text()`、`send_at_text()`、`send_image()`、`send_file()`、`send_emoticon()`、`send_voice()`，以及受控的图片范围绑定、上下文查询与下载接口。表情发送需桥接报告 `local_emoticons`，语音发送需报告 `local_voice`，管理台才开放相应能力。
+- `LinuxNativeSender` 提供 `send_text()`、`send_at_text()`、`send_image()`、`send_file()`、`send_emoticon()`、`send_voice()`、`send_video()`，以及受控的图片范围绑定、上下文查询与下载接口。表情发送需桥接报告 `local_emoticons`，语音发送需报告 `local_voice`，视频发送需报告 `local_video`，管理台才开放相应能力。
 - 群艾特复用 `ctx.reply_at(message, text)` 和 `ctx.send_at_text(room, text, members)`，声明 `group.text.mention` 能力；长文本由框架按 1023 个 UTF-8 字节分段，仅第一段携带艾特名单。原生名单与可见标签分别传入，不依赖昵称反查。艾特对话、成语接龙等插件现可通过该能力检查，仍需自行配置并启用。
 - `LinuxImageDownloader` 保留受控好友图片验证入口；管理台防撤回使用独立 `LinuxMediaReceiver`，在本连接内发布 `pending` / `ready` / `failed` 状态。原生群图片下载、完整校验与撤回补发已实机通过。
-- Linux 声明 `image.receive`、`file.receive`、`voice.receive` 及对应好友/群作用域；完整 ready 缓存投递普通插件一次，未完成和失败状态仅供监控与防撤回。专用 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive` 继续可用。报告 `local_voice` 的桥接另开放 `voice.send`、`friend.voice.send`、`group.voice.send`。Windows 后端保留原能力并提供专用别名。
+- Linux 声明 `image.receive`、`file.receive`、`voice.receive` 及对应好友/群作用域；完整 ready 缓存投递普通插件一次，未完成和失败状态仅供监控与防撤回。专用 `image.recall.receive`、`file.recall.receive`、`voice.recall.receive` 继续可用。报告 `local_voice` 的桥接另开放 `voice.send`、`friend.voice.send`、`group.voice.send`。报告 `local_video` 的桥接开放 `video.send`、`friend.video.send`、`group.video.send`。Windows 后端保留原能力并提供专用别名。
 - `ctx.contacts()` 返回当前账号已同步的好友资料、备注和标签；`ctx.contact_labels()` 单独读取已加载的标签缓存。插件需分别声明 `contact.read` 或 `contact.labels.read`，结果的 `complete` 为 `false`，不能视为服务端完整名单。
 - `ctx.group_members(room)` 复用现有群成员接口，能力为 `group.members.read`；返回标准成员元组或 `None`，后者表示无法提供完整快照。`group.events` 使用现有 `message.data['group_event']` 的 `join` / `leave` 结构，账号和连接隔离规则与 Windows 相同。
 - 原生图片上下文最多缓存 16 条。好友验证入口绑定测试双方账号；管理台按当前账号和收发白名单绑定范围（白名单为空时使用普通好友和群会话），绑定、查询及下载核对 `scope_generation`。未知版本、账号或代次不匹配、未完成下载或校验失败都会拒绝返回图片。

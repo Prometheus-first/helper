@@ -75,8 +75,8 @@ class LinuxNativeSender:
                 pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 if pid != self.expected_pid or uid != os.geteuid():
                     raise PermissionError("拒绝非目标微信进程的发送连接")
-                attempted = command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"D", b"U", b"A", b"B", b"C", b"X", b"K")
-                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"D", b"A", b"B", b"C", b"X", b"K", b"E") else b""))
+                attempted = command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"U", b"A", b"B", b"C", b"X", b"K")
+                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"A", b"B", b"C", b"X", b"K", b"E") else b""))
                 chunks = []
                 count = 0
                 while True:
@@ -107,7 +107,7 @@ class LinuxNativeSender:
                 with self._lock:
                     response = self._request(b"H")
                 if response.get("ready") is True and response.get("protocol") == 1:
-                    self.features = frozenset(name for name in ("generic_messages", "local_media", "local_emoticons", "local_voice", "image_download", "image_context", "image_scope_groups", "group_mentions") if response.get(name) is True)
+                    self.features = frozenset(name for name in ("generic_messages", "local_media", "local_emoticons", "local_voice", "local_video", "image_download", "image_context", "image_scope_groups", "group_mentions") if response.get(name) is True)
                     return True
                 raise LinuxSendError("原生发送桥接握手不匹配")
             except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
@@ -241,36 +241,55 @@ class LinuxNativeSender:
         asynchronous file stages may still open the original path afterward.
         Never evict a submitted snapshot to make space for another request.
         """
+        return self._send_retained_media(chat_id, path, video=False)
+
+    def send_video(self, chat_id, path):
+        """上传结束前保留本连接私有的 MP4 快照。"""
+        return self._send_retained_media(chat_id, path, video=True)
+
+    def _send_retained_media(self, chat_id, path, *, video):
         from .emoticons import _read_bounded
         from .files import inspect_file
+        from .videos import inspect_video
         from .text import validate_target
         validate_target(chat_id)
         with self._lock:
             if self._closed:
                 raise LinuxSendError('Linux 原生发送连接未运行')
-            if 'local_media' not in self.features or chat_id not in self.allowed_targets:
-                raise LinuxSendError('该会话尚未获准使用原生文件发送')
+            feature = 'local_video' if video else 'local_media'
+            if feature not in self.features or chat_id not in self.allowed_targets:
+                raise LinuxSendError('该会话尚未获准使用原生媒体发送')
             if len(self._retained_files) >= MAX_RETAINED_FILE_COUNT:
                 raise LinuxSendError('待确认文件快照达到 64 条上限，不会清除可能仍在上传的文件')
             remaining = MAX_RETAINED_FILE_BYTES - self._retained_file_bytes
             # Preserve the existing missing-path error of local media sends.
             source = inspect_file(Path(path).resolve(strict=True))
+            if video:
+                inspect_video(source.path)
             if not 0 < source.size <= remaining:
                 raise LinuxSendError('待确认文件快照超过 64 MiB 总预算，不会清除可能仍在上传的文件')
             body = _read_bounded(source.path, remaining)
             directory = Path(tempfile.mkdtemp(prefix='file-', dir=self._directory))
             directory.chmod(0o700)
-            snapshot = directory / source.path.name
+            name = source.path.name
+            if video and not name.lower().endswith('.mp4'):
+                name += '.mp4'
+            snapshot = directory / name
             keep = False
             try:
                 fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, 'wb') as stream:
                     stream.write(body)
+                seconds = inspect_video(snapshot).duration_seconds if video else None
                 if not self._context_ready:
                     self.ensure_context()
                 # Even a failed manager stage does not prove that every native
                 # file task has released its path. Once submitted, retain it.
                 keep = True
+                if video:
+                    payload = (chat_id + '\n' + str(seconds) + '\n' + os.fsencode(snapshot).hex()).encode('ascii')
+                    self._result(self._request(b'R', payload), sending=True)
+                    return True
                 return self._send_media(b'F', chat_id, snapshot)
             finally:
                 if keep:

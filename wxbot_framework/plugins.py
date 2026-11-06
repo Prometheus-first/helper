@@ -24,10 +24,10 @@ logger = logging.getLogger("Plugins")
 
 class ScheduledService:
     """将定时回调绑定到触发时的微信连接和收发白名单。"""
-    METHODS = {'send_text', 'send_image', 'send_file', 'send_voice', 'send_emoticon',
+    METHODS = {'send_text', 'send_image', 'send_file', 'send_video', 'send_voice', 'send_emoticon',
                'send_at_text', 'export_emoticons', 'group_members', 'group_member_name',
                'group_member_role', 'contacts', 'accept_friend'}
-    SENDS = {'send_text', 'send_image', 'send_file', 'send_voice', 'send_emoticon', 'send_at_text'}
+    SENDS = {'send_text', 'send_image', 'send_file', 'send_video', 'send_voice', 'send_emoticon', 'send_at_text'}
 
     def __init__(self, service, session, allowlist, valid):
         self._service, self._session, self._allowlist = service, session, frozenset(allowlist)

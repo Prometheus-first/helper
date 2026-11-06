@@ -273,8 +273,8 @@ class LinuxPanelController(PanelController):
         target = validate_target(data.get('chat_id'))
         kind, path = data.get('kind'), data.get('path')
         identifier, session = data.get('request_id'), data.get('session_id')
-        if kind not in ('image', 'file', 'voice') or not isinstance(path, str) or not path or not Path(path).is_absolute():
-            raise PanelError('请选择图片、文件或语音，并填写 Linux 本机的绝对路径')
+        if kind not in ('image', 'file', 'voice', 'video') or not isinstance(path, str) or not path or not Path(path).is_absolute():
+            raise PanelError('请选择图片、文件、语音或视频，并填写 Linux 本机的绝对路径')
         if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
             raise PanelError('发送请求编号无效')
         if session != self.send_connection()['session_id']:
@@ -289,12 +289,13 @@ class LinuxPanelController(PanelController):
             if any(job['status'] == 'sending' for job in self.send_jobs.values()):
                 raise PanelError('上一条消息仍在发送，请等待结果', 409)
             app = self.app
-            if kind == 'voice':
+            if kind in ('voice', 'video'):
                 backend = getattr(app, 'backend', None)
                 if backend is None or backend.session_id != session:
                     raise PanelError('微信连接已变化，请刷新会话', 409)
-                if 'voice.send' not in getattr(backend, 'capabilities', ()):
-                    raise PanelError('当前 Linux 微信连接尚未开放语音发送，请更新桥接并重新登录', 409)
+                if kind + '.send' not in getattr(backend, 'capabilities', ()):
+                    label = '语音' if kind == 'voice' else '视频'
+                    raise PanelError(f'当前 Linux 微信连接尚未开放{label}发送，请更新桥接并重新登录', 409)
             allowed = app.config.get('chat_allowlist', [])
             if allowed and target not in allowed:
                 raise PanelError('该会话不在收发白名单中')
