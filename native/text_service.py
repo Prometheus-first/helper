@@ -107,7 +107,7 @@ class NativeTextService(NativeFileHelperService):
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
                  wechat_data_directory=None, emoticon_directory=None, voice_directory=None,
-                 file_directory=None, **options):
+                 file_directory=None, friend_add_rooms=(), **options):
         super().__init__(**options)
         self.preferred_account = validate_account(account) if account is not None else None
         self.router = TextRouter(include_self_groups=True)
@@ -117,6 +117,7 @@ class NativeTextService(NativeFileHelperService):
         self.mention_messages = 0
         self.media_directory = Path(media_directory or Path(__file__).resolve().parent.parent / ".runtime/images")
         self.image_allowlist = frozenset(image_allowlist)
+        self.friend_add_rooms = tuple(friend_add_rooms)
         self._image_receiver = None
         self._file_receiver = None
         self._voice_receiver = None
@@ -560,6 +561,42 @@ class NativeTextService(NativeFileHelperService):
             else:
                 catalog.mark_failed(request_id, **owner)
             return accepted
+
+    def send_friend_request(self, wxid, room, message):
+        """Send one group-sourced request after confirming the live member cache."""
+        from wxbot_framework.friend_add import validate_friend_add
+        wxid, room, message = validate_friend_add(wxid, room, message, self_wxid=self.self_wxid, allow_auto=True)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError("请先连接机器人")
+            if self.wechat_version != "4.2.0.12":
+                raise RuntimeError("主动好友申请仅适配微信 4.2.0.12")
+            self._check_account(force=True)
+            if not room:
+                candidates = dict.fromkeys((*self.friend_add_rooms, *(key for key in self.chats if key.endswith('@chatroom'))))
+                room = ''
+                for candidate in candidates:
+                    if self.image_allowlist and candidate not in self.image_allowlist:
+                        continue
+                    rows = self.group_members(candidate)
+                    if rows is not None and sum(row.get('wxid') == wxid for row in rows) == 1:
+                        room = candidate
+                        break
+                if not room:
+                    raise ValueError("未在已发现的群中找到该成员，请手动选择来源群")
+            if self.image_allowlist and room not in self.image_allowlist:
+                raise ValueError("来源群不在收发白名单中")
+            rows = self.group_members(room)
+            if rows is None:
+                raise RuntimeError("群成员缓存尚未就绪，请在微信打开群聊后重试")
+            if sum(row.get("wxid") == wxid for row in rows) != 1:
+                raise ValueError("目标不在该群的已验证成员列表中")
+            self._check_account(force=True)
+            self.last_result = self._run("--add-friend", pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports, account=self.self_wxid,
+                friend_add={"wxid": wxid, "room": room, "message": message})
+            self._check_account(force=True)
+            return self.last_result.get("success") is True
 
     def invite_group_members(self, room, members):
         from wxbot_framework.group_management import validate_group_id, validate_group_members

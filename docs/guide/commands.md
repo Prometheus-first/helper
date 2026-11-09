@@ -41,6 +41,7 @@ export-emoticons raw
 ## 好友与群管理
 
 ```text
+add-friend wxid_example "你好"
 friend-requests
 accept-friend fr_申请ID
 invite-members 12345678@chatroom wxid_example_friend

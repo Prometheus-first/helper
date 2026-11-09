@@ -38,6 +38,10 @@ test('已配置的群和已发现的会话合并去重，优先显示本账号�
   assert.equal((html.match(/value="123@chatroom"/g) || []).length, 1);
   assert.match(html, /456@chatroom/);
   assert.match(html, /wxid_peer/);
+  const addGroups = $('#friend-add-room').innerHTML;
+  assert.match(addGroups, /自动匹配共同群聊/);
+  assert.match(addGroups, /测试备注 · 123@chatroom/);
+  assert.doesNotMatch(addGroups, /wxid_peer/);
 });
 
 test('群成员未缓存时仍可发送文字；连接失效时不允许发送', async () => {

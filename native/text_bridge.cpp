@@ -552,6 +552,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "file_send.h"
 #include "group_management.h"
 #include "friend_request.h"
+#include "friend_add.h"
 #include "friend_receive.h"
 
 // 定向只读探针：仅在手动发送 WXBOT_AT_PROBE 的消息中记录 msgsource 字符串。

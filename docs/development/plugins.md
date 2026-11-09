@@ -112,6 +112,7 @@ def scheduled_greeting(self, params, ctx):
 | `ctx.reply_voice(message, path)` | 回复语音条 |
 | `ctx.send_voice(chat_id, path)` | 发送语音条 |
 | `ctx.export_emoticons(convert=True)` | 显式导出当前账号本地缓存表情 |
+| `ctx.send_friend_request(wxid, verification_text, room="", expected_session=incoming.session_id)` | 通过共同群主动发送好友申请（Windows 4.2.0.12） |
 | `ctx.group_members(room, expected_session=message.session_id)` | 读取完整群成员快照，缓存不可用时返回 `None` |
 | `ctx.contacts(expected_session=message.session_id)` | 扫描当前账号的好友及资料，需要 `contact.read` 能力 |
 | `ctx.group_member_name(room, wxid, expected_session=message.session_id)` | 查询群昵称，未设置时返回微信名 |
@@ -145,7 +146,7 @@ image.receive / image.send
 file.receive / file.send
 friend.file.receive / friend.file.send
 group.file.receive / group.file.send
-friend.request.receive / friend.request.accept
+friend.request.receive / friend.request.accept / friend.request.send
 group.member.invite / group.create
 group.members.read / group.events
 contact.read

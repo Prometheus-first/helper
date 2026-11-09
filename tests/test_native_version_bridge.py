@@ -72,6 +72,8 @@ VERIFIED_RVAS = {
     0x9af9078: 0x9cff818,
     0xb912690: 0xbb92fa0,
 }
+# Observed native VerifyUser entry; intentionally not mapped to older builds.
+VERIFIED_42012_ONLY = {0x1a5a850: 0x1a5a850}
 VERIFIED_BUILDS = {
     "4.1.15.13": (201552944, "10f8e995453e2da46d4f2b5080cd6da1f13cc5147746adc119ceae38cb039de5",
                    0x6AB0A378, 0xC0AE000),
@@ -200,7 +202,13 @@ class NativeVersionBridgeTests(unittest.TestCase):
             for old in re.findall(r"core_(?:address\([^,]+,\s*|rva\()(0x[0-9a-f]+)\)", text):
                 used.add(int(old, 16))
             self.assertIsNone(re.search(r"vtable_rva\s*!=\s*0x[0-9a-f]+", text), path.name)
-        self.assertEqual(used, set(VERIFIED_RVAS))
+        self.assertEqual(used, set(VERIFIED_RVAS) | set(VERIFIED_42012_ONLY))
+        resolver = code_without_comments(source("core_version.h"))
+        block = resolver.split("if (profile == 4)", 1)[1].split("if (profile == 3)", 1)[0]
+        for canonical, target in VERIFIED_42012_ONLY.items():
+            self.assertRegex(block, rf"case\s+{hex(canonical)}:\s*return\s+{hex(target)};")
+        add = code_without_comments(source("friend_add.h"))
+        self.assertRegex(add, r"InterlockedCompareExchange\(&core_profile_id,\s*0,\s*0\)\s*!=\s*4")
 
     def test_hook_cleanup_uses_the_same_canonical_targets_as_install(self):
         text = code_without_comments(source("selftest_bridge.cpp"))

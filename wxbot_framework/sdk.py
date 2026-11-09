@@ -300,6 +300,11 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 return method(*arguments)
 
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        from .friend_add import validate_friend_add
+        wxid, room, message = validate_friend_add(wxid, room, message, allow_auto=True)
+        return self._manage("send_friend_request", wxid, room, message, expected_session=expected_session)
+
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
 
@@ -550,6 +555,11 @@ class PluginContext:
 
     def accept_friend(self, request_id, *, expected_session=None):
         return self._service.accept_friend(request_id, expected_session=expected_session)
+
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        if "friend.request.send" not in self.capabilities:
+            raise CapabilityError("当前插件缺少主动发送好友申请的能力")
+        return self._service.send_friend_request(wxid, message, room=room, expected_session=expected_session)
 
     def group_members(self, room, *, expected_session=None):
         return self._service.group_members(room, expected_session=expected_session)

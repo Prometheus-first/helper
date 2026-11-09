@@ -38,7 +38,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "group.text.mention", "message.recall", "group.members.read", "group.events", "image.receive", "image.send",
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
     "group.file.receive", "group.file.send", "voice.receive", "voice.send",
-    "friend.voice.send", "group.voice.send", "video.send", "group.video.send",
+    "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "friend.request.send",
 })
 
 
@@ -102,6 +102,7 @@ class NativeTextBackend(NativeFileHelperBackend):
         self.raw = NativeTextService(pid=config.get("wechat_pid"), account=config.get("wechat_account"),
                                      media_directory=data_root / config.get("image_directory", ".runtime/images"),
                                      image_allowlist=config.get("chat_allowlist", []),
+                                     friend_add_rooms=config.get("groups", []),
                                      wechat_data_directory=(data_root / config["wechat_data_directory"]
                                                             if config.get("wechat_data_directory") else None),
                                      emoticon_directory=data_root / config.get("emoticon_directory", ".runtime/emoticons"),
@@ -144,6 +145,9 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def accept_friend(self, request_id):
         return self.raw.accept_friend(request_id)
+
+    def send_friend_request(self, wxid, room, message):
+        return self.raw.send_friend_request(wxid, room, message)
 
     def invite_group_members(self, room, members):
         return self.raw.invite_group_members(room, members)

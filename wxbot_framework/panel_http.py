@@ -115,6 +115,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.wechat_login().cancel(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
+                if path == '/api/friend-request-send':
+                    return self.send(200, controller.send_friend_request(data))
                 if path == '/api/scheduled-tasks':
                     return self.send(200, controller.save_scheduled_task(data))
                 if path == '/api/scheduled-tasks/delete':

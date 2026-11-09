@@ -116,7 +116,7 @@ function renderState() {
   $('#discover-chats').disabled=busy||unavailable||!state||!activeStates.includes(state.state);
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
-  document.querySelectorAll('form:not(#send-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
@@ -458,6 +458,9 @@ function renderSendState() {
   $('#send-content').disabled=!ready||!!pendingSend;
   $('#send-text').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#send-chat').value||!$('#send-content').value.trim();
   $('#send-text').textContent=pendingSend?'发送中…':'发送';
+  $('#friend-add-room').disabled=!ready||sendLoading||!!pendingSend;$('#friend-add-wxid').disabled=!ready||!!pendingSend;$('#friend-add-message').disabled=!ready||!!pendingSend;
+  $('#friend-add-submit').disabled=!ready||sendLoading||!!pendingSend||!sendSession||!$('#friend-add-wxid').value.trim()||!$('#friend-add-message').value.trim();
+  $('#friend-add-submit').textContent=pendingSend?.kind==='friend'?'发送中…':'发送好友申请';
   $('#mention-count').textContent=`已选 ${mentionSelection.size} / 8`;
   $('#send-members').querySelectorAll('input').forEach(node=>node.disabled=!ready||!!pendingSend);
 }
@@ -471,6 +474,7 @@ function resetComposer() {
   sendGeneration++;sendMembers=[];mentionSelection.clear();sendSession='';sendLoading=false;pendingSend=null;
   sendChatsAttempted=false;
   $('#send-chat').innerHTML='<option value="">选择会话</option>';$('#send-content').value='';$('#member-search').value='';
+  $('#friend-add-room').innerHTML='<option value="">自动匹配共同群聊</option>';$('#friend-add-wxid').value='';$('#friend-add-message').value='';$('#friend-add-status').textContent='支持添加共同群里的成员。';
   $('#send-group').classList.add('hidden');sendFeedback('');renderSendMembers();
 }
 async function loadSendChats() {
@@ -487,6 +491,9 @@ async function loadSendChats() {
     if(!rows.some(row=>row.chat_id==='filehelper'))rows.unshift({chat_id:'filehelper',name:'文件传输助手'});
     $('#send-chat').innerHTML='<option value="">选择会话</option>'+rows.map(row=>{const name=settings.group_names?.[row.chat_id]||row.name||'';return `<option value="${escape(row.chat_id)}">${escape(name||row.chat_id)}${name?' · '+escape(row.chat_id):''}</option>`;}).join('');
     if(rows.some(row=>row.chat_id===previous))$('#send-chat').value=previous;
+    const previousRoom=$('#friend-add-room').value,groups=rows.filter(row=>row.is_group||row.chat_id?.endsWith('@chatroom'));
+    $('#friend-add-room').innerHTML='<option value="">自动匹配共同群聊</option>'+groups.map(row=>{const name=settings.group_names?.[row.chat_id]||row.name||'';return `<option value="${escape(row.chat_id)}">${escape(name||row.chat_id)}${name?' · '+escape(row.chat_id):''}</option>`;}).join('');
+    if(groups.some(row=>row.chat_id===previousRoom))$('#friend-add-room').value=previousRoom;
     sendSession=connection.session_id;sendFeedback('');loaded=true;
   } catch(error) {if(requested===robot&&generation===sendGeneration)sendFeedback(error.message,true);}
   finally {if(requested===robot&&generation===sendGeneration){sendLoading=false;renderSendState();}}
@@ -534,10 +541,11 @@ async function pollSendStatus() {
     if(pendingSend!==job||job.robot!==robot)return;
     if(result.status==='sending')return;
     pendingSend=null;
-    if(result.status==='sent'){$('#send-content').value='';sendFeedback('已发送');}
+    if(job.kind==='friend'){if(result.status==='sent'){$('#friend-add-wxid').value='';$('#friend-add-status').textContent='申请已发送，等待对方处理。';}else $('#friend-add-status').textContent=result.error||'申请未确认，请先核对微信。';}
+    else if(result.status==='sent'){$('#send-content').value='';sendFeedback('已发送');}
     else sendFeedback(result.error||'发送未完成，请核对微信后再重发',true);
     renderSendState();
-  } catch(error) {if(pendingSend===job)sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);}
+  } catch(error) {if(pendingSend===job){if(job.kind==='friend')$('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';else sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);}}
   finally {sendPolling=false;}
 }
 $('#send-form').onsubmit=async event=>{
@@ -554,6 +562,15 @@ $('#send-form').onsubmit=async event=>{
     else sendFeedback('发送结果暂不确定，请先核对微信。不会自动重发。',true);
     renderSendState();
   }
+};
+for(const id of ['friend-add-room','friend-add-wxid','friend-add-message'])$('#'+id).addEventListener('input',renderSendState);
+$('#friend-add-form').onsubmit=async event=>{
+  event.preventDefault();if($('#friend-add-submit').disabled||pendingSend)return;
+  const requested=robot,job={id:crypto.randomUUID(),robot:requested,kind:'friend'};pendingSend=job;
+  const body={request_id:job.id,session_id:sendSession,room:$('#friend-add-room').value,wxid:$('#friend-add-wxid').value.trim(),message:$('#friend-add-message').value};
+  $('#friend-add-status').textContent='正在发送申请…';renderSendState();
+  try {await api('friend-request-send',body,requested);if(pendingSend===job)await pollSendStatus();}
+  catch(error){if(pendingSend!==job)return;if(error.status){pendingSend=null;$('#friend-add-status').textContent=error.message;}else $('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';renderSendState();}
 };
 setInterval(pollSendStatus,1500);
 function renderMessages() {

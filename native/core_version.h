@@ -76,6 +76,7 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x754330: return 0x77b270;
             case 0x7544b0: return 0x77b3f0;
             case 0x1a26440: return 0x1a69dc0;
+            case 0x1a5a850: return 0x1a5a850; // 4.2.0.12 VerifyUser
             case 0x3866510: return 0x3959710;
             case 0x8d9f958: return 0x9075ec8;
             default: return 0;

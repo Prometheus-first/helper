@@ -21,6 +21,7 @@
 - `file_send.h` 也提供 `WxSendVideo` / `WxInspectVideoPath`，仅限已核对指纹的微信 4.2.0.12。文件传输助手和群聊已实测为可播放视频；暂存路径需保留 `.mp4` 后缀。
 - `friend_receive.h`：独立好友验证接收通道，仅复制实时申请，跳过历史初始化记录；沿用 V3 内存队列。
 - `friend_request.h`：`WxInspectFriendRequest` / `WxAcceptFriendRequest`，核对账号并等待微信原生验证结果；申请凭据不写报告。
+- `friend_add.h`：仅限微信 4.2.0.12，通过共同群来源发送单次好友申请；实机确认对方收到。
 - `group_management.h`：原生邀请好友进群及创建群聊，创建成功时读取服务器返回的群 ID；未进行真实群管理操作测试。
 - 群系统消息 `10000/10002` 不作为普通聊天正文；完整群成员和真实群昵称由 `wxbot_framework/group_members.py` 只读获取，`group_events.py` 负责变动确认与去重。
 - 当前接收通道为 `WxPollMediaMessageV7`，结构大小与 V6 相同，长文本借用媒体载荷区；普通文本最多 262143 个 UTF-8 字节，超过上限或不可读取时报告警告。旧版 V1–V6 接收入口保留原有结构边界。微信原始消息编号和 V6 音频字段继续保留；普通消息与独立系统 XML 入口共同提供撤回关联。管理台保留原记录，`anti_recall` 插件控制自动补发。

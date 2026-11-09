@@ -140,6 +140,7 @@ class RobotProxy:
         from urllib.parse import urlencode
         return self.request('group-members?' + urlencode({'room': room}))
     def send_text(self, data): return self.request('send-text', data)
+    def send_friend_request(self, data): return self.request('friend-request-send', data)
     def list_scheduled_tasks(self): return self.request('scheduled-tasks')
     def save_scheduled_task(self, data): return self.request('scheduled-tasks', data)
     def delete_scheduled_task(self, data): return self.request('scheduled-tasks/delete', data)
