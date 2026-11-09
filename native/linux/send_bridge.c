@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "personal_account.h"
 #include <sys/uio.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -510,7 +511,7 @@ static void sdk_perform_image_scope(const char*payload,int voice_test,int multi)
  }else{
   if(strlen(separator+1)>127||strchr(separator+1,'\n')){sdk_finish_error("invalid image scope");return;}
   memcpy(peers[0],payload,(size_t)(separator-payload));strcpy(account,separator+1);count=1;
-  if(strncmp(peers[0],"wxid_",5)||!sdk_scope_target(peers[0])){sdk_finish_error("image scope requires account identifiers");return;}
+  if(!helper_personal_account((const unsigned char*)peers[0],strlen(peers[0]))){sdk_finish_error("image scope requires account identifiers");return;}
  }
  if(!count||!sdk_scope_target(account)||strchr(account,'@')||!sdk_profile(current,name)||strcmp(current,account)){
   sdk_finish_error("image scope account is not logged in");return;
