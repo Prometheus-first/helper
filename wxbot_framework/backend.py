@@ -38,7 +38,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "group.text.mention", "message.recall", "group.members.read", "group.events", "image.receive", "image.send",
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
     "group.file.receive", "group.file.send", "voice.receive", "voice.send",
-    "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "friend.request.send",
+    "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "video.receive", "friend.video.receive", "group.video.receive", "friend.request.send",
 })
 
 

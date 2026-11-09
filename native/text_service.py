@@ -121,9 +121,11 @@ class NativeTextService(NativeFileHelperService):
         self._image_receiver = None
         self._file_receiver = None
         self._voice_receiver = None
+        self._video_receiver = None
         self._forwarded_receiver = None
         self.file_directory = Path(file_directory or
                                    Path(__file__).resolve().parent.parent / ".runtime/files")
+        self.video_directory = self.file_directory.parent / 'videos'
         self.wechat_data_directory = Path(wechat_data_directory) if wechat_data_directory is not None else None
         self.emoticon_directory = Path(emoticon_directory or
                                        Path(__file__).resolve().parent.parent / ".runtime/emoticons")
@@ -185,6 +187,11 @@ class NativeTextService(NativeFileHelperService):
         self._file_receiver = FileReceiver(FileStore(self.file_directory, account),
             self._download_file, self._deliver_file,
             lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
+        if self.wechat_version == '4.2.0.12':
+            from wxbot_framework.video_receiver import VideoReceiver
+            self._video_receiver = VideoReceiver(FileStore(self.video_directory, account),
+                self._download_video, self._deliver_video,
+                lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
         from wxbot_framework.forwarded_receiver import ForwardedReceiver
         self._forwarded_receiver = ForwardedReceiver(ImageStore(self.media_directory, account),
             self._download_image, self._deliver_forwarded,
@@ -257,6 +264,32 @@ class NativeTextService(NativeFileHelperService):
             except Exception:
                 logger.exception("文件消息处理器异常")
 
+    def _download_video(self, metadata, destination):
+        from wxbot_framework.video_metadata import select_video_download
+        filekey, aeskey, size, md5, _quality = select_video_download(metadata)
+        if not filekey or not aeskey or not size or not md5:
+            return False
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self.wechat_version != '4.2.0.12':
+                return False
+            self._check_account(force=True)
+            result = self._run('--download-image', pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports,
+                download_image={'destination':str(destination), 'filekey':filekey,
+                                'aeskey':aeskey, 'image_type':4})
+            self._check_account(force=True)
+            return result.get('success') is True
+
+    def _deliver_video(self, data):
+        if self._stop.is_set():
+            return
+        logger.info('视频接收 | 会话ID=%s | 状态=%s', data['chat_id'], data.get('video_status'))
+        for handler in list(self.msg_handlers):
+            try:
+                handler(self.pid, 11046, data, self)
+            except Exception:
+                logger.warning('视频消息处理器暂不可用')
+
     def _download_image(self, metadata, destination):
         from wxbot_framework.image_metadata import select_image_download
         filekey, aeskey, image_type, _quality = select_image_download(metadata)
@@ -286,6 +319,11 @@ class NativeTextService(NativeFileHelperService):
 
     def stop(self):
         self._stop.set()
+        if self._video_receiver is not None:
+            self._video_receiver.close(timeout=30)
+            if self._video_receiver.is_alive:
+                raise RuntimeError('视频原生下载尚未结束，保留桥接等待清理重试')
+            self._video_receiver = None
         if self._voice_receiver is not None:
             self._voice_receiver.close(timeout=30)
             if self._voice_receiver.is_alive:
@@ -421,7 +459,22 @@ class NativeTextService(NativeFileHelperService):
                     self._voice_receiver.submit(data, self._voice_payload(message))
                     return None
                 return sanitized
-            if message.type in (43, 47, 62):
+            if message.type == 43:
+                data['raw_content'] = data.get('content', '')
+                enabled = not self.image_allowlist or data['chat_id'] in self.image_allowlist
+                receiver = getattr(self, '_video_receiver', None)
+                receiving = enabled and receiver is not None
+                sanitized = dict(data, msg='', content='', raw_content='', monitor_only=True,
+                                 video_status='pending' if receiving else 'unavailable' if enabled else 'skipped',
+                                 video_path='')
+                if receiving:
+                    monitor = getattr(self, 'monitor_handler', None)
+                    if monitor is not None:
+                        monitor(sanitized)
+                    receiver.submit(data)
+                    return None
+                return sanitized
+            if message.type in (47, 62):
                 data['monitor_only'] = True
                 return data
             forwarded = None

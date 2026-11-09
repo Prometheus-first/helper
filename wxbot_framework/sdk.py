@@ -44,6 +44,10 @@ class Message:
     def file_path(self):
         return self.data.get("file_path") or ""
 
+    @property
+    def video_path(self):
+        return self.data.get("video_path") or ""
+
     @classmethod
     def from_native(cls, protocol, data, session_id):
         snapshot = copy.deepcopy(data)

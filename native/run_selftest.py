@@ -341,7 +341,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                 any(ch not in "0123456789abcdefABCDEF" for ch in aeskey)):
             raise ValueError("图片 CDN AES 参数无效")
         image_type = download_image.get("image_type", 2)
-        if type(image_type) is not int or image_type not in (1, 2, 3):
+        if type(image_type) is not int or image_type not in (1, 2, 3, 4):
             raise ValueError("图片下载类型无效")
         text = str(destination)
     elif download_image is not None:
@@ -431,6 +431,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         build = compatible_core(core[1], baseline)
         if build is None:
             raise RuntimeError("微信核心 DLL 指纹不匹配，拒绝加载")
+        if downloading and image_type == 4 and build.get('wechat_version') != '4.2.0.12':
+            raise RuntimeError('视频 CDN 下载仅适配微信 4.2.0.12')
         if adding_friend and build.get('wechat_version') != '4.2.0.12':
             raise RuntimeError('主动添加好友仅适配微信 4.2.0.12')
         if build.get('wechat_version') == '4.2.0.12':

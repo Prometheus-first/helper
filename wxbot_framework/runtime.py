@@ -200,6 +200,9 @@ class BotApplication:
         elif message.type == 3:
             logger.info("图片消息 | 会话ID=%s | 状态=%s | 文件=%s", message.chat_id,
                         message.data.get("image_status", "pending"), message.image_path or "")
+        elif message.type == 43:
+            logger.info('视频消息 | 发送者微信ID=%s | 状态=%s',
+                        message.sender_id or message.chat_id, message.data.get('video_status', 'unavailable'))
         elif message.type == 49:
             if message.data.get('app_type') == 19:
                 logger.info('合并转发 | 发送者微信ID=%s | 记录数=%s | 状态=%s',
