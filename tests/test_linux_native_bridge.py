@@ -105,19 +105,24 @@ class LinuxNativeBridgeTests(unittest.TestCase):
             with listener.accept(timeout=4) as conn:
                 conn.settimeout(4);read_bridge_ready(conn)
                 events=[]
-                for _ in range(7):
+                for _ in range(8):
                     event=read_text_event(conn);events.append(event)
                     acknowledge_text_event(conn,event['sequence'])
             out,err=child.communicate(timeout=5)
             self.assertEqual(child.returncode,0,err)
-            self.assertEqual([event['type'] for event in events],[1,47,10002,10000,10002,37,1])
+            self.assertEqual([event['type'] for event in events],[1,47,43,10002,10000,10002,37,1])
+            from wxbot_framework.linux_panel_backend import LinuxPanelBackend
+            backend=LinuxPanelBackend(self.fixture,self.test_bridge,self.test_bridge)
+            video=backend.convert_event(events[2])
+            self.assertEqual(video.data['video_status'], 'unavailable')
+            self.assertEqual(video.data['video_metadata'], {'duration': 2, 'size': 123})
             self.assertEqual(events[0]['native_message_id'],'18446744073709551614')
             self.assertEqual(events[1]['native_message_id'],'77')
-            self.assertEqual(events[3]['native_message_id'],'80')
-            self.assertEqual(events[4]['native_message_id'],'81')
-            self.assertIn('加入了群聊',events[3]['text'])
-            self.assertIn('sysmsgtemplate',events[4]['text'])
-            self.assertEqual(events[5]['sender'],'fmessage')
+            self.assertEqual(events[4]['native_message_id'],'80')
+            self.assertEqual(events[5]['native_message_id'],'81')
+            self.assertIn('加入了群聊',events[4]['text'])
+            self.assertIn('sysmsgtemplate',events[5]['text'])
+            self.assertEqual(events[6]['sender'],'fmessage')
             self.assertEqual(events[-1]['native_message_id'],'82')
 
     def test_unacknowledged_event_is_retried_with_same_sequence(self):

@@ -68,7 +68,7 @@ def read_text_event(conn: socket.socket) -> dict:
             raise LinuxWireError("原生语音帧类型或长度无效")
     elif magic == _EVENT_MAGIC:
         msg_type, native_id, source_len = struct.unpack("!IQI", _read_exact(conn, 16))
-        if msg_type not in (1, 3, 34, 37, 47, 49, 10000, 10002) or (source_len and msg_type != 1):
+        if msg_type not in (1, 3, 34, 37, 43, 47, 49, 10000, 10002) or (source_len and msg_type != 1):
             raise LinuxWireError("原生事件类型或来源无效")
     elif magic == _MEDIA_MAGIC:
         msg_type = struct.unpack("!I", _read_exact(conn, 4))[0]
@@ -80,6 +80,8 @@ def read_text_event(conn: socket.socket) -> dict:
         raise LinuxWireError("消息来源字段过长")
     if msg_type in (37, 10000, 10002) and text_len > 16384:
         raise LinuxWireError("好友申请字段过长" if msg_type == 37 else "群系统消息字段过长")
+    if msg_type == 43 and (text_len > 16384 or max(sender_len, receiver_len) > 127):
+        raise LinuxWireError("视频事件字段过长")
     if msg_type == 37 and max(sender_len, receiver_len) > 127:
         raise LinuxWireError("好友申请账号字段过长")
     # 字段长度使用协议内的无符号 32 位长度；不截断正文。

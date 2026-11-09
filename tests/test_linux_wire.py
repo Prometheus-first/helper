@@ -118,6 +118,16 @@ class LinuxWireTests(unittest.TestCase):
         finally:
             left.close(); right.close()
 
+    def test_video_frame_rejects_oversized_fields_before_reading(self):
+        for sender_len, receiver_len, body_len in ((128, 1, 1), (1, 128, 1), (1, 1, 16385)):
+            left, right = socket.socketpair()
+            try:
+                right.sendall(struct.pack('!4sQIIIIQI', b'HLE1', 1, sender_len, receiver_len, body_len, 43, 0, 0))
+                with self.assertRaisesRegex(LinuxWireError, '视频事件字段过长'):
+                    read_text_event(left)
+            finally:
+                left.close(); right.close()
+
     def test_group_system_frame_rejects_oversized_body_before_reading_it(self):
         for kind in (10000, 10002):
             left,right=socket.socketpair()

@@ -104,7 +104,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_media_monitor_does_not_keep_xml_credentials(self):
         monitor = MessageBuffer()
-        for kind in (3, 34, 47, 49):
+        for kind in (3, 34, 43, 47, 49):
             message = self.backend.convert_event(self.event('<msg aeskey="PRIVATE_FIXTURE_KEY"/>', kind))
             self.assertTrue(message.data['monitor_only'])
             self.assertEqual(message.text, '')
@@ -112,8 +112,18 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn('PRIVATE_FIXTURE', repr(message.data))
         content = json.dumps(monitor.tail(0))
         self.assertNotIn('aeskey', content)
-        for text in ('[图片]', '[语音]', '[表情]', '[文件/分享]'):
+        for text in ('[图片]', '[语音]', '[视频]', '[表情]', '[文件/分享]'):
             self.assertIn(text, json.dumps(monitor.tail(0), ensure_ascii=False))
+
+    def test_video_metadata_stays_private_and_is_not_advertised_as_download(self):
+        xml = ('<msg><videomsg length="123" playlength="3" '
+               'aeskey="0123456789abcdef0123456789abcdef" cdnvideourl="SECRET_FIXTURE_URL"/></msg>')
+        msg = self.backend.convert_event(self.event(xml, kind=43))
+        self.assertEqual(msg.data['video_status'], 'unavailable')
+        self.assertEqual(msg.data['video_metadata'], {'duration': 3, 'size': 123})
+        self.assertNotIn('SECRET_FIXTURE_URL', repr(msg))
+        self.assertNotIn('0123456789abcdef', repr(msg))
+        self.assertNotIn('video.receive', PANEL_CAPABILITIES)
 
     def test_recall_marks_original_and_does_not_expose_system_xml(self):
         monitor=MessageBuffer()

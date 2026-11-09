@@ -102,13 +102,13 @@ static void capture(const void *obj){
  uint32_t type=0;if(!obj||!safe_read(&type,(const char*)obj+20,4))return;
  if(type!=1){
   int media=(type==3||type==49||type==34);
-  int monitor_only=(type==37||type==47||type==10000||type==10002);
+  int monitor_only=(type==37||type==43||type==47||type==10000||type==10002);
   if((!media&&!monitor_only)||(monitor_only&&!panel_media)||(media&&!media_test&&!panel_media)||
      (type==34&&!voice_test&&!panel_media))return;
  }
  struct event *e=calloc(1,sizeof(*e));if(!e){notice("helper-linux: event allocation failed\n");return;}
  for(int i=0;i<3;i++){
-  uint64_t maxlen=(i==2&&(type==34||type==37||type==10000||type==10002))?16384:UINT32_MAX;
+  uint64_t maxlen=(i==2&&(type==34||type==37||type==43||type==10000||type==10002))?16384:UINT32_MAX;
   if(!get_field(obj,(unsigned[]){8,24,32}[i],&e->fields[i],&e->lengths[i],maxlen)){event_free(e);return;}
  }
  e->type=type;
@@ -159,7 +159,7 @@ static int connect_socket(void){
 static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
 static int send_event(int fd,const struct event *e){
  unsigned char h[40];int has_source=e->type==1&&e->lengths[3],voice=e->type==34;
- int extended=voice||e->native_id||e->type==37||e->type==47||e->type==10000||e->type==10002;
+ int extended=voice||e->native_id||e->type==37||e->type==43||e->type==47||e->type==10000||e->type==10002;
  size_t header_size=extended?40:e->type==1?(has_source?28:24):28;
  memcpy(h,voice?"HLV1":extended?"HLE1":e->type==1?(has_source?"HLA1":"HLT1"):"HLM1",4);uint64_t seq=htobe64(e->seq);memcpy(h+4,&seq,8);
  for(int i=0;i<3;i++){uint32_t n=htonl(e->lengths[i]);memcpy(h+12+4*i,&n,4);}

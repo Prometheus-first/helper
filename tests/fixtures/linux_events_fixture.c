@@ -36,6 +36,7 @@ int main(void){usleep(300000);
 #else
  emit(1,"wxid_friend_fixture:\nfixture text",18446744073709551614ULL);
  emit(47,"wxid_friend_fixture:\n<msg><emoji cdnurl='fixture'/></msg>",77);
+ emit(43,"wxid_friend_fixture:\n<msg><videomsg length='123' playlength='2'/></msg>",78);
  emit(10002,"<sysmsg type='revokemsg'><revokemsg><session>123456789@chatroom</session><newmsgid>18446744073709551614</newmsgid></revokemsg></sysmsg>",0);
  emit(10000,"\"fixture newcomer\"加入了群聊",80);
  emit(10002,"<sysmsg type='sysmsgtemplate'><sysmsgtemplate><content_template><template>$names$加入了群聊</template><link_list><link name='names'><memberlist><member><username>wxid_new_fixture</username><nickname>fixture newcomer</nickname></member></memberlist></link></link_list></content_template></sysmsgtemplate></sysmsg>",81);

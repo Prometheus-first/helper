@@ -108,6 +108,15 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                         metadata['_linux_media'] = payload
                 except ValueError:
                     pass
+            if event['type'] == 43:
+                # 未验证 Linux 下载入口，仅保留不含 CDN 凭据的监控信息。
+                from .video_metadata import VideoMetadataError, parse_video_metadata
+                metadata['video_status'] = 'unavailable'
+                try:
+                    video = parse_video_metadata(routed['content'])
+                    metadata['video_metadata'] = {'duration': video.duration, 'size': video.raw_length or video.length}
+                except VideoMetadataError:
+                    pass
             if event['type'] == 47:
                 from .sticker_metadata import StickerError, parse_sticker
                 try:
