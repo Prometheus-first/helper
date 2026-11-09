@@ -98,6 +98,10 @@ class ReceiverTests(unittest.TestCase):
         receiver.submit(message)
         result = self.updates.get(timeout=3)
         self.assertEqual(result.data['image_status'], 'ready')
+        self.assertEqual(result.data['image_integrity'], 'md5_verified')
+        # The metadata checksum validates downloaded bytes; it does not prove
+        # that WeChat supplied the sender's uncompressed original.
+        self.assertEqual(result.data['image_quality'], 'unknown')
         self.assertEqual(Path(result.image_path).read_bytes(), body)
         receiver.submit(message)
         self.assertEqual(calls, [(SESSION, ROOM, md5)])
@@ -108,6 +112,7 @@ class ReceiverTests(unittest.TestCase):
         receiver.submit(self.message('<msg><img md5="' + 'a'*32 + '" length="20"/></msg>', kind=3))
         result = self.updates.get(timeout=3)
         self.assertEqual(result.data['image_status'], 'failed')
+        self.assertNotIn('image_integrity', result.data)
         self.assertEqual(calls, ['a'*32])
 
     def test_verified_file74_ready_is_private_and_contains_no_raw_metadata(self):

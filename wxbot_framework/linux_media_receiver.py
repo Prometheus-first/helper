@@ -451,7 +451,10 @@ class LinuxMediaReceiver:
                         raise ValueError('媒体完整校验失败')
                     path = self._save(body, message, key)
                     if path is not None:
-                        self._deliver(key, self._status(message, 'ready', path=path))
+                        ready = self._status(message, 'ready', path=path)
+                        if payload.kind == 3:
+                            ready = replace(ready, data=dict(ready.data, image_integrity='md5_verified'))
+                        self._deliver(key, ready)
                     return
                 self._stop.wait(min(.25, max(0, deadline-time.monotonic())))
             if self._active():
