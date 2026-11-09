@@ -174,6 +174,54 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual([p.name for p in path.parent.iterdir()], ['image.dat'])
         self.assertNotIn(key.hex(), repr(dict(ready.data)))
 
+    def test_image_hardlinks_in_two_wechat_conversations_are_verified(self):
+        try:
+            from tests.test_linux_media import CachedImageTests
+        except ModuleNotFoundError:
+            from test_linux_media import CachedImageTests
+        body, key, encrypted, md5 = CachedImageTests.fixture()
+        attach = self.storage / ACCOUNT / 'msg/attach'
+        first = attach / ('a' * 32) / '2026-11/Img' / (('b' * 32) + '_h.dat')
+        second = attach / ('c' * 32) / '2026-11/Img' / (('d' * 32) + '_h.dat')
+        first.parent.mkdir(parents=True)
+        second.parent.mkdir(parents=True)
+        first.write_bytes(encrypted)
+        os.link(first, second)
+        receiver = self.receiver()
+        xml = f'<msg><img md5="{md5}" length="{len(body)}"/></msg>'
+        with patch.object(receiver, '_key', return_value=key):
+            receiver.submit(self.message(xml, kind=3))
+            ready = self.updates.get(timeout=3)
+        self.assertEqual(ready.data['image_status'], 'ready')
+        self.assertEqual(Path(ready.image_path).read_bytes(), body)
+
+    def test_image_hardlink_outside_verified_cache_is_rejected(self):
+        body = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=')
+        original = self.root / 'outside.png'
+        original.write_bytes(body)
+        candidate = self.storage / ACCOUNT / 'msg/attach' / ('a' * 32) / '2026-11/Img' / (('b' * 32) + '_h.dat')
+        candidate.parent.mkdir(parents=True)
+        os.link(original, candidate)
+        receiver = self.receiver()
+        xml = f'<msg><img md5="{hashlib.md5(body).hexdigest()}" length="{len(body)}"/></msg>'
+        receiver.submit(self.message(xml, kind=3))
+        self.assertEqual(self.updates.get(timeout=3).data['image_status'], 'failed')
+
+    def test_image_pair_with_extra_hardlink_is_rejected(self):
+        body = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=')
+        attach = self.storage / ACCOUNT / 'msg/attach'
+        first = attach / ('a' * 32) / '2026-11/Img' / (('b' * 32) + '_h.dat')
+        second = attach / ('c' * 32) / '2026-11/Img' / (('d' * 32) + '_h.dat')
+        first.parent.mkdir(parents=True)
+        second.parent.mkdir(parents=True)
+        first.write_bytes(body)
+        os.link(first, second)
+        os.link(first, self.root / 'outside.png')
+        receiver = self.receiver()
+        xml = f'<msg><img md5="{hashlib.md5(body).hexdigest()}" length="{len(body)}"/></msg>'
+        receiver.submit(self.message(xml, kind=3))
+        self.assertEqual(self.updates.get(timeout=3).data['image_status'], 'failed')
+
     def test_wrong_account_wrong_hash_and_symlink_sources_never_become_ready(self):
         body=b'expected content'
         other=self.cached_file(body, account='wxid_other')

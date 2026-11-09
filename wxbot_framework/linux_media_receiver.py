@@ -266,7 +266,17 @@ class LinuxMediaReceiver:
 
     @staticmethod
     def _signature(info):
-        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_nlink
+
+    @staticmethod
+    def _image_hardlink_path(path, profile):
+        try:
+            parts = path.relative_to(profile / 'msg' / 'attach').parts
+            return (len(parts) == 4 and re.fullmatch(r'[0-9a-f]{32}', parts[0]) is not None and
+                re.fullmatch(r'[0-9]{4}-[0-9]{2}', parts[1]) is not None and parts[2] == 'Img' and
+                re.fullmatch(r'[0-9a-f]{32}_h\.dat', parts[3]) is not None)
+        except ValueError:
+            return False
 
     def _profiles(self):
         root = self.storage_root
@@ -288,6 +298,7 @@ class LinuxMediaReceiver:
     def _candidates(self, payload, deadline):
         count = 0
         for profile in self._profiles():
+            linked = {}
             root = profile / 'msg'
             if not root.is_dir() or root.resolve() != root:
                 continue
@@ -320,24 +331,44 @@ class LinuxMediaReceiver:
                     try:
                         info = path.lstat()
                         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
-                                info.st_nlink != 1 or path.resolve(strict=True) != path):
+                                path.resolve(strict=True) != path):
                             continue
                         expected = {payload.metadata.size} if payload.kind == 49 else {
                             n+extra for n in (payload.metadata.length, payload.metadata.hdlength)
                             if type(n) is int and n > 0 for extra in (0,31)}
                         if info.st_size in expected:
-                            yield path, info
+                            if info.st_nlink == 1:
+                                yield path, info, None
+                            elif (payload.kind == 3 and info.st_nlink == 2 and
+                                  self._image_hardlink_path(path, profile)):
+                                identity = (info.st_dev, info.st_ino)
+                                if identity in linked:
+                                    previous, previous_info = linked.pop(identity)
+                                    if self._signature(previous_info) == self._signature(info):
+                                        yield previous, previous_info, path
+                                else:
+                                    linked[identity] = (path, info)
                     except OSError:
                         continue
 
-    def _read(self, path, info):
+    def _read(self, path, info, peer=None):
+        def peer_valid():
+            if peer is None:
+                return info.st_nlink == 1
+            peer_info = peer.lstat()
+            return (stat.S_ISREG(peer_info.st_mode) and peer_info.st_uid == os.geteuid() and
+                peer.resolve(strict=True) == peer and self._signature(peer_info) == self._signature(info))
+
+        if not peer_valid():
+            return None
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         with os.fdopen(descriptor, 'rb') as source:
             if self._signature(os.fstat(source.fileno())) != self._signature(info):
                 return None
             body = source.read(info.st_size + 1)
             if (len(body) != info.st_size or self._signature(os.fstat(source.fileno())) != self._signature(info) or
-                    self._signature(path.lstat()) != self._signature(info) or path.resolve() != path):
+                    self._signature(path.lstat()) != self._signature(info) or path.resolve() != path or
+                    not peer_valid()):
                 return None
         return body
 
@@ -353,12 +384,12 @@ class LinuxMediaReceiver:
 
     def _find(self, payload, deadline):
         scanned, key = 0, None
-        for path, info in self._candidates(payload, deadline):
+        for path, info, peer in self._candidates(payload, deadline):
             if scanned + info.st_size > self.scan_bytes:
                 raise ValueError('媒体读取超出预算')
             scanned += info.st_size
             try:
-                body = self._read(path, info)
+                body = self._read(path, info, peer)
                 if body is None:
                     continue
                 if hashlib.md5(body).hexdigest() == payload.metadata.md5:
