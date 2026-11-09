@@ -258,10 +258,8 @@ class NativeTextService(NativeFileHelperService):
                 logger.exception("文件消息处理器异常")
 
     def _download_image(self, metadata, destination):
-        filekey = metadata.cdnmidimgurl or metadata.filekey or metadata.cdnbigimgurl or metadata.cdnthumburl
-        aeskey = metadata.aeskey if (metadata.cdnmidimgurl or metadata.filekey or metadata.cdnbigimgurl) else (metadata.cdnthumbaeskey or metadata.aeskey)
-        image_type = (2 if metadata.cdnmidimgurl or metadata.filekey else
-                      1 if metadata.cdnbigimgurl else 3)
+        from wxbot_framework.image_metadata import select_image_download
+        filekey, aeskey, image_type, _quality = select_image_download(metadata)
         if not filekey or not aeskey:
             return False
         with self._calls:

@@ -53,6 +53,19 @@ class ImageMetadata:
     filekey: str = field(default="", repr=False)
 
 
+
+def select_image_download(metadata: ImageMetadata):
+    """Select one usable reference, preferring original; credentials stay internal."""
+    if metadata.cdnbigimgurl and metadata.aeskey:
+        return metadata.cdnbigimgurl, metadata.aeskey, 1, "original"
+    if (metadata.cdnmidimgurl or metadata.filekey) and metadata.aeskey:
+        return metadata.cdnmidimgurl or metadata.filekey, metadata.aeskey, 2, "standard"
+    thumb_key = metadata.cdnthumbaeskey or metadata.aeskey
+    if metadata.cdnthumburl and thumb_key:
+        return metadata.cdnthumburl, thumb_key, 3, "thumbnail"
+    return "", "", 0, "unknown"
+
+
 def _number(attributes, name, maximum):
     if name not in attributes:
         return None
