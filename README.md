@@ -3,8 +3,6 @@
 Windows 微信机器人 Python 插件框架，提供本地网页管理台和控制台入口。
 
 ## 交流
-
-<details>
 <summary>交流群二维码</summary>
 <img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/b149253c-9684-447d-af17-f83030bdf1ba" />
 
