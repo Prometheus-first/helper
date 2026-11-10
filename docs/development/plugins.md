@@ -99,6 +99,7 @@ def scheduled_greeting(self, params, ctx):
 | --- | --- |
 | `ctx.reply(message, text)` | 回复文本 |
 | `ctx.reply_at(message, text)` | 真正艾特群消息作者并回复 |
+| `ctx.reply_quote(message, text)` | [在原会话发送微信原生引用回复](../messages/text.md#原生引用回复)，需要 `text.quote.send` |
 | `ctx.send_text(chat_id, text)` | 向明确的会话发送文本 |
 | `ctx.send_at_text(room, text, members, expected_session=message.session_id, display_names=names)` | 向指定群发送真实艾特，支持 1–8 位成员 |
 | `ctx.reply_image(message, path)` | 回复本地图片 |

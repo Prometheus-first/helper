@@ -114,6 +114,7 @@ class NativeTextService(NativeFileHelperService):
         self.chats = {}
         self._next_account_check = 0
         self._sent_texts = deque(maxlen=64)
+        self._sent_quotes = deque(maxlen=64)
         self.mention_messages = 0
         self.media_directory = Path(media_directory or Path(__file__).resolve().parent.parent / ".runtime/images")
         self.image_allowlist = frozenset(image_allowlist)
@@ -144,6 +145,7 @@ class NativeTextService(NativeFileHelperService):
         self.router = TextRouter(include_self_groups=True)
         self.chats = {}
         self._sent_texts.clear()
+        self._sent_quotes.clear()
         if self.pid is None:
             self.pid = find_account_process(self.preferred_account)
         elif self.preferred_account and inspect_account(self.pid) != self.preferred_account:
@@ -477,6 +479,21 @@ class NativeTextService(NativeFileHelperService):
             if message.type in (47, 62):
                 data['monitor_only'] = True
                 return data
+            if message.type == 49:
+                from wxbot_framework.quoted import QuoteError, parse_quote
+                try:
+                    quoted = parse_quote(data.get('raw_content', ''))
+                except QuoteError:
+                    quoted = None
+                if quoted is not None:
+                    # 引用与原提问分别保留；无需文件下载，不把 XML 交给模型。
+                    data.update(quoted.public(), msg=quoted.text, content=quoted.text, raw_content='')
+                    if data["is_self"] and any(chat == data["chat_id"] and text == quoted.text and
+                                               time.monotonic() - sent_at < 120
+                                               for chat, text, sent_at in tuple(self._sent_quotes)):
+                        self.router.ignored_self += 1
+                        data.update(bot_generated=True, dispatch_to_plugins=False)
+                    return data
             forwarded = None
             if message.type == 49:
                 from wxbot_framework.forwarded import ForwardedError, parse_forwarded
@@ -682,6 +699,29 @@ class NativeTextService(NativeFileHelperService):
 
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)
+
+    def send_quote_text(self, to_wxid, original_id, content):
+        validate_target(to_wxid)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生文本服务没有运行")
+            self._check_account(force=True)
+            self._sent_quotes.append((to_wxid, content.strip(), time.monotonic()))
+            for delay in (0, 0.15, 0.35):
+                if self._stop.wait(delay):
+                    return False
+                self._check_account(force=True)
+                self.last_result = result = self._run(
+                    "--dispatch", pid=self.pid, text=content, target=to_wxid,
+                    account=self.self_wxid, quote_id=original_id, keep_loaded=True,
+                    preserve_report=self.preserve_reports,
+                )
+                report = result.get("report", {})
+                # 只重试明确未找到原消息的查找。发送超时可能已经送达。
+                if not (result.get("code") == result.get("cleanup_code") == 0 and
+                        report.get("stage") == 84 and report.get("exception") == 0):
+                    return result["success"]
+            return False
 
     def moments_capabilities(self):
         from moments_transport import moments_capabilities

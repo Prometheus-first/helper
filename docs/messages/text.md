@@ -15,6 +15,18 @@ ctx.reply(message, "已收到你的消息")
 
 文本必须非空且不能包含 NUL。超出桥接单条 1023 个 UTF-8 字节时，框架按字符边界拆成多条顺序发送；真实艾特只出现在第一条。每条沿用配置的随机等待；途中失败或连接中断时，之前的部分可能已经发出，不会自动重发。
 
+## 原生引用回复
+
+Windows 微信 4.2.0.12 的原生后端提供 `text.quote.send`。把它加到插件 `plugin.json` 的 `requires`，然后传入收到的普通文本消息，在原会话发送引用回复：
+
+```python
+def on_message(self, message, ctx):
+    if message.type == 1 and message.text == "/引用测试":
+        ctx.reply_quote(message, "收到，这是引用回复。")
+```
+
+传入原始 `Message` 对象即可，框架会使用微信服务器消息编号定位原文。消息监控会分别显示回复正文和引用原文。回复正文必须为 1–1023 个 UTF-8 字节，不会拆成多条。微信找不到原消息或发送未确认时返回 `False`，不会自动改发普通文本。`ctx.reply` 仍发送普通回复。
+
 ## 群成员艾特
 
 ```python

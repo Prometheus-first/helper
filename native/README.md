@@ -14,6 +14,7 @@
 - `core_version.h`：按精确构建解析原生地址，调用、虚表校验和 Hook 卸载共用同一份映射；`wxbot_framework/native_profiles.py` 提供对应的只读账号、缓存地址和表情解码参数。
 - `bridge_watchdog.py`：主程序异常退出后的隐藏清理守护入口，运行时需要一起保留。
 - `build_text/text_bridge.dll`：当前消息收发和真实艾特桥接。
+- `quote_send.h`：Windows 微信 4.2.0.12 原生引用回复。按同一会话的服务器消息编号查找原文，发送前核对当前账号。文件传输助手已实测，群聊通过离线验证。
 - `emoticon_send.h`：本地 GIF 的原生类型 47 发送，含账号核对、文件限制和共享引用清理。
 - `voice_send.h`：语音对象构造与原生类型 34 发送，入口为 `WxSendVoice` / `WxInspectVoicePath`；排队前复制音频字节，沿用任务存活和安全卸载检查。
 - `file_download.h`：普通文件附件的 CDN 下载，入口为 `WxDownloadFile`；按声明大小和完成大小校验，原始 CDN 参数不写入报告。

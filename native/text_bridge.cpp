@@ -7,6 +7,7 @@
 #define WXBOT_VOICE_RECEIVE
 #define WXBOT_RECALL_RECEIVE
 #define WXBOT_FRIEND_RECEIVE
+#define WXBOT_QUOTE_SEND
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();
@@ -57,18 +58,37 @@ static_assert(sizeof(TextConfig) == 1688, "Unexpected text config ABI");
 struct AtTextConfig { TextConfig base; char members[1024]; };
 static_assert(sizeof(AtTextConfig) == 2712, "Unexpected at-text config ABI");
 
-struct MentionContext { const char* members; bool applied; };
+struct QuoteScope {
+    SharedMessage prepared;
+    unsigned char* object;
+    bool* completion_quoted;
+    bool applied;
+};
+struct TextFactoryContext { const char* members; QuoteScope* quote; };
+static constexpr uint64_t native_quote_type = (57ull << 32) | 49;
+
+static TextFactoryContext* text_factory_context() {
+    return factory_tls == TLS_OUT_OF_INDEXES ? nullptr :
+        static_cast<TextFactoryContext*>(TlsGetValue(factory_tls));
+}
 using MessageFactory = SharedMessage* (__fastcall*)(SharedMessage*);
 static MessageFactory original_factory = nullptr;
 
-static SharedMessage* __fastcall mention_factory(SharedMessage* output) {
+static SharedMessage* __fastcall text_factory(SharedMessage* output) {
     _InterlockedIncrement(&active_callbacks);
     SharedMessage* result = nullptr;
     __try {
+        const auto context = text_factory_context();
+        if (context && context->quote &&
+                reinterpret_cast<uintptr_t>(_ReturnAddress()) == core_address(core_base, 0x5721175)) {
+            auto& prepared = context->quote->prepared;
+            if (!output || !prepared.object) RaiseException(ERROR_INVALID_DATA, 0, 0, nullptr);
+            *output = prepared;
+            prepared = {};
+            return output;
+        }
         result = original_factory(output);
-        const auto context = factory_tls == TLS_OUT_OF_INDEXES ? nullptr :
-            static_cast<MentionContext*>(TlsGetValue(factory_tls));
-        if (context) {
+        if (context && context->members) {
             auto object = output ? static_cast<unsigned char*>(output->object) : nullptr;
             if (!object || *reinterpret_cast<uintptr_t*>(object) != core_address(core_base, 0x8e53588))
                 RaiseException(ERROR_INVALID_DATA, 0, 0, nullptr);
@@ -77,13 +97,12 @@ static SharedMessage* __fastcall mention_factory(SharedMessage* output) {
             if (members->length != 0 || members->capacity != 15 ||
                 !set_native_string(members, context->members))
                 RaiseException(ERROR_INVALID_DATA, 0, 0, nullptr);
-            context->applied = true;
         }
     } __finally { _InterlockedDecrement(&active_callbacks); }
     return result;
 }
 
-static DWORD ensure_mention_factory() {
+static DWORD ensure_text_factory() {
     if (factory_hook_created) return 0;
     MH_STATUS status = MH_Initialize();
     const bool initialized_here = status == MH_OK;
@@ -94,7 +113,7 @@ static DWORD ensure_mention_factory() {
         return ERROR_NOT_ENOUGH_MEMORY;
     }
     void* target = reinterpret_cast<void*>(core_address(core_base, 0x6f4c70));
-    status = MH_CreateHook(target, reinterpret_cast<void*>(&mention_factory), reinterpret_cast<void**>(&original_factory));
+    status = MH_CreateHook(target, reinterpret_cast<void*>(&text_factory), reinterpret_cast<void**>(&original_factory));
     if (status == MH_OK) {
         status = MH_EnableHook(target);
         if (status != MH_OK) MH_RemoveHook(target);
@@ -126,6 +145,7 @@ struct TextCompletion {
     void (__fastcall* destroy)(TextCompletion*);
     TextConfig config;
     char members[1024];
+    bool quoted;
 };
 
 static void __fastcall text_completion_invoke(TextCompletion* self, const unsigned char* result) {
@@ -140,6 +160,7 @@ static void __fastcall text_completion_invoke(TextCompletion* self, const unsign
             write_json_string(log, self->config.base.text);
             std::fputs(",\"at_members\":", log);
             write_json_string(log, self->members);
+            if (self->quoted) std::fputs(",\"message_type\":49,\"app_type\":57", log);
             std::fprintf(log, ",\"thread_id\":%lu,\"completion_success\":%s}\n",
                          GetCurrentThreadId(), success ? "true" : "false");
             std::fclose(log);
@@ -152,7 +173,8 @@ static void __fastcall text_completion_destroy(TextCompletion* self) {
     _InterlockedDecrement(&live_completions);
 }
 
-static DWORD send_text_on_task(const TextConfig* config, const char* members = nullptr) {
+static DWORD send_text_on_task(const TextConfig* config, const char* members = nullptr,
+                               QuoteScope* quote = nullptr) {
     if (!config || live_completions != 0) return ERROR_BUSY;
     struct TextRequest { SmallString receiver; SmallString body; } request{};
     request.receiver.capacity = request.body.capacity = 15;
@@ -165,12 +187,19 @@ static DWORD send_text_on_task(const TextConfig* config, const char* members = n
         free_native_string(&request.body);
         return ERROR_INVALID_PARAMETER;
     }
-    TextCompletion* completion = new TextCompletion{1, 0, text_completion_invoke, text_completion_destroy, *config, {}};
+    auto completion = new (std::nothrow) TextCompletion{
+        1, 0, text_completion_invoke, text_completion_destroy, *config, {}, false};
+    if (!completion) {
+        free_native_string(&request.receiver);
+        free_native_string(&request.body);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
     if (members) strcpy_s(completion->members, members);
     _InterlockedIncrement(&live_completions);
     TestResult report{};
-    MentionContext mention{members, false};
-    if (members && !TlsSetValue(factory_tls, &mention)) {
+    TextFactoryContext context{members, quote};
+    if (quote) quote->completion_quoted = &completion->quoted;
+    if ((members || quote) && !TlsSetValue(factory_tls, &context)) {
         text_completion_destroy(completion);
         free_native_string(&request.receiver); free_native_string(&request.body);
         return ERROR_INVALID_DATA;
@@ -182,7 +211,7 @@ static DWORD send_text_on_task(const TextConfig* config, const char* members = n
     } __except (record_exception(GetExceptionInformation(), &report)) {
         write_report(config->base, report, "WXBOT_TEXT_SEND_EXCEPTION");
     }
-    if (members) TlsSetValue(factory_tls, nullptr);
+    if (members || quote) TlsSetValue(factory_tls, nullptr);
     if (completion) text_completion_destroy(completion);
     // 好友和群 ID 通常超过 SSO 的 15 字节，必须释放两份请求字符串。
     free_native_string(&request.receiver);
@@ -230,7 +259,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxSendAtText(void* parameter) {
     HMODULE core = GetModuleHandleW(L"Weixin.dll");
     if (!core || !core_fingerprint(core)) return 4;
     core_base = reinterpret_cast<uintptr_t>(core);
-    DWORD status = ensure_mention_factory();
+    DWORD status = ensure_text_factory();
     if (status != 0) return status;
     auto lease = std::make_shared<AtTaskLease>(config);
     std::function<void()> task = [lease]() {
@@ -547,6 +576,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "image_send.h"
 #include "image_download.h"
 #include "emoticon_send.h"
+#include "quote_send.h"
 #include "voice_send.h"
 #include "file_download.h"
 #include "file_send.h"
