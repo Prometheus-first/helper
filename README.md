@@ -2,6 +2,12 @@
 
 Windows 微信机器人 Python 插件框架，提供本地网页管理台和控制台入口。
 
+## 交流
+
+<details>
+<summary>交流群二维码</summary>
+<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/b149253c-9684-447d-af17-f83030bdf1ba" />
+
 [在线文档](https://prometheus-first.github.io/helper/) · [快速开始](docs/guide/quick-start.md) · [插件开发](docs/development/plugins.md)
 
 **使用许可：允许个人自用，禁止商业使用。** 允许个人学习研究及非商业修改、免费分享，分享时须保留协议和版权声明。完整条款见 [LICENSE](LICENSE)，第三方组件继续适用各自的许可证。
@@ -89,11 +95,8 @@ tests/                离线回归测试
 tools/                配置初始化、测试与发布检查
 ```
 
-## 交流
 
-<details>
-<summary>交流群二维码</summary>
-<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/8da68736-0327-44f2-9149-0219b079da8b" />
+
 
 
 
