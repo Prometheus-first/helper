@@ -16,7 +16,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 - 消息监控：显示时间、会话 ID、发送者及正文，展开合并转发记录，保留撤回标记。
 - 定时任务：按间隔或每天指定时间执行文字发送和插件提供的动作，支持多账号独立管理。
 - 群聊管理：群聊备注、进退群通知、成员昵称绑定、聊天总结、人格切换、成语游戏和图库取图。
-- 模型与语音：支持 OpenAI 兼容的 Chat Completions API、Fish Audio 合成和按群切换音色。
+- 模型与语音：支持 OpenAI 兼容的 Chat Completions API、可选的图片生成插件、Fish Audio 合成和按群切换音色。
 - 插件二开：在网页修改业务函数与配置，保存生效，支持恢复默认代码和配置。
 
 自用版另有原生红包自动领取功能，不包含在此公开仓库；需要可联系交流群群主。
@@ -58,8 +58,9 @@ python main.py
 | `members_config.json` | 各群成员称呼与功能范围 |
 | `llm_config.json` | 模型地址、密钥及模型名称 |
 | `tts_config.json` | Fish Audio 密钥及语音选项 |
+| `.runtime/image_generation.json` | 可选图片生成插件的渠道、密钥和模型 |
 
-网页可编辑以上配置。多账号工作区位于 `.runtime/robots/`；聊天记录、媒体缓存和日志均为本地数据，已被 Git 忽略，请勿提交。具体字段见[配置参考](docs/guide/configuration.md)。
+网页可编辑主要配置。图片生成插件使用本地私有配置，设置方法见[AI 生图](docs/guide/features.md#ai-生图)。多账号工作区位于 `.runtime/robots/`；聊天记录、媒体缓存和日志均为本地数据，已被 Git 忽略，请勿提交。具体字段见[配置参考](docs/guide/configuration.md)。
 
 ## 文档
 
