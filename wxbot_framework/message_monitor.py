@@ -47,7 +47,9 @@ class MessageBuffer:
             content = self.sanitize(message.text) if isinstance(message.text, str) else ''
         elif message.type == 49:
             name = self._text(data.get('file_name'), 256).replace('\\', '/').rsplit('/', 1)[-1]
-            if data.get('app_type') == 19:
+            if data.get('app_type') == 57:
+                content = '[引用] ' + self._text(message.text, 512)
+            elif data.get('app_type') == 19:
                 content = '[合并转发] ' + self._text(data.get('forwarded_title'), 256)
                 content += '（无法解析）' if data.get('forwarded_status') == 'failed' else (
                     f"（{len(data.get('forwarded_records', ()))} 条" +

@@ -55,6 +55,8 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
             self.capabilities = self.capabilities | frozenset({'voice.send', 'friend.voice.send', 'group.voice.send'})
         if self._sender is not None and 'local_video' in self._sender.features:
             self.capabilities = self.capabilities | frozenset({'video.send', 'friend.video.send', 'group.video.send'})
+        if self._sender is not None and 'native_quote' in self._sender.features:
+            self.capabilities = self.capabilities | frozenset({'text.quote.send'})
         return result
 
     def convert_event(self, event):
@@ -100,6 +102,19 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
             native_id = message_id(event.get('native_message_id'))
             if native_id:
                 metadata['native_message_id'] = native_id
+            quote_text = ''
+            if event['type'] == 49:
+                from .quoted import QuoteError, parse_quote
+                try:
+                    quote = parse_quote(routed['content'])
+                except QuoteError:
+                    quote = None
+                if quote is not None:
+                    metadata.update(quote.public())
+                    quote_text = quote.text
+                    if getattr(self, 'identity_ready', False) and not routed['is_self']:
+                        metadata.update(monitor_only=False, dispatch_to_plugins=True,
+                                        dispatch_to_recall_plugins=False)
             if event['type'] in (3, 49):
                 from .linux_media_receiver import parse_linux_media_payload
                 try:
@@ -145,7 +160,7 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
                     # 解析只确认系统消息结构。完整名单、历史同步、会话和去重仍由
                     # BotApplication / GroupMembershipTracker 判断，不能在这里发事件。
                     metadata.update(monitor_only=False, system_content=content)
-            message = Message(text='', chat_id=routed['chat_id'], sender_id=routed['sender_id'],
+            message = Message(text=quote_text, chat_id=routed['chat_id'], sender_id=routed['sender_id'],
                 receiver_id=receiver, type=event['type'], is_group=bool(routed['room_wxid']),
                 is_self=routed['is_self'], sequence=event['sequence'], session_id=self.session_id,
                 data=metadata)
@@ -242,6 +257,10 @@ class LinuxPanelBackend(LinuxNativeTextBackend):
     def send_text(self, chat_id, text):
         self._authorize(chat_id)
         return super().send_text(chat_id, text)
+
+    def send_quote_text(self, chat_id, original_id, text, scope_generation):
+        self._authorize(chat_id)
+        return self._sender.send_quote_text(chat_id, original_id, text, scope_generation=scope_generation)
 
     def send_image(self, chat_id, path):
         self._authorize(chat_id)

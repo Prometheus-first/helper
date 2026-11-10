@@ -383,12 +383,158 @@ static void sdk_perform_mention(const char *payload){
 typedef void*(*sdk_image_dto_fn)(void*,void*);
 static sdk_image_dto_fn sdk_original_image_dto;
 static int sdk_download_hook_ready;
+static int sdk_quote_ready;
+/* The quote probe owns a native DTO copy. The receive callback's source pointer
+ * and DTO+0x238 shared object are not used as lifetime guarantees. */
+struct quote_source {
+ _Alignas(16) unsigned char dto[0x360];
+ uint64_t server_id;
+ char peer[128];
+};
+#define QUOTE_SOURCE_LIMIT 16
+/* The quote cache belongs to the same incoming conversation generation as
+ * the media context and is guarded by sdk_image_mutex. */
+static struct quote_source *quote_sources[QUOTE_SOURCE_LIMIT];
+static unsigned quote_next;
+#ifndef SDK_FIXTURE
+static int sdk_parse_generation(const char *text,size_t n,uint64_t *result);
+#endif
+static void quote_destroy(struct quote_source *source){
+ if(!source)return;
+#ifndef SDK_FIXTURE
+ ((void(*)(void*))(sdk_base+0x472f190))(source->dto);
+#endif
+ free(source);
+}
+#ifndef SDK_FIXTURE
+static int sdk_quote_peer(const char *peer){
+ return sdk_identifier(peer,strlen(peer))&&!strchr(peer,'@')&&strncmp(peer,"gh_",3)&&
+  strcmp(peer,"filehelper")&&strcmp(peer,"weixin")&&strcmp(peer,"fmessage")&&
+  strcmp(peer,"newsapp")&&strcmp(peer,"floatbottle");
+}
+#endif
 static atomic_int sdk_image_capture_enabled,sdk_voice_capture_enabled;
+static pthread_mutex_t sdk_image_mutex=PTHREAD_MUTEX_INITIALIZER;
+static uint64_t sdk_image_generation;
+static int sdk_image_multi_scope;
+#ifndef SDK_FIXTURE
+static int sdk_image_matches(const char *peer,const char *account);
+static int sdk_image_scope_current(uint64_t generation);
+#endif
+static void quote_capture(void *dto,void *source){
+#ifndef SDK_FIXTURE
+ if(!atomic_load(&sdk_image_capture_enabled))return;
+ uint64_t server_id=0, copied_id=0, type=0;
+ uintptr_t vtable=0;
+ char peer[128], account[128];
+ if(!rd(&type,(char*)dto+8,8)||type!=1||
+    !rd(&vtable,dto,8)||vtable!=sdk_base+0xa89f2f0||
+    !sdk_copy(peer,sizeof(peer),(struct sdk_string*)((char*)dto+0x10))||
+    !sdk_copy(account,sizeof(account),(struct sdk_string*)((char*)dto+0x28))||
+    !sdk_quote_peer(peer)||!strcmp(peer,account)||
+    !rd(&server_id,(char*)source+0xf8,8)||!server_id||
+    !rd(&copied_id,(char*)dto+0x90,8)||server_id!=copied_id)return;
+ struct quote_source *previous=NULL;
+ pthread_mutex_lock(&sdk_image_mutex);
+ if(sdk_image_multi_scope&&sdk_image_matches(peer,account)){
+  for(unsigned i=0;i<QUOTE_SOURCE_LIMIT;i++){
+   if(quote_sources[i]&&quote_sources[i]->server_id==server_id&&!strcmp(quote_sources[i]->peer,peer)){
+    pthread_mutex_unlock(&sdk_image_mutex);
+    return;
+   }
+  }
+  struct quote_source *copy=calloc(1,sizeof(*copy));
+  if(copy){
+   ((void(*)(void*,const void*))(sdk_base+0x472e700))(copy->dto,dto);
+   copy->dto[0x350]=1;
+   copy->server_id=server_id;
+   strcpy(copy->peer,peer);
+   unsigned slot=quote_next++%QUOTE_SOURCE_LIMIT;
+   previous=quote_sources[slot];
+   quote_sources[slot]=copy;
+  }
+ }
+ pthread_mutex_unlock(&sdk_image_mutex);
+ quote_destroy(previous);
+#else
+ (void)dto;(void)source;
+#endif
+}
+static void sdk_perform_quote(const char *payload){
+#ifndef SDK_FIXTURE
+ const char *scope_end=strchr(payload,'\n');
+ const char *peer_end=scope_end?strchr(scope_end+1,'\n'):NULL;
+ const char *id_end=peer_end?strchr(peer_end+1,'\n'):NULL;
+ uint64_t generation=0,id=0;
+ if(!id_end||!sdk_parse_generation(payload,(size_t)(scope_end-payload),&generation)||
+    !sdk_identifier(scope_end+1,(size_t)(peer_end-scope_end-1))||
+    !sdk_parse_generation(peer_end+1,(size_t)(id_end-peer_end-1),&id)||
+    !id_end[1]||strlen(id_end+1)>1023){
+  sdk_finish_error("invalid quote request");return;
+ }
+ char peer[128],account[128],name[512];
+ size_t peer_size=(size_t)(peer_end-scope_end-1);
+ memcpy(peer,scope_end+1,peer_size);peer[peer_size]=0;
+ if(!sdk_quote_peer(peer)||!sdk_image_scope_current(generation)||!sdk_expected_account[0]||
+    !sdk_profile(account,name)||strcmp(account,sdk_expected_account)||!strcmp(peer,account)){
+  sdk_finish_error("quote scope or account changed");return;
+ }
+ pthread_mutex_lock(&sdk_image_mutex);
+ struct quote_source *copy=NULL;
+ if(generation==sdk_image_generation&&sdk_image_multi_scope&&sdk_image_matches(peer,account)){
+  for(unsigned i=0;i<QUOTE_SOURCE_LIMIT;i++){
+   struct quote_source *source=quote_sources[i];
+   if(!source||source->server_id!=id||strcmp(peer,source->peer))continue;
+   copy=calloc(1,sizeof(*copy));
+   if(copy){
+    ((void(*)(void*,const void*))(sdk_base+0x472e700))(copy->dto,source->dto);
+    copy->dto[0x350]=1;
+   }
+   break;
+  }
+ }
+ pthread_mutex_unlock(&sdk_image_mutex);
+ if(!copy){sdk_finish_error("matching quote source not captured");return;}
+ uint64_t copied_id=0;
+ memcpy(&copied_id,copy->dto+0x90,8);
+ if(copied_id!=id){quote_destroy(copy);sdk_finish_error("quote source identifier changed");return;}
+ struct sdk_string content={0},to={0};
+ struct sdk_shared message={0},hub={0},center={0},manager={0};
+ struct native_media_status status={0};
+ /* The native extra argument contains three libc++ strings and a scalar. */
+ _Alignas(16) unsigned char extra[0x58]={0};
+ sdk_str(&content,id_end+1,strlen(id_end+1));
+ ((void(*)(struct sdk_shared*,void*,const struct sdk_string*,void*))(sdk_base+0x738fec0))(&message,copy->dto,&content,extra);
+ quote_destroy(copy);
+ uint64_t type=0,quoted_id=0;unsigned char quote_present=0;
+ int built=message.object&&message.control&&rd(&type,(char*)message.object+0xe4,8)&&
+  type==((UINT64_C(57)<<32)|49)&&rd(&quote_present,(char*)message.object+0x528,1)&&quote_present==1&&
+  rd(&quoted_id,(char*)message.object+0x268,8)&&quoted_id==id;
+ int invoked=0;
+ if(built){
+  ((void(*)(struct sdk_shared*))(sdk_base+0x60421e0))(&hub);
+  if(hub.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x619ce90))(&center,hub.object);
+  if(center.object)((void(*)(struct sdk_shared*,void*))(sdk_base+0x61ad930))(&manager,center.object);
+  if(manager.object&&sdk_image_scope_current(generation)&&sdk_profile(account,name)&&!strcmp(account,sdk_expected_account)){
+   sdk_str(&to,peer,strlen(peer));
+   ((void(*)(void*,const struct sdk_string*))(sdk_base+0x450fdb0))((char*)message.object+0x90,&to);
+   ((void(*)(struct native_media_status*,void*,struct sdk_shared*))(sdk_base+0x64ccca0))(&status,manager.object,&message);
+   invoked=1;
+  }
+ }
+ int success=invoked&&!status.error_type&&!status.error_code;
+ if(invoked)((void(*)(struct native_media_status*))(sdk_base+0x64cdaa0))(&status);
+ sdk_release(&message);sdk_release(&manager);sdk_release(&center);sdk_release(&hub);
+ sdk_string_destroy(&to);sdk_string_destroy(&content);
+ if(success)sdk_finish_success();else sdk_finish_error(built?"native quote send failed":"native quote construction failed");
+#else
+ (void)payload;sdk_finish_error("native quote unavailable in fixture");
+#endif
+}
 static struct sdk_shared sdk_voice_context;
 static atomic_uint sdk_image_scoped_seen,sdk_image_cached_total;
-static pthread_mutex_t sdk_image_mutex=PTHREAD_MUTEX_INITIALIZER;
 static char sdk_image_peers[64][128],sdk_image_account[128];
-static unsigned sdk_image_peer_count;static uint64_t sdk_image_generation;static int sdk_image_multi_scope;
+static unsigned sdk_image_peer_count;
 struct sdk_image_context {char md5[33];struct sdk_shared value;};
 static struct sdk_image_context sdk_images[16];static unsigned sdk_image_next;
 static int sdk_md5_valid(const char*value){if(strlen(value)!=32)return 0;for(int i=0;i<32;i++)if(unhex(value[i])<0)return 0;return 1;}
@@ -409,15 +555,18 @@ static int sdk_image_matches(const char*peer,const char*account){
  return 0;
 }
 static int sdk_clear_image_scope(uint64_t expected,int force){
+ struct quote_source *old_quotes[QUOTE_SOURCE_LIMIT];
  struct sdk_shared old[16],voice={0};pthread_mutex_lock(&sdk_image_mutex);
  if(!force&&expected!=sdk_image_generation){pthread_mutex_unlock(&sdk_image_mutex);return 0;}
  atomic_store(&sdk_image_capture_enabled,0);atomic_store(&sdk_voice_capture_enabled,0);
  voice=sdk_voice_context;memset(&sdk_voice_context,0,sizeof(sdk_voice_context));
  for(unsigned i=0;i<16;i++){old[i]=sdk_images[i].value;memset(&sdk_images[i],0,sizeof(sdk_images[i]));}
+ memcpy(old_quotes,quote_sources,sizeof(old_quotes));memset(quote_sources,0,sizeof(quote_sources));quote_next=0;
  memset(sdk_image_peers,0,sizeof(sdk_image_peers));sdk_image_peer_count=0;sdk_image_account[0]=0;
  sdk_image_next=0;sdk_image_multi_scope=0;sdk_image_generation++;
  atomic_store(&sdk_image_scoped_seen,0);atomic_store(&sdk_image_cached_total,0);pthread_mutex_unlock(&sdk_image_mutex);
  for(unsigned i=0;i<16;i++)sdk_release(&old[i]);
+ for(unsigned i=0;i<QUOTE_SOURCE_LIMIT;i++)quote_destroy(old_quotes[i]);
  sdk_release(&voice);return 1;
 }
 static int sdk_image_scope_current(uint64_t generation){
@@ -431,6 +580,7 @@ static int sdk_image_scope_current(uint64_t generation){
 }
 static void*sdk_capture_image_dto(void*output,void*source){
  void*result=sdk_original_image_dto(output,source);
+ quote_capture(output,source);
  uint32_t type=0;if(!atomic_load(&sdk_image_capture_enabled)||!rd(&type,(char*)output+8,4)||(type!=3&&(!atomic_load(&sdk_voice_capture_enabled)||type!=34)))return result;
  char peer[128],account[128],md5[33];
  if(!sdk_copy(peer,sizeof(peer),(struct sdk_string*)((char*)source+0x18))||!sdk_copy(account,sizeof(account),(struct sdk_string*)((char*)source+0x30)))return result;
@@ -593,6 +743,7 @@ static void sdk_perform(char operation,const char *json_body){
  }
 
  if(operation!='V'&&!sdk_has_coroutine()){sdk_finish_error("native coroutine context unavailable; no send attempted");return;}
+ if(operation=='Y'){sdk_perform_quote(json_body);return;}
  if(operation=='M'){sdk_perform_mention(json_body);return;}
  if(operation=='W'){sdk_perform_voice(json_body);return;}
  if(operation=='R'){sdk_perform_video(json_body);return;}
@@ -665,8 +816,9 @@ static void sdk_schedule(char operation,const char *json){
  if(fn.callable){struct sdk_callable*c=fn.callable;((void(*)(void*))c->vtable[5])(c);}
 }
 static void sdk_handle(int client,char operation,const char *json){
- if(operation!='V'&&operation!='W'&&operation!='R'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
- if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
+ if(operation=='Y'&&(!sdk_quote_ready||!json)){sdk_write(client,"{\"error\":\"native quote unavailable\"}\n");return;}
+ if(operation!='Y'&&operation!='V'&&operation!='W'&&operation!='R'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
+ if((operation=='Y'||operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
  pthread_mutex_lock(&sdk_mutex);
  /* A timed-out caller does not retry; a completed late callback must not block later work. */
  if(sdk_running&&sdk_done)sdk_running=0;
@@ -701,10 +853,10 @@ static void*sdk_serve(void*unused){
     char account[128],name[512],a[1024],n[4096],response[5500];int logged=sdk_profile(account,name);
     sdk_escape(a,sizeof(a),logged?account:"");sdk_escape(n,sizeof(n),logged?name:"");
     snprintf(response,sizeof(response),"{\"logged_in\":%s,\"wxid\":\"%s\",\"name\":\"%s\"}\n",logged?"true":"false",a,n);sdk_write(c,response);
-   }else if(op=='H'){char ready[512];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"group_mentions\":true,\"local_media\":true,\"local_emoticons\":true,\"local_voice\":true,\"local_video\":true,\"image_download\":%s,\"image_context\":%s,\"image_scope_groups\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false");sdk_write(c,ready);}
-   else if(op=='S'||op=='M'||op=='G'||op=='I'||op=='F'||op=='O'||op=='W'||op=='R'||op=='D'||op=='A'||op=='B'||op=='C'||op=='X'||op=='K'||op=='E'){
+   }else if(op=='H'){char ready[512];snprintf(ready,sizeof(ready),"{\"ready\":true,\"protocol\":1,\"generic_messages\":true,\"group_mentions\":true,\"local_media\":true,\"local_emoticons\":true,\"local_voice\":true,\"local_video\":true,\"image_download\":%s,\"image_context\":%s,\"image_scope_groups\":%s,\"native_quote\":%s}\n",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_download_hook_ready?"true":"false",sdk_quote_ready?"true":"false");sdk_write(c,ready);}
+   else if(op=='Y'||op=='S'||op=='M'||op=='G'||op=='I'||op=='F'||op=='O'||op=='W'||op=='R'||op=='D'||op=='A'||op=='B'||op=='C'||op=='X'||op=='K'||op=='E'){
     uint32_t net=0;char*body=NULL;
-    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n&&(op!='W'||n<=2181)&&(op!='R'||n<=2300)){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
+    if(sdk_read(c,&net,4)){size_t n=ntohl(net);if(n&&(op!='Y'||n<=1193)&&(op!='W'||n<=2181)&&(op!='R'||n<=2300)){body=malloc(n+1);if(body&&sdk_read(c,body,n)){body[n]=0;if(!memchr(body,0,n)){
      if(op=='X'){
       uint64_t generation=0;
       int cleared=sdk_parse_generation(body,n,&generation)&&sdk_clear_image_scope(generation,0);
@@ -749,5 +901,8 @@ __attribute__((constructor))static void sdk_init(void){
  struct sockaddr_un sa={.sun_family=AF_UNIX};strcpy(sa.sun_path,path);strcpy(sdk_path,path);
  if(bind(sdk_listener,(struct sockaddr*)&sa,sizeof(sa))||chmod(path,0600)||listen(sdk_listener,4)){close(sdk_listener);sdk_listener=-1;return;}
  sdk_download_hook_ready=sdk_install_image_context_capture();
+#ifndef SDK_FIXTURE
+ sdk_quote_ready=sdk_download_hook_ready;
+#endif
  pthread_t worker;if(pthread_create(&worker,NULL,sdk_serve,NULL)){close(sdk_listener);sdk_listener=-1;unlink(path);return;}pthread_detach(worker);
 }

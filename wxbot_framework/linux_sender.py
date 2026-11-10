@@ -75,8 +75,8 @@ class LinuxNativeSender:
                 pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 if pid != self.expected_pid or uid != os.geteuid():
                     raise PermissionError("拒绝非目标微信进程的发送连接")
-                attempted = command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"U", b"A", b"B", b"C", b"X", b"K")
-                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"A", b"B", b"C", b"X", b"K", b"E") else b""))
+                attempted = command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"U", b"A", b"B", b"C", b"X", b"K", b"Y")
+                conn.sendall(command + (struct.pack("!I", len(body)) + body if command in (b"S", b"M", b"G", b"I", b"F", b"O", b"W", b"R", b"D", b"A", b"B", b"C", b"X", b"K", b"E", b"Y") else b""))
                 chunks = []
                 count = 0
                 while True:
@@ -107,7 +107,7 @@ class LinuxNativeSender:
                 with self._lock:
                     response = self._request(b"H")
                 if response.get("ready") is True and response.get("protocol") == 1:
-                    self.features = frozenset(name for name in ("generic_messages", "local_media", "local_emoticons", "local_voice", "local_video", "image_download", "image_context", "image_scope_groups", "group_mentions") if response.get(name) is True)
+                    self.features = frozenset(name for name in ("generic_messages", "local_media", "local_emoticons", "local_voice", "local_video", "image_download", "image_context", "image_scope_groups", "group_mentions", "native_quote") if response.get(name) is True)
                     return True
                 raise LinuxSendError("原生发送桥接握手不匹配")
             except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
@@ -159,6 +159,28 @@ class LinuxNativeSender:
             if result.get("native_coroutine") is not True:
                 raise LinuxSendError("尚未确认微信原生协程上下文")
             self._context_ready = True
+            return True
+
+    def send_quote_text(self, chat_id, original_id, text, *, scope_generation):
+        from .account import validate_account
+        from .quoted import validate_quote_id
+
+        validate_account(chat_id)
+        if '@' in chat_id:
+            raise ValueError('Linux 原生引用目前只支持普通私聊')
+        original_id = validate_quote_id(original_id)
+        if not isinstance(text, str) or not 1 <= len(text.encode('utf-8')) <= 1023 or '\0' in text:
+            raise ValueError('引用回复正文必须为 1–1023 个 UTF-8 字节，且不能包含 NUL')
+        with self._lock:
+            if ('native_quote' not in self.features or chat_id not in self.allowed_targets or
+                    not self._bound_account or self._bound_account != self.image_account or
+                    chat_id == self._bound_account or type(scope_generation) is not int or
+                    scope_generation != self.image_scope_generation):
+                raise LinuxSendError('当前 Linux 会话没有有效的引用回复范围')
+            if not self._context_ready:
+                self.ensure_context()
+            body = f'{scope_generation}\n{chat_id}\n{original_id}\n{text}'.encode('utf-8')
+            self._result(self._request(b'Y', body), sending=True)
             return True
 
     def send_text(self, chat_id, text):

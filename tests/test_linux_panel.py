@@ -115,6 +115,33 @@ class AdapterTests(unittest.TestCase):
         for text in ('[图片]', '[语音]', '[视频]', '[表情]', '[文件/分享]'):
             self.assertIn(text, json.dumps(monitor.tail(0), ensure_ascii=False))
 
+    def test_quote_is_parsed_only_for_confirmed_session_without_xml_leak(self):
+        xml = ('<msg><appmsg><type>57</type><title>新的回复</title>'
+               '<refermsg><type>1</type><displayname>测试者</displayname>'
+               '<content>原文字</content><svrid>991122</svrid></refermsg>'
+               '</appmsg></msg>')
+        early = self.backend.convert_event(self.event(xml, kind=49))
+        self.assertTrue(early.data['monitor_only'])
+        self.backend.identity_ready = True
+        msg = self.backend.convert_event(self.event(xml, kind=49))
+        self.assertEqual(msg.text, '新的回复')
+        self.assertEqual(msg.data['quoted_message']['text'], '原文字')
+        self.assertFalse(msg.data['monitor_only'])
+        self.assertNotIn('991122', repr(msg.data))
+        self.assertNotIn('<msg>', repr(msg.data))
+        monitor = MessageBuffer(); monitor.append(msg)
+        self.assertIn('[引用] 新的回复', json.dumps(monitor.tail(0), ensure_ascii=False))
+        with self.assertRaises(RuntimeError):
+            self.backend.convert_event(self.event(xml, kind=49, receiver='wxid_other'))
+        own = self.backend.convert_event(self.event(xml, kind=49, sender='wxid_self_fixture', receiver='filehelper'))
+        self.assertTrue(own.data['monitor_only'])
+        broken = self.backend.convert_event(self.event('<!DOCTYPE msg><msg/>', kind=49))
+        self.assertTrue(broken.data['monitor_only'])
+        group = self.backend.convert_event(self.event('wxid_friend_fixture:\n' + xml, kind=49,
+                                                      sender='123@chatroom'))
+        self.assertEqual((group.sender_id, group.chat_id, group.text),
+                         ('wxid_friend_fixture', '123@chatroom', '新的回复'))
+
     def test_video_metadata_stays_private_and_is_not_advertised_as_download(self):
         xml = ('<msg><videomsg length="123" playlength="3" '
                'aeskey="0123456789abcdef0123456789abcdef" cdnvideourl="SECRET_FIXTURE_URL"/></msg>')

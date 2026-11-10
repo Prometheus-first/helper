@@ -113,6 +113,8 @@ class SessionLease:
             except (OSError, ValueError, RuntimeError):
                 # 旧桥接或上下文未就绪时仍可接收文字与已经落盘的附件。
                 self._image_scope_generation = None
+        if self._image_scope_generation is None:
+            self.capabilities = self.capabilities - {'text.quote.send'}
         return True
 
     def stop(self):
@@ -293,6 +295,8 @@ class SessionLease:
         return self._friend_requests.list()
 
     def send_text(self, chat_id, text): return self._send('send_text', chat_id, text)
+    def send_quote_text(self, chat_id, original_id, text):
+        return self._send('send_quote_text', chat_id, original_id, text, self._image_scope_generation)
     def send_at_text(self, chat_id, text, at_list): return self._send('send_at_text', chat_id, text, at_list)
     def send_image(self, chat_id, path): return self._send('send_image', chat_id, path)
     def send_file(self, chat_id, path): return self._send('send_file', chat_id, path)
