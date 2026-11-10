@@ -133,6 +133,10 @@ class BotApplication:
         message = self._with_group_role(message)
         self._observe_message(message)
         allowed = self.config.get('chat_allowlist', [])
+        if message.type == 3 and message.data.get('image_request_id'):
+            if not allowed or message.chat_id in allowed:
+                self.plugins.dispatch(message, required='image.fetch')
+            return
         recall = message.type in (10000, 10002) and isinstance(message.data.get('recall'), dict)
         if recall or message.data.get('monitor_only'):
             # 防撤回插件需要原始媒体类型和撤回通知；不把监控事件交给普通玩法。

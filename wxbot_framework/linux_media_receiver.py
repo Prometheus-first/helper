@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import secrets
 import stat
 import tempfile
 import threading
@@ -18,7 +19,7 @@ import xml.etree.ElementTree as ET
 from .account import validate_account
 from .file_metadata import FileMetadata, FileStore, parse_file_metadata
 from .files import MAX_FILE_BYTES, safe_file_name
-from .image_metadata import ImageMetadata, ImageStore, parse_image_metadata
+from .image_metadata import ImageMetadata, ImageStore, _image_extension, parse_image_metadata
 from .images import MAX_IMAGE_BYTES
 from .linux_media import decode_cached_image
 from .recall import message_id
@@ -83,6 +84,9 @@ class LinuxMediaReceiver:
     会话的图片下载器。缓存未就绪就失败，不把缩略图或原生接口受理当作完整图片。
     """
 
+    IMAGE_REQUEST_TTL = 60
+    IMAGE_REQUEST_LIMIT = 16
+
     def __init__(self, *, account, session_id, pid, storage_root, cache_root, is_current,
                  callback=None, request_image=None, timeout=12.0, queue_size=16, max_files=128,
                  max_cache_bytes=256 * 1024 * 1024, scan_paths=4096,
@@ -114,6 +118,9 @@ class LinuxMediaReceiver:
         self._stop, self._lock = threading.Event(), threading.RLock()
         self._queue = queue.Queue(queue_size)
         self._seen, self._saved = OrderedDict(), OrderedDict()
+        self._image_requests = OrderedDict()
+        self._fetching_images = set()
+        self._fetch_limit = worker_count
         root = Path(cache_root).expanduser().absolute()
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._private(root)
@@ -173,7 +180,7 @@ class LinuxMediaReceiver:
         data.update({media+'_status':status, media+'_path':str(path), media+'_error':error})
         return replace(message, data=data)
 
-    def submit(self, message, raw_content=None):
+    def submit(self, message, raw_content=None, *, defer_image=False):
         if not isinstance(message, Message):
             raise ValueError('Linux 媒体接收需要 Message')
         if message.type not in (3, 49):
@@ -229,12 +236,60 @@ class LinuxMediaReceiver:
                 return self._status(clean, 'unavailable', error='媒体接收会话已结束')
             if key in self._seen:
                 return self._seen[key]
+            if defer_image and message.type == 3:
+                return self._defer_image(key, clean, payload)
             try:
                 self._queue.put_nowait((key, pending, payload))
             except queue.Full:
                 return self._status(clean, 'failed', error='媒体接收队列已满')
             self._remember(key, pending)
         return pending
+
+    def _defer_image(self, key, message, payload):
+        # submit 持有 _lock。旧凭证随超时或新消息淘汰，不保留图片字节。
+        now = time.monotonic()
+        while self._image_requests:
+            first = next(iter(self._image_requests.values()))
+            if len(self._image_requests) < self.IMAGE_REQUEST_LIMIT and first[0] > now:
+                break
+            self._image_requests.popitem(last=False)
+        request_id = secrets.token_urlsafe(24)
+        notice = self._status(message, 'deferred')
+        notice = replace(notice, data=dict(notice.data, dispatch_to_recall_plugins=False))
+        self._image_requests[request_id] = (now + self.IMAGE_REQUEST_TTL, notice, payload)
+        self._remember(key, notice)
+        return replace(notice, data=dict(notice.data, image_request_id=request_id))
+
+    def fetch_image(self, request_id):
+        """按凭证取图，沿用当前账号的下载与完整校验，直接返回字节。"""
+        if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{32}', request_id):
+            raise ValueError('图片取图凭证无效')
+        if not self._active():
+            raise RuntimeError('图片所属的微信连接已结束')
+        with self._lock:
+            entry = self._image_requests.get(request_id)
+            if entry is None or entry[0] <= time.monotonic():
+                self._image_requests.pop(request_id, None)
+                raise RuntimeError('图片取图凭证已失效')
+            if request_id in self._fetching_images or len(self._fetching_images) >= self._fetch_limit:
+                raise RuntimeError('图片取图任务正忙')
+            self._fetching_images.add(request_id)
+        try:
+            _, message, payload = entry
+            try:
+                body = self._read_verified(message, payload)
+                if body is not None:
+                    _image_extension(body)
+            except (OSError, ValueError, RuntimeError):
+                raise RuntimeError('图片读取或校验失败') from None
+            if not self._active():
+                raise RuntimeError('图片所属的微信连接已结束')
+            if body is None:
+                raise TimeoutError('未取得通过完整校验的图片')
+            return body
+        finally:
+            with self._lock:
+                self._fetching_images.discard(request_id)
 
     def _remember(self, key, message):
         self._seen[key] = message
@@ -458,38 +513,41 @@ class LinuxMediaReceiver:
             except Exception:
                 pass
 
-    def _process(self, key, message, payload):
+    def _read_verified(self, message, payload):
         deadline = time.monotonic() + self.timeout
+        requested = False
+        while self._active() and time.monotonic() < deadline:
+            body = self._find(payload, deadline)
+            if body is not None:
+                expected = {payload.metadata.size} if payload.kind == 49 else {
+                    n for n in (payload.metadata.length, payload.metadata.hdlength) if type(n) is int and n > 0}
+                if len(body) not in expected or hashlib.md5(body).hexdigest() != payload.metadata.md5:
+                    raise ValueError('媒体完整校验失败')
+                return body if self._active() else None
+            if not requested and payload.kind == 3 and self._request_image is not None and self._active():
+                # 下载回执后仍要从当前账号目录读取并校验图片。
+                requested = True
+                try:
+                    self._request_image(message, payload.metadata)
+                except (OSError, ValueError, RuntimeError):
+                    pass
+                deadline = time.monotonic() + self.timeout
+                continue
+            self._stop.wait(min(.25, max(0, deadline-time.monotonic())))
+        return None
+
+    def _process(self, key, message, payload):
         try:
-            requested = False
-            while self._active() and time.monotonic() < deadline:
-                body = self._find(payload, deadline)
-                if (body is None and not requested and payload.kind == 3 and
-                        self._request_image is not None and self._active()):
-                    # 下载器必须预先绑定此会话。每条消息至多请求一次；下载回执
-                    # 不代表内容完整，仍须在当前账号目录核对实际字节及 MD5。
-                    requested = True
-                    try:
-                        self._request_image(message, payload.metadata)
-                    except (OSError, ValueError, RuntimeError):
-                        pass
-                    deadline = time.monotonic() + self.timeout
-                    continue
-                if body is not None and self._active():
-                    expected = {payload.metadata.size} if payload.kind == 49 else {
-                        n for n in (payload.metadata.length, payload.metadata.hdlength) if type(n) is int and n > 0}
-                    if len(body) not in expected or hashlib.md5(body).hexdigest() != payload.metadata.md5:
-                        raise ValueError('媒体完整校验失败')
-                    path = self._save(body, message, key)
-                    if path is not None:
-                        ready = self._status(message, 'ready', path=path)
-                        if payload.kind == 3:
-                            ready = replace(ready, data=dict(ready.data, image_integrity='md5_verified'))
-                        self._deliver(key, ready)
-                    return
-                self._stop.wait(min(.25, max(0, deadline-time.monotonic())))
-            if self._active():
+            body = self._read_verified(message, payload)
+            if body is None:
                 self._deliver(key, self._status(message, 'failed', error='未取得通过完整校验的媒体缓存'))
+                return
+            path = self._save(body, message, key)
+            if path is not None:
+                ready = self._status(message, 'ready', path=path)
+                if payload.kind == 3:
+                    ready = replace(ready, data=dict(ready.data, image_integrity='md5_verified'))
+                self._deliver(key, ready)
         except Exception:
             # 不转发异常正文；文件名、源路径和缓存密钥可能包含在底层异常里。
             if self._active():
@@ -501,6 +559,7 @@ class LinuxMediaReceiver:
                 self._remove(path, signature)
             self._saved.clear()
             self._seen.clear()
+            self._image_requests.clear()
         for store in self._stores.values():
             for directory in (store.directory, store.root):
                 try:

@@ -152,7 +152,9 @@ class LinuxPanelController(PanelController):
     def _application(self, root, store):
         config = store.load()
         if self.session is not None:
-            return LinuxBotApplication(root, store, self.session.lease(config.get('chat_allowlist', ())))
+            lease = self.session.lease(config.get('chat_allowlist', ()),
+                                       image_on_demand_chats=config.get('image_on_demand_chats', ()))
+            return LinuxBotApplication(root, store, lease)
         backend = self._backend_factory(self.wechat_path, self.receive_bridge, self.send_bridge,
                                        allowed_targets=config.get('chat_allowlist', ()))
         return LinuxBotApplication(root, store, backend)

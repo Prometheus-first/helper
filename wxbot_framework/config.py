@@ -70,9 +70,18 @@ class ConfigStore:
         allowed = data.get("chat_allowlist", [])
         if not isinstance(allowed, list):
             raise ValueError("chat_allowlist 应为微信 ID 或群 ID 列表；空列表表示所有会话")
-        from .text import validate_target
+        from .text import SYSTEM_PEERS, validate_target
         for target in allowed:
             validate_target(target)
+        on_demand = data.get("image_on_demand_chats", [])
+        if not isinstance(on_demand, list):
+            raise ValueError("image_on_demand_chats 应为明确的微信 ID 或群 ID 列表")
+        for target in on_demand:
+            validate_target(target)
+            if (target in SYSTEM_PEERS or target == "filehelper" or target.startswith("gh_") or
+                    ("@" in target and (target.count("@") != 1 or not target.endswith("@chatroom")
+                                       or target == "@chatroom"))):
+                raise ValueError("image_on_demand_chats 仅支持普通私聊和群聊")
         image_directory = data.get("image_directory", ".runtime/images")
         if (not isinstance(image_directory, str) or not image_directory.strip() or
                 "\0" in image_directory):

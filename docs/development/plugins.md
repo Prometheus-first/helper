@@ -129,6 +129,20 @@ Linux 视频发送需要 `video.send` 能力，使用 Linux 本机 MP4 文件，
 
 把 `message_types` 改为 `[1, 3]`，并在 `requires` 中加入 `image.receive`。收到类型 `3` 后，查看 `message.image_path` 与 `message.data["image_status"]`。图片正文为空，不会自动作为文字交给模型。
 
+### Linux 按需取图
+
+在当前 Linux 账号的 `bot_config.json` 中设置 `"image_on_demand_chats": ["wxid_example"]`，填入要启用的私聊或群聊 ID，重启机器人使其生效。如果设置了 `chat_allowlist`，会话还需在该白名单内。对应的 v1 插件在 `plugin.json` 中声明 `"message_types": [3]` 和 `"requires": ["image.fetch"]`。
+
+指定会话的图片事件会带有 `image_status="deferred"`、`native_message_id` 和 `image_request_id`。插件可先把消息编号和取图凭证通知自己的服务器，等服务器回调插件时再调用 `ctx.fetch_image`。
+
+```python
+body = ctx.fetch_image(request_id, expected_session=session_id)
+```
+
+`session_id` 可取自收到事件时的 `message.session_id`。返回值是通过消息大小、MD5 和图片格式检查的 `bytes`，可以直接写入接口响应。Helper 在调用时才尝试取图，微信可能写入自己的缓存，Helper 不会另存图片。指定会话的图片不再生成 `image_path`，也无法由依赖该路径的防撤回插件回发。校验确认内容与微信消息一致，和发送端文件逐字节相同仍需对照原文件哈希。
+
+凭证限当前机器人会话，60 秒内可发起取图，收到更多图片时旧凭证或微信原生上下文可能提前淘汰。凭证失效、连接切换或取图失败时会抛出异常。插件可自行实现服务器鉴权和转发，避免把取图凭证写入日志。
+
 ## 处理文件附件
 
 在 `plugin.json` 中声明 `"message_types": [49]` 和 `"requires": ["file.receive"]`。文件接收事件的 `message.text` 为空；仅在 `message.data["file_status"] == "ready"` 时使用 `message.file_path`。失败原因位于 `file_error`，不包含原始 CDN 参数。完整示例和限制见[文件收发](../messages/files.md)。

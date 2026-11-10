@@ -73,10 +73,13 @@ class SessionLease:
     capabilities = PANEL_CAPABILITIES
     scope = ManagedLinuxBackend.scope
 
-    def __init__(self, owner, allowed):
+    def __init__(self, owner, allowed, *, image_on_demand_chats=()):
         self.owner, self.allowed = owner, frozenset(allowed)
         self.account = owner.profile['wxid']
         self.capabilities = getattr(owner.backend, 'capabilities', PANEL_CAPABILITIES)
+        self._image_on_demand_chats = frozenset(image_on_demand_chats)
+        if self._image_on_demand_chats:
+            self.capabilities = self.capabilities | {'image.fetch'}
         self.session_id = uuid.uuid4().hex
         self.closed = False
         self._native_backend = owner.backend
@@ -154,6 +157,13 @@ class SessionLease:
             return bool(not self.closed and self.owner.active_lease is self and
                 self.owner.backend is self._native_backend and self.owner.wechat_running() and
                 self.owner.profile.get('logged_in') and self.owner.profile.get('wxid') == self.account)
+
+    def fetch_image(self, request_id):
+        with self._delivery_lock:
+            receiver = self._media_receiver
+        if receiver is None or not self._is_current():
+            raise RuntimeError('当前微信连接没有可用的图片取图凭证')
+        return receiver.fetch_image(request_id)
 
     @staticmethod
     def _media_key(message):
@@ -259,7 +269,10 @@ class SessionLease:
                             is_current=self._is_current, callback=self._media_ready,
                             request_image=self._request_image if self._image_scope_generation is not None else None)
                     if message.type != 34:
-                        message = self._media_receiver.submit(message)
+                        if message.type == 3 and message.chat_id in self._image_on_demand_chats:
+                            message = self._media_receiver.submit(message, defer_image=True)
+                        else:
+                            message = self._media_receiver.submit(message)
             except (OSError, ValueError, RuntimeError):
                 data = dict(message.data)
                 media = 'voice' if message.type == 34 else 'image' if message.type == 3 else 'file'
@@ -490,11 +503,11 @@ class LinuxSessionController:
                 return
         lease.receive(message)
 
-    def lease(self, allowed):
+    def lease(self, allowed, *, image_on_demand_chats=()):
         with self.lock:
             if not self.profile.get('logged_in') or not self.wechat_running():
                 raise PanelError('请先登录微信并等待账号识别', 409)
-            return SessionLease(self, allowed)
+            return SessionLease(self, allowed, image_on_demand_chats=image_on_demand_chats)
 
     def attach(self, lease, emit):
         with self.lock:

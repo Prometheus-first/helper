@@ -326,6 +326,20 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 return result
 
+    def fetch_image(self, request_id, *, expected_session=None):
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if (backend is None or not self._available or
+                    (expected_session is not None and backend.session_id != expected_session)):
+                raise RuntimeError("图片所属的微信连接已结束")
+            if "image.fetch" not in getattr(backend, "capabilities", ()):
+                raise CapabilityError("当前后端尚未开放按需取图")
+        body = backend.fetch_image(request_id)
+        with self._lock:
+            if self._backend is not backend or not self._available or cancel.is_set():
+                raise RuntimeError("图片所属的微信连接已结束")
+            return body
+
     def _manage(self, operation, *arguments, expected_session=None):
         """将账号管理操作与发送、切号和卸载串行化，不使用文本等待。"""
         with self._lock:
@@ -596,6 +610,11 @@ class PluginContext:
 
     def send_image(self, chat_id, path):
         return self._service.send_image(chat_id, path)
+
+    def fetch_image(self, request_id, *, expected_session=None):
+        if "image.fetch" not in self.capabilities:
+            raise CapabilityError("当前插件缺少按需取图能力")
+        return self._service.fetch_image(request_id, expected_session=expected_session)
 
     def send_file(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_file(chat_id, path, expected_session=expected_session,
