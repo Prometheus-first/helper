@@ -107,22 +107,26 @@ class NativeTextService(NativeFileHelperService):
 
     def __init__(self, *, account=None, media_directory=None, image_allowlist=(),
                  wechat_data_directory=None, emoticon_directory=None, voice_directory=None,
-                 file_directory=None, **options):
+                 file_directory=None, friend_add_rooms=(), **options):
         super().__init__(**options)
         self.preferred_account = validate_account(account) if account is not None else None
         self.router = TextRouter(include_self_groups=True)
         self.chats = {}
         self._next_account_check = 0
         self._sent_texts = deque(maxlen=64)
+        self._sent_quotes = deque(maxlen=64)
         self.mention_messages = 0
         self.media_directory = Path(media_directory or Path(__file__).resolve().parent.parent / ".runtime/images")
         self.image_allowlist = frozenset(image_allowlist)
+        self.friend_add_rooms = tuple(friend_add_rooms)
         self._image_receiver = None
         self._file_receiver = None
         self._voice_receiver = None
+        self._video_receiver = None
         self._forwarded_receiver = None
         self.file_directory = Path(file_directory or
                                    Path(__file__).resolve().parent.parent / ".runtime/files")
+        self.video_directory = self.file_directory.parent / 'videos'
         self.wechat_data_directory = Path(wechat_data_directory) if wechat_data_directory is not None else None
         self.emoticon_directory = Path(emoticon_directory or
                                        Path(__file__).resolve().parent.parent / ".runtime/emoticons")
@@ -141,6 +145,7 @@ class NativeTextService(NativeFileHelperService):
         self.router = TextRouter(include_self_groups=True)
         self.chats = {}
         self._sent_texts.clear()
+        self._sent_quotes.clear()
         if self.pid is None:
             self.pid = find_account_process(self.preferred_account)
         elif self.preferred_account and inspect_account(self.pid) != self.preferred_account:
@@ -184,6 +189,11 @@ class NativeTextService(NativeFileHelperService):
         self._file_receiver = FileReceiver(FileStore(self.file_directory, account),
             self._download_file, self._deliver_file,
             lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
+        if self.wechat_version == '4.2.0.12':
+            from wxbot_framework.video_receiver import VideoReceiver
+            self._video_receiver = VideoReceiver(FileStore(self.video_directory, account),
+                self._download_video, self._deliver_video,
+                lambda: not self._stop.is_set() and self._owns_bridge and self.self_wxid == account)
         from wxbot_framework.forwarded_receiver import ForwardedReceiver
         self._forwarded_receiver = ForwardedReceiver(ImageStore(self.media_directory, account),
             self._download_image, self._deliver_forwarded,
@@ -256,11 +266,35 @@ class NativeTextService(NativeFileHelperService):
             except Exception:
                 logger.exception("文件消息处理器异常")
 
+    def _download_video(self, metadata, destination):
+        from wxbot_framework.video_metadata import select_video_download
+        filekey, aeskey, size, md5, _quality = select_video_download(metadata)
+        if not filekey or not aeskey or not size or not md5:
+            return False
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self.wechat_version != '4.2.0.12':
+                return False
+            self._check_account(force=True)
+            result = self._run('--download-image', pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports,
+                download_image={'destination':str(destination), 'filekey':filekey,
+                                'aeskey':aeskey, 'image_type':4})
+            self._check_account(force=True)
+            return result.get('success') is True
+
+    def _deliver_video(self, data):
+        if self._stop.is_set():
+            return
+        logger.info('视频接收 | 会话ID=%s | 状态=%s', data['chat_id'], data.get('video_status'))
+        for handler in list(self.msg_handlers):
+            try:
+                handler(self.pid, 11046, data, self)
+            except Exception:
+                logger.warning('视频消息处理器暂不可用')
+
     def _download_image(self, metadata, destination):
-        filekey = metadata.cdnmidimgurl or metadata.filekey or metadata.cdnbigimgurl or metadata.cdnthumburl
-        aeskey = metadata.aeskey if (metadata.cdnmidimgurl or metadata.filekey or metadata.cdnbigimgurl) else (metadata.cdnthumbaeskey or metadata.aeskey)
-        image_type = (2 if metadata.cdnmidimgurl or metadata.filekey else
-                      1 if metadata.cdnbigimgurl else 3)
+        from wxbot_framework.image_metadata import select_image_download
+        filekey, aeskey, image_type, _quality = select_image_download(metadata)
         if not filekey or not aeskey:
             return False
         with self._calls:
@@ -287,6 +321,11 @@ class NativeTextService(NativeFileHelperService):
 
     def stop(self):
         self._stop.set()
+        if self._video_receiver is not None:
+            self._video_receiver.close(timeout=30)
+            if self._video_receiver.is_alive:
+                raise RuntimeError('视频原生下载尚未结束，保留桥接等待清理重试')
+            self._video_receiver = None
         if self._voice_receiver is not None:
             self._voice_receiver.close(timeout=30)
             if self._voice_receiver.is_alive:
@@ -422,9 +461,39 @@ class NativeTextService(NativeFileHelperService):
                     self._voice_receiver.submit(data, self._voice_payload(message))
                     return None
                 return sanitized
-            if message.type in (43, 47, 62):
+            if message.type == 43:
+                data['raw_content'] = data.get('content', '')
+                enabled = not self.image_allowlist or data['chat_id'] in self.image_allowlist
+                receiver = getattr(self, '_video_receiver', None)
+                receiving = enabled and receiver is not None
+                sanitized = dict(data, msg='', content='', raw_content='', monitor_only=True,
+                                 video_status='pending' if receiving else 'unavailable' if enabled else 'skipped',
+                                 video_path='')
+                if receiving:
+                    monitor = getattr(self, 'monitor_handler', None)
+                    if monitor is not None:
+                        monitor(sanitized)
+                    receiver.submit(data)
+                    return None
+                return sanitized
+            if message.type in (47, 62):
                 data['monitor_only'] = True
                 return data
+            if message.type == 49:
+                from wxbot_framework.quoted import QuoteError, parse_quote
+                try:
+                    quoted = parse_quote(data.get('raw_content', ''))
+                except QuoteError:
+                    quoted = None
+                if quoted is not None:
+                    # 引用与原提问分别保留；无需文件下载，不把 XML 交给模型。
+                    data.update(quoted.public(), msg=quoted.text, content=quoted.text, raw_content='')
+                    if data["is_self"] and any(chat == data["chat_id"] and text == quoted.text and
+                                               time.monotonic() - sent_at < 120
+                                               for chat, text, sent_at in tuple(self._sent_quotes)):
+                        self.router.ignored_self += 1
+                        data.update(bot_generated=True, dispatch_to_plugins=False)
+                    return data
             forwarded = None
             if message.type == 49:
                 from wxbot_framework.forwarded import ForwardedError, parse_forwarded
@@ -561,6 +630,42 @@ class NativeTextService(NativeFileHelperService):
                 catalog.mark_failed(request_id, **owner)
             return accepted
 
+    def send_friend_request(self, wxid, room, message):
+        """Send one group-sourced request after confirming the live member cache."""
+        from wxbot_framework.friend_add import validate_friend_add
+        wxid, room, message = validate_friend_add(wxid, room, message, self_wxid=self.self_wxid, allow_auto=True)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError("请先连接机器人")
+            if self.wechat_version != "4.2.0.12":
+                raise RuntimeError("主动好友申请仅适配微信 4.2.0.12")
+            self._check_account(force=True)
+            if not room:
+                candidates = dict.fromkeys((*self.friend_add_rooms, *(key for key in self.chats if key.endswith('@chatroom'))))
+                room = ''
+                for candidate in candidates:
+                    if self.image_allowlist and candidate not in self.image_allowlist:
+                        continue
+                    rows = self.group_members(candidate)
+                    if rows is not None and sum(row.get('wxid') == wxid for row in rows) == 1:
+                        room = candidate
+                        break
+                if not room:
+                    raise ValueError("未在已发现的群中找到该成员，请手动选择来源群")
+            if self.image_allowlist and room not in self.image_allowlist:
+                raise ValueError("来源群不在收发白名单中")
+            rows = self.group_members(room)
+            if rows is None:
+                raise RuntimeError("群成员缓存尚未就绪，请在微信打开群聊后重试")
+            if sum(row.get("wxid") == wxid for row in rows) != 1:
+                raise ValueError("目标不在该群的已验证成员列表中")
+            self._check_account(force=True)
+            self.last_result = self._run("--add-friend", pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports, account=self.self_wxid,
+                friend_add={"wxid": wxid, "room": room, "message": message})
+            self._check_account(force=True)
+            return self.last_result.get("success") is True
+
     def invite_group_members(self, room, members):
         from wxbot_framework.group_management import validate_group_id, validate_group_members
         room = validate_group_id(room)
@@ -594,6 +699,29 @@ class NativeTextService(NativeFileHelperService):
 
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)
+
+    def send_quote_text(self, to_wxid, original_id, content):
+        validate_target(to_wxid)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生文本服务没有运行")
+            self._check_account(force=True)
+            self._sent_quotes.append((to_wxid, content.strip(), time.monotonic()))
+            for delay in (0, 0.15, 0.35):
+                if self._stop.wait(delay):
+                    return False
+                self._check_account(force=True)
+                self.last_result = result = self._run(
+                    "--dispatch", pid=self.pid, text=content, target=to_wxid,
+                    account=self.self_wxid, quote_id=original_id, keep_loaded=True,
+                    preserve_report=self.preserve_reports,
+                )
+                report = result.get("report", {})
+                # 只重试明确未找到原消息的查找。发送超时可能已经送达。
+                if not (result.get("code") == result.get("cleanup_code") == 0 and
+                        report.get("stage") == 84 and report.get("exception") == 0):
+                    return result["success"]
+            return False
 
     def moments_capabilities(self):
         from moments_transport import moments_capabilities
@@ -733,6 +861,36 @@ class NativeTextService(NativeFileHelperService):
                     "--dispatch", pid=self.pid, keep_loaded=True,
                     preserve_report=self.preserve_reports, target=to_wxid,
                     file_path=str(file.path), account=account)
+                self._check_account(force=True)
+                return self.last_send_result.get("success", False)
+
+    def send_video(self, to_wxid, path):
+        from wxbot_framework.files import prepare_file
+        from wxbot_framework.videos import inspect_video
+        validate_target(to_wxid)
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生视频服务没有运行")
+            if self.wechat_version != '4.2.0.12':
+                raise RuntimeError("原生视频发送仅适配微信 4.2.0.12")
+            self._check_account(force=True)
+            account = validate_account(self.self_wxid)
+            root = self.file_directory.resolve()
+            account_directory = (root / account).resolve()
+            if account_directory.parent != root:
+                raise ValueError("视频临时目录必须属于当前账号")
+            with prepare_file(path, account_directory) as file:
+                video = inspect_video(file.path)
+                if not self._owns_bridge or self._stop.is_set():
+                    raise RuntimeError("微信连接已结束，取消待发送视频")
+                self._check_account(force=True)
+                if self.self_wxid != account:
+                    raise RuntimeError("微信账号已发生变化，取消待发送视频")
+                self.last_result = self.last_send_result = self._run(
+                    "--dispatch", pid=self.pid, keep_loaded=True,
+                    preserve_report=self.preserve_reports, target=to_wxid,
+                    video_path=str(video.path), video_duration_seconds=video.duration_seconds,
+                    account=account)
                 self._check_account(force=True)
                 return self.last_send_result.get("success", False)
 

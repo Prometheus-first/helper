@@ -44,6 +44,10 @@ class Message:
     def file_path(self):
         return self.data.get("file_path") or ""
 
+    @property
+    def video_path(self):
+        return self.data.get("video_path") or ""
+
     @classmethod
     def from_native(cls, protocol, data, session_id):
         snapshot = copy.deepcopy(data)
@@ -52,7 +56,10 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type in (3, 34, 37, 43, 47, 49, 62, 10000, 10002):
+        quoted = msg_type == 49 and snapshot.get('app_type') == 57 and isinstance(snapshot.get('quoted_message'), dict)
+        if quoted:
+            text = snapshot.get('quoted_text', '')
+        elif msg_type in (3, 34, 37, 43, 47, 49, 62, 10000, 10002):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -78,14 +85,16 @@ class ServiceFacade:
         self.text_delay = TextSendDelay.from_config(text_delay)
         self.message_observer = None
 
-    def _sent(self, result, backend, chat_id, msg_type, *, text='', path=''):
+    def _sent(self, result, backend, chat_id, msg_type, *, text='', path='', quote=None):
         observer = self.message_observer
         if observer is not None and result is not False:
             try:
+                data = {'monitor_outgoing': True, 'bot_generated': True,
+                        'file_name': str(path).replace('\\', '/').rsplit('/', 1)[-1] if path else ''}
+                if quote is not None:
+                    data.update(quote.public())
                 observer(Message(text, chat_id, type=msg_type, is_self=True,
-                    is_group=chat_id.endswith('@chatroom'), session_id=backend.session_id,
-                    data={'monitor_outgoing': True, 'bot_generated': True,
-                          'file_name': str(path).replace('\\', '/').rsplit('/', 1)[-1] if path else ''}))
+                    is_group=chat_id.endswith('@chatroom'), session_id=backend.session_id, data=data))
             except Exception:
                 logger.warning('发送已完成，消息监控记录暂不可用')
         return result
@@ -154,6 +163,39 @@ class ServiceFacade:
                     return False
                 start = end
             return result
+
+    def reply_quote(self, message, content, *, delivery_guard=None):
+        from .quoted import QuotedContent, QuotedMessage, validate_quote_id
+        validate_target(message.chat_id)
+        if message.type != 1:
+            raise ValueError("原生引用回复目前只支持引用普通文字")
+        original_id = validate_quote_id(message.data.get("native_message_id"))
+        if not isinstance(content, str) or not 1 <= len(content.encode("utf-8")) <= 1023 or "\0" in content:
+            raise ValueError("引用回复正文必须为 1–1023 个 UTF-8 字节，且不能包含 NUL")
+        with self._lock:
+            if self._backend is None or not self._available:
+                raise RuntimeError("微信尚未连接")
+            if not message.session_id or message.session_id != self._backend.session_id:
+                raise RuntimeError("消息所属的微信连接已结束，跳过旧会话回复")
+            backend, cancel = self._backend, self._cancel
+            if ("text.quote.send" not in getattr(backend, "capabilities", ()) or
+                    not callable(getattr(backend, "send_quote_text", None))):
+                raise CapabilityError("当前后端尚未开放原生引用回复")
+        with self._send_lock:
+            with self._lock:
+                self._check_pending(backend, cancel)
+            if cancel.wait(self.text_delay.seconds_for(content)):
+                raise RuntimeError("微信连接已结束，取消待发送引用回复")
+            with self._lock:
+                self._check_pending(backend, cancel)
+                with delivery_guard() if delivery_guard is not None else nullcontext():
+                    self._check_pending(backend, cancel)
+                    result = backend.send_quote_text(message.chat_id, original_id, content)
+                    if result is False:
+                        return False
+                    author = message.data.get('sender_wechat_name') or ''
+                    quote = QuotedMessage(content, QuotedContent(author, 'text', message.text, True))
+                    return self._sent(result, backend, message.chat_id, 49, text=content, quote=quote)
 
     def send_image(self, to_wxid, path, *, expected_session=None, delivery_guard=None):
         validate_target(to_wxid)
@@ -299,6 +341,11 @@ class ServiceFacade:
             with self._lock:
                 self._check_pending(backend, cancel)
                 return method(*arguments)
+
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        from .friend_add import validate_friend_add
+        wxid, room, message = validate_friend_add(wxid, room, message, allow_auto=True)
+        return self._manage("send_friend_request", wxid, room, message, expected_session=expected_session)
 
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
@@ -561,6 +608,11 @@ class PluginContext:
     def accept_friend(self, request_id, *, expected_session=None):
         return self._service.accept_friend(request_id, expected_session=expected_session)
 
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        if "friend.request.send" not in self.capabilities:
+            raise CapabilityError("当前插件缺少主动发送好友申请的能力")
+        return self._service.send_friend_request(wxid, message, room=room, expected_session=expected_session)
+
     def group_members(self, room, *, expected_session=None):
         return self._service.group_members(room, expected_session=expected_session)
 
@@ -615,6 +667,10 @@ class PluginContext:
     def reply(self, message, text, *, delivery_guard=None):
         return self._service.send_text(message.chat_id, text, expected_session=message.session_id,
                                        delivery_guard=delivery_guard)
+
+    def reply_quote(self, message, text, *, delivery_guard=None):
+        """在原会话中发送一条微信原生引用回复。"""
+        return self._service.reply_quote(message, text, delivery_guard=delivery_guard)
 
     def reply_image(self, message, path, *, delivery_guard=None):
         return self._service.send_image(message.chat_id, path, expected_session=message.session_id,

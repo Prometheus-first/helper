@@ -76,6 +76,9 @@ class BotApplication:
         try:
             candidate = self.backend_factory()
             self.backend = candidate
+            raw = getattr(candidate, "raw", None)
+            if self.members is not None and raw is not None and hasattr(raw, "friend_add_rooms"):
+                raw.friend_add_rooms = tuple(self.members.groups)
             self.service.bind(candidate)
             candidate.start(emit_when_ready)
             capabilities = getattr(candidate, 'capabilities', None)
@@ -199,8 +202,13 @@ class BotApplication:
         elif message.type == 3:
             logger.info("图片消息 | 会话ID=%s | 状态=%s | 文件=%s", message.chat_id,
                         message.data.get("image_status", "pending"), message.image_path or "")
+        elif message.type == 43:
+            logger.info('视频消息 | 发送者微信ID=%s | 状态=%s',
+                        message.sender_id or message.chat_id, message.data.get('video_status', 'unavailable'))
         elif message.type == 49:
-            if message.data.get('app_type') == 19:
+            if message.data.get('app_type') == 57:
+                logger.info("引用消息 | 发送者微信ID=%s", message.sender_id or message.chat_id)
+            elif message.data.get('app_type') == 19:
                 logger.info('合并转发 | 发送者微信ID=%s | 记录数=%s | 状态=%s',
                             message.sender_id or message.chat_id,
                             len(message.data.get('forwarded_records', ())),
@@ -329,7 +337,8 @@ class BotApplication:
             self.stop_event.set()
         elif action == "help" and len(words) == 1:
             logger.info("命令：status / chats / members [群ID] / history 称呼 [条数] / send-image 会话ID \"图片路径\" / send-file 会话ID \"文件路径\" / send-voice 会话ID \"语音路径\" / export-emoticons [raw] / send-emoticon 会话ID \"GIF路径\" / plugins / enable 名称 / disable 名称 / reload [名称] / quit")
-            logger.info("好友与群管理：friend-requests / accept-friend 申请ID / invite-members 群ID 好友ID [好友ID...] / create-group 好友ID 好友ID [好友ID...]")
+            logger.info("视频发送：send-video 会话ID \"视频路径\"")
+            logger.info("好友与群管理：add-friend 微信ID 验证消息 [群ID] / friend-requests / accept-friend 申请ID / invite-members 群ID 好友ID [好友ID...] / create-group 好友ID 好友ID [好友ID...]")
             logger.info("群成员：group-members 群ID / group-nickname 群ID 微信ID；欢迎提醒：enable group_notice / disable group_notice")
         elif action == "status" and len(words) == 1:
             logger.info("状态：%s", json.dumps({"connected": self._connection_ready,
@@ -339,6 +348,11 @@ class BotApplication:
         elif action == "chats" and len(words) == 1:
             rows = self.backend.chats() if self.backend and hasattr(self.backend, "chats") else []
             logger.info("本次连接已接收的会话：%s", json.dumps(rows, ensure_ascii=False))
+        elif action == "add-friend" and len(words) in (3, 4):
+            room = words[3] if len(words) == 4 else ""
+            if not self.service.send_friend_request(words[1], words[2], room=room):
+                raise RuntimeError("微信未确认好友申请，请先核对后再决定是否重试")
+            logger.info("好友申请已发送，等待对方处理")
         elif action == "friend-requests" and len(words) == 1:
             logger.info("本次连接的好友申请：%s", json.dumps(self.service.friend_requests(), ensure_ascii=False))
         elif action == "accept-friend" and len(words) == 2:
@@ -370,6 +384,10 @@ class BotApplication:
             if not self.service.send_voice(words[1], words[2]):
                 raise RuntimeError("微信未接受语音发送请求，请查看原生结果")
             logger.info("语音发送请求已提交：会话ID=%s", words[1])
+        elif action == "send-video" and len(words) == 3:
+            if not self.service.send_video(words[1], words[2]):
+                raise RuntimeError("微信未接受视频发送请求，请查看原生结果")
+            logger.info("视频发送请求已提交：会话ID=%s", words[1])
         elif action == "send-file" and len(words) == 3:
             if not self.service.send_file(words[1], words[2]):
                 raise RuntimeError("微信未接受文件发送请求，请查看原生结果")

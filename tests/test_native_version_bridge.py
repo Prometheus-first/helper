@@ -72,6 +72,13 @@ VERIFIED_RVAS = {
     0x9af9078: 0x9cff818,
     0xb912690: 0xbb92fa0,
 }
+# Observed VerifyUser and quote paths, applicable only to the exact 4.2.0.12 build.
+VERIFIED_42012_ONLY = {
+    0x1a5a850: 0x1a5a850,
+    0x1804cc0: 0x1804cc0, 0xaa1910: 0xaa1910, 0x1aa3a60: 0x1aa3a60,
+    0x3ab6aa0: 0x3ab6aa0, 0x9074f18: 0x9074f18, 0xee4c70: 0xee4c70,
+    0x1b7ff0: 0x1b7ff0, 0x1ce140: 0x1ce140, 0x5721175: 0x5721175, 0x5721535: 0x5721535,
+}
 VERIFIED_BUILDS = {
     "4.1.15.13": (201552944, "10f8e995453e2da46d4f2b5080cd6da1f13cc5147746adc119ceae38cb039de5",
                    0x6AB0A378, 0xC0AE000),
@@ -200,15 +207,23 @@ class NativeVersionBridgeTests(unittest.TestCase):
             for old in re.findall(r"core_(?:address\([^,]+,\s*|rva\()(0x[0-9a-f]+)\)", text):
                 used.add(int(old, 16))
             self.assertIsNone(re.search(r"vtable_rva\s*!=\s*0x[0-9a-f]+", text), path.name)
-        self.assertEqual(used, set(VERIFIED_RVAS))
+        self.assertEqual(used, set(VERIFIED_RVAS) | set(VERIFIED_42012_ONLY))
+        resolver = code_without_comments(source("core_version.h"))
+        block = resolver.split("if (profile == 4)", 1)[1].split("if (profile == 3)", 1)[0]
+        for canonical, target in VERIFIED_42012_ONLY.items():
+            self.assertRegex(block, rf"case\s+{hex(canonical)}:\s*return\s+{hex(target)};")
+        quote = code_without_comments(source("quote_send.h"))
+        self.assertRegex(quote, r"!core_fingerprint\(core\)\s*\|\|\s*core_profile_id\s*!=\s*4")
+        add = code_without_comments(source("friend_add.h"))
+        self.assertRegex(add, r"InterlockedCompareExchange\(&core_profile_id,\s*0,\s*0\)\s*!=\s*4")
 
     def test_hook_cleanup_uses_the_same_canonical_targets_as_install(self):
         text = code_without_comments(source("selftest_bridge.cpp"))
         removal = text.split("DWORD WINAPI WxRemoveSelfTest(void*)", 1)[1].split("BOOL WINAPI DllMain", 1)[0]
         targets = {int(value, 16) for value in re.findall(r"core_address\(core_base,\s*(0x[0-9a-f]+)\)", removal)}
-        self.assertEqual(targets, {0x178F100, 0x17B9010, 0x229E790, 0x3866510, 0x6F4C70, 0x5240720})
+        self.assertEqual(targets, {0x178F100, 0x17B9010, 0x229E790, 0x3866510, 0x6F4C70, 0x5240720, 0x6F4D90})
         install = "\n".join(code_without_comments(source(name)) for name in
-                            ("selftest_bridge.cpp", "text_bridge.cpp", "friend_receive.h", "image_download.h"))
+                            ("selftest_bridge.cpp", "text_bridge.cpp", "friend_receive.h", "image_download.h", "quote_send.h"))
         for legacy in targets:
             self.assertGreaterEqual(len(re.findall(r"core_address\(core_base,\s*" + hex(legacy) + r"\)", install)), 2)
         self.assertNotRegex(removal, r"core_profile_id\s*=|InterlockedExchange\([^,]*core_profile_id")

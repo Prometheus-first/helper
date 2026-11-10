@@ -99,25 +99,29 @@ def scheduled_greeting(self, params, ctx):
 | --- | --- |
 | `ctx.reply(message, text)` | 回复文本 |
 | `ctx.reply_at(message, text)` | 真正艾特群消息作者并回复 |
+| `ctx.reply_quote(message, text)` | [在原会话发送微信原生引用回复](../messages/text.md#原生引用回复)，需要 `text.quote.send` |
 | `ctx.send_text(chat_id, text)` | 向明确的会话发送文本 |
 | `ctx.send_at_text(room, text, members, expected_session=message.session_id, display_names=names)` | 向指定群发送真实艾特，支持 1–8 位成员 |
 | `ctx.reply_image(message, path)` | 回复本地图片 |
 | `ctx.send_image(chat_id, path)` | 发送本地图片 |
 | `ctx.reply_file(message, path)` | 回复本地文件附件 |
 | `ctx.send_file(chat_id, path)` | 发送本地文件附件 |
-| `ctx.reply_video(message, path)` | 回复本地 MP4 视频（Linux 4.1.13.26） |
-| `ctx.send_video(chat_id, path)` | 发送本地 MP4 视频（Linux 4.1.13.26） |
+| `ctx.reply_video(message, path)` | 以微信视频消息回复 MP4 |
+| `ctx.send_video(chat_id, path)` | 以微信视频消息发送 MP4 |
 | `ctx.reply_emoticon(message, path)` | 回复 GIF 表情 |
 | `ctx.send_emoticon(chat_id, path)` | 发送 GIF 表情 |
 | `ctx.reply_voice(message, path)` | 回复语音条 |
 | `ctx.send_voice(chat_id, path)` | 发送语音条 |
 | `ctx.export_emoticons(convert=True)` | 显式导出当前账号本地缓存表情 |
+| `ctx.send_friend_request(wxid, verification_text, room="", expected_session=incoming.session_id)` | 通过共同群主动发送好友申请（Windows 4.2.0.12） |
 | `ctx.group_members(room, expected_session=message.session_id)` | 读取完整群成员快照，缓存不可用时返回 `None` |
 | `ctx.contacts(expected_session=message.session_id)` | 扫描当前账号的好友及资料，需要 `contact.read` 能力 |
 | `ctx.group_member_name(room, wxid, expected_session=message.session_id)` | 查询群昵称，未设置时返回微信名 |
 | `ctx.group_member_role(room, wxid, expected_session=message.session_id)` | 查询群主、群管理员或普通群友身份，未确认时返回 `unknown` |
 
 Linux 视频发送需要 `video.send` 能力，使用 Linux 本机 MP4 文件，单个文件最多 64 MiB。每类文件有独立限制，见对应的消息章节。`ctx.send_voice` 发送已有音频；可选的 `voice_reply` 插件通过 Fish Audio 合成艾特对话的语音，见[语音回复](../messages/voice.md#fish-audio-文字转语音)。
+
+视频发送目前支持微信 4.2.0.12 的本地 MP4 文件。可在插件的 `requires` 中声明 `video.send`；框架会读取容器时长，并将副本放入微信暂存目录。文件传输助手和群聊已验证，好友私聊尚未单独实测。
 
 ## 处理图片
 
@@ -143,7 +147,7 @@ image.receive / image.send
 file.receive / file.send
 friend.file.receive / friend.file.send
 group.file.receive / group.file.send
-friend.request.receive / friend.request.accept
+friend.request.receive / friend.request.accept / friend.request.send
 group.member.invite / group.create
 group.members.read / group.events
 contact.read

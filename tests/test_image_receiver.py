@@ -134,6 +134,22 @@ class ReceiverTests(unittest.TestCase):
         self.assertTrue(all(not target.parent.exists() for target in targets))
         self.assert_no_work_files()
 
+    def test_original_reference_quality_and_failure_are_visible(self):
+        xml = ('<msg><img aeskey="fixture-key" cdnbigimgurl="original-reference" '
+               'cdnmidimgurl="standard-reference" /></msg>')
+        def download(_metadata, destination):
+            destination.write_bytes(PNG)
+            return True
+        receiver = self.receiver(download)
+        receiver.submit(dict(image_event(), raw_content=xml))
+        event = self.wait_event()
+        self.assertEqual((event['image_status'], event['image_quality']), ('ready', 'original'))
+        failing = self.receiver(lambda _metadata, _destination: False)
+        failing.submit(dict(image_event(2), raw_content=xml))
+        event = self.wait_event()
+        self.assertEqual((event['image_status'], event['image_quality']), ('failed', 'original'))
+        self.assertIn('未自动切换普通图', event['image_error'])
+
     def test_false_downloader_result_is_observable_failure_and_cleans_partial_file(self):
         def download(metadata, destination):
             destination.write_bytes(b"half-written-data")

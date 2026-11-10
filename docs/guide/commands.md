@@ -22,9 +22,12 @@ send-image filehelper "E:\图片\示例.png"
 send-emoticon filehelper "E:\表情\示例.gif"
 send-voice filehelper "E:\语音\示例.wav"
 send-file filehelper "E:\文件\示例.txt"
+send-video filehelper "E:\视频\示例.mp4"
 ```
 
 把 `filehelper` 换成好友或群的实际 ID，即可向该会话提交发送。路径有空格时保留双引号。格式、大小和时长限制分别见[图片](../messages/images.md)、[文件](../messages/files.md)、[表情](../messages/emoticons.md)、[语音](../messages/voice.md)。
+
+`send-video` 仅支持已核对指纹的微信 4.2.0.12，按微信原生视频消息发送本地 MP4。文件传输助手和群聊播放已实测；好友私聊尚未单独实测。提交成功不等于对方已下载或播放。
 
 ## 导出本地表情
 
@@ -38,6 +41,7 @@ export-emoticons raw
 ## 好友与群管理
 
 ```text
+add-friend wxid_example "你好"
 friend-requests
 accept-friend fr_申请ID
 invite-members 12345678@chatroom wxid_example_friend

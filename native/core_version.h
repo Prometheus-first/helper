@@ -76,6 +76,18 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x754330: return 0x77b270;
             case 0x7544b0: return 0x77b3f0;
             case 0x1a26440: return 0x1a69dc0;
+            case 0x1a5a850: return 0x1a5a850; // 4.2.0.12 VerifyUser
+            // 4.2.0.12 only: quote lookup, construction, destruction, and text-builder call sites.
+            case 0x1804cc0: return 0x1804cc0;
+            case 0xaa1910: return 0xaa1910;
+            case 0x1aa3a60: return 0x1aa3a60;
+            case 0x3ab6aa0: return 0x3ab6aa0;
+            case 0x9074f18: return 0x9074f18;
+            case 0xee4c70: return 0xee4c70;
+            case 0x1b7ff0: return 0x1b7ff0;
+            case 0x1ce140: return 0x1ce140;
+            case 0x5721175: return 0x5721175;
+            case 0x5721535: return 0x5721535;
             case 0x3866510: return 0x3959710;
             case 0x8d9f958: return 0x9075ec8;
             default: return 0;
@@ -209,6 +221,13 @@ static uintptr_t core_sns_address(uintptr_t base, uintptr_t rva) {
     };
     for (auto candidate : verified) if (candidate == rva) return base + rva;
     return 0;
+}
+
+// These two RVAs were observed only in the exact 4.2.0.12 build.
+static uintptr_t core_video_address(uintptr_t base, uintptr_t rva) {
+    if (!base || InterlockedCompareExchange(&core_profile_id, 0, 0) != 4) return 0;
+    if (rva != 0x3078f60 && rva != 0x93bd678) return 0;
+    return base + rva;
 }
 
 // The publishing RVAs are native 4.1.15.56 values; 4.2 has a separate map.
