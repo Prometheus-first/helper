@@ -56,6 +56,21 @@ class LLMTests(unittest.TestCase):
             client.complete_json("JSON", "测试")
         self.assertEqual(call.call_args.args[0].full_url, "https://gateway.example.test/v1/chat/completions")
 
+    def test_worldguide_grok_uses_gateway_headers_and_scopes_credentials(self):
+        client = LLMClient({**self.options, "base_url": "https://api.worldguide.online/v1",
+                            "model": "grok-4.7", "extra_body": {"reasoning_effort": "low"}})
+        with patch("wxbot_framework.llm.urlopen", return_value=self.response('{"reply":"你好"}')) as call:
+            self.assertEqual(client.complete_json("返回 JSON", "你好"), {"reply": "你好"})
+        request = call.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.worldguide.online/v1/chat/completions")
+        self.assertEqual(request.get_header("User-agent"), "helper/1.0")
+        self.assertEqual(request.get_header("Accept"), "application/json")
+        self.assertEqual(request.get_header("Authorization"), "Bearer dummy-test-key")
+        self.assertNotIn("Authorization", request.headers)
+        payload = json.loads(request.data)
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertNotIn("thinking", payload)
+
     def test_completion_token_parameter_sends_only_selected_limit(self):
         client = LLMClient({**self.options, "token_limit_parameter": "max_completion_tokens", "max_tokens": 2048})
         with patch("wxbot_framework.llm.urlopen", return_value=self.response('{}')) as call:

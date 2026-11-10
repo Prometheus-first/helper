@@ -364,6 +364,7 @@ class PanelController:
                 if name not in paths or not isinstance(data[name], dict):
                     raise PanelError('模型配置格式不正确')
                 value = read_json(paths[name])
+                previous_url = value.get('base_url')
                 fields = {'base_url', 'model', 'timeout_seconds'} | ({'max_tokens', 'json_mode', 'token_limit_parameter', 'extra_body'} if name == 'llm'
                             else {'default_voice', 'max_chars_per_clip'})
                 for key in fields:
@@ -379,8 +380,11 @@ class PanelController:
                 # 允许先保存未填密钥的模板，其余字段沿用真实客户端验证。
                 validation = dict(value, api_key=value.get('api_key') or 'validation-only')
                 if name == 'llm':
-                    from .llm import LLMClient
+                    from .llm import LLMClient, is_worldguide_url
                     LLMClient(validation)
+                    if (value.get('api_key') and not key.strip() and
+                            is_worldguide_url(previous_url) != is_worldguide_url(value.get('base_url'))):
+                        raise PanelError('切换 WorldGuide 接口时，请填写新接口的 API 密钥或清除已保存的密钥')
                 else:
                     from .tts import FishTTS
                     FishTTS.from_options(validation)

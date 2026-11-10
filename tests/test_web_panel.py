@@ -257,6 +257,28 @@ class ControllerTests(PanelFixture):
         self.controller.save_configuration({'llm':{'extra_body':{}}})
         self.assertEqual(read_json(path)['extra_body'], {})
 
+    def test_worldguide_preset_does_not_reuse_another_providers_key(self):
+        path = self.root / 'llm_config.json'
+        self.controller.save_configuration({'llm': {'api_key': 'previous-provider-key'}})
+        preset = {'base_url': 'https://api.worldguide.online/v1', 'model': 'grok-4.7',
+                  'timeout_seconds': 45, 'max_tokens': 1024, 'json_mode': True,
+                  'token_limit_parameter': 'max_tokens', 'extra_body': {'reasoning_effort': 'low'}}
+        before = path.read_bytes()
+        with self.assertRaisesRegex(PanelError, '填写新接口的 API 密钥'):
+            self.controller.save_configuration({'llm': preset})
+        self.assertEqual(path.read_bytes(), before)
+
+        self.controller.save_configuration({'llm': {**preset, 'api_key': 'worldguide-test-key'}})
+        self.controller.save_configuration({'llm': {'model': 'grok-4.6', 'api_key': ''}})
+        self.assertEqual(read_json(path)['api_key'], 'worldguide-test-key')
+        config = self.controller.configuration()['llm']
+        self.assertEqual(config['model'], 'grok-4.6')
+        self.assertNotIn('api_key', config)
+        with self.assertRaisesRegex(PanelError, '填写新接口的 API 密钥'):
+            self.controller.save_configuration({'llm': {'base_url': 'https://api.deepseek.com'}})
+        self.controller.save_configuration({'llm': {'base_url': 'https://api.deepseek.com', 'clear_api_key': True}})
+        self.assertFalse(self.controller.configuration()['llm']['api_key_configured'])
+
     def test_legacy_llm_config_has_compatible_defaults_and_invalid_edits_are_atomic(self):
         path = self.root/'llm_config.json'
         value = read_json(path)

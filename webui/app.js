@@ -253,6 +253,22 @@ function fill(form, values) {
     else input.value = input.name === 'extra_body' ? JSON.stringify(values[input.name] ?? {}, null, 2) : values[input.name] ?? '';
   }
 }
+$('#llm-grok-preset').onchange = event => {
+  const preset = event.target;
+  if (!preset.value) return;
+  const form = preset.form;
+  const baseUrl = 'https://api.worldguide.online/v1';
+  if (!/^https:\/\/api\.worldguide\.online(?::443)?(?:\/|$)/i.test(form.elements.base_url.value)) {
+    form.elements.api_key.value = '';
+    $('.key-state', form).textContent = '请填写 WorldGuide 密钥';
+  }
+  fill(form, {
+    base_url:baseUrl, model:preset.value, timeout_seconds:45, max_tokens:1024,
+    json_mode:true, token_limit_parameter:'max_tokens', extra_body:{reasoning_effort:'low'},
+    clear_api_key:false
+  });
+  preset.value = '';
+};
 async function loadConfig() {
   const requested = robot, loaded = await api('config');
   if (requested !== robot) return;

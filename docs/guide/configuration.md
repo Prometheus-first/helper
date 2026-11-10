@@ -153,6 +153,8 @@
 
 `gateway.example.com` 是占位地址，需要替换。`base_url` 保留服务商要求的路径前缀，例如 `/v1`；程序在后面追加 `/chat/completions`。也可以直接填写完整的 `/chat/completions` 地址，不会重复追加。仅提供 Responses 或其他原生协议的服务不能直接使用。
 
+在管理台的「模型与语音」中选择 **WorldGuide Grok 预设**，可填入 `grok-4.7`、`grok-4.6` 或 `grok-4.5` 的对话配置。填写 WorldGuide 密钥后保存。手动配置时，使用 `https://api.worldguide.online/v1`，开启 JSON 模式，设置 `max_tokens` 为 1024、超时为 45 秒，扩展参数填 `{"reasoning_effort":"low"}`。这些设置给推理和最终 JSON 正文预留了令牌预算。[WorldGuide 对话文档](https://worldguide.online/docs/chat/)
+
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `json_mode` | `true` | 发送 `response_format: {"type":"json_object"}`；接口不支持时改为 `false` |

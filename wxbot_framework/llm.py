@@ -11,6 +11,17 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
+def is_worldguide_url(url):
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url)
+        return (parsed.scheme == "https" and parsed.hostname == "api.worldguide.online"
+                and parsed.port in (None, 443))
+    except ValueError:
+        return False
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -42,6 +53,7 @@ class LLMClient:
                          else self.base_url + "/chat/completions")
         self._deepseek_official = (parsed.scheme == "https" and parsed.hostname == "api.deepseek.com"
                                   and parsed.port in (None, 443))
+        self._worldguide = is_worldguide_url(self.base_url)
         self.model = options.get("model", "deepseek-flash")
         self._api_key = options.get("api_key", "")
         if not isinstance(self.model, str) or not self.model.strip():
@@ -95,12 +107,19 @@ class LLMClient:
                 and not {"thinking", "reasoning_effort"}.intersection(self.extra_body)):
             payload["thinking"] = {"type": "disabled"}
         allow_fenced = not self.json_mode
+        headers = {"Content-Type": "application/json"}
+        if self._worldguide:
+            # The gateway rejects urllib's default User-Agent.
+            headers.update({"User-Agent": "helper/1.0", "Accept": "application/json"})
+        else:
+            headers["Authorization"] = "Bearer " + self._api_key
         try:
             for attempt in range(2):
                 request = Request(self.endpoint,
                                   data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                                  headers={"Authorization": "Bearer " + self._api_key,
-                                           "Content-Type": "application/json"}, method="POST")
+                                  headers=headers, method="POST")
+                if self._worldguide:
+                    request.add_unredirected_header("Authorization", "Bearer " + self._api_key)
                 with urlopen(request, timeout=self.timeout) as response:
                     raw = response.read(1024 * 1024 + 1)
                 if len(raw) > 1024 * 1024:
@@ -140,6 +159,8 @@ class LLMClient:
                 return data
         except HTTPError as error:
             # 不输出响应正文或请求头，避免服务器错误回显密钥。
+            if self._worldguide and error.code == 429:
+                raise LLMError("WorldGuide 请求受限（HTTP 429），请稍后再试") from None
             raise LLMError(f"大模型接口 HTTP {error.code}；请核对密钥、余额和模型配置") from None
         except (URLError, TimeoutError, OSError):
             raise LLMError("大模型连接失败或超时，请稍后再试") from None
