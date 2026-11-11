@@ -8,6 +8,7 @@
 #define WXBOT_RECALL_RECEIVE
 #define WXBOT_FRIEND_RECEIVE
 #define WXBOT_QUOTE_SEND
+#define WXBOT_LOCAL_RECALL
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();
@@ -577,6 +578,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "image_download.h"
 #include "emoticon_send.h"
 #include "quote_send.h"
+#include "local_recall.h"
 #include "voice_send.h"
 #include "file_download.h"
 #include "file_send.h"

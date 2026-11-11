@@ -90,6 +90,7 @@ class BotApplication:
                     if record.spec.requires - self.plugins.capabilities:
                         self.plugins.disable(name, persist=False)
                 self.plugins.reload()
+            self.service.restore_local_recall()
             self._connection_ready = True
             self._last_connection_error = ""
             if callable(getattr(candidate, "group_members", None)):

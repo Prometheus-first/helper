@@ -708,6 +708,16 @@ class NativeTextService(NativeFileHelperService):
     def send_text(self, to_wxid, content):
         return self._send_text(to_wxid, content)
 
+    def set_local_recall(self, enabled):
+        from local_recall_transport import set_local_recall
+        if type(enabled) is not bool:
+            raise ValueError("本机防撤回开关必须是布尔值")
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set():
+                raise RuntimeError("原生文本服务没有运行")
+            self._check_account(force=True)
+            return set_local_recall(self.pid, self.self_wxid, enabled, bridge_path=self._dll)
+
     def send_quote_text(self, to_wxid, original_id, content):
         validate_target(to_wxid)
         with self._calls:

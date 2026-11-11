@@ -84,6 +84,7 @@ class ServiceFacade:
         self._cancel = threading.Event()
         self.text_delay = TextSendDelay.from_config(text_delay)
         self.message_observer = None
+        self._local_recall_owner = None
 
     def _sent(self, result, backend, chat_id, msg_type, *, text='', path='', quote=None):
         observer = self.message_observer
@@ -116,6 +117,35 @@ class ServiceFacade:
         with self._lock:
             return bool(self._backend is not None and self._available and
                         self._backend.session_id == session_id)
+
+    def enable_local_recall(self):
+        """返回本次启用凭证，重载时旧插件不能关闭新实例的设置。"""
+        with self._lock:
+            if self._backend is None or not self._available:
+                raise RuntimeError("请先连接微信，再开启本机防撤回")
+            backend = self._backend
+            if ("message.recall.local" not in getattr(backend, "capabilities", ()) or
+                    not callable(getattr(backend, "set_local_recall", None))):
+                raise CapabilityError("当前微信版本尚未开放本机防撤回")
+            backend.set_local_recall(True)
+            owner = object()
+            self._local_recall_owner = owner
+            return owner
+
+    def disable_local_recall(self, owner):
+        with self._lock:
+            if owner is None or owner is not self._local_recall_owner:
+                return
+            if (self._backend is not None and self._available and
+                    "message.recall.local" in getattr(self._backend, "capabilities", ())):
+                self._backend.set_local_recall(False)
+            self._local_recall_owner = None
+
+    def restore_local_recall(self):
+        """连接恢复后重新应用仍然启用的本机保留插件。"""
+        with self._lock:
+            if self._local_recall_owner is not None:
+                self._backend.set_local_recall(True)
 
     def send_text(self, to_wxid, content, *, expected_session=None, _mentions=(), delivery_guard=None):
         validate_target(to_wxid)
@@ -652,6 +682,14 @@ class PluginContext:
     def reply(self, message, text, *, delivery_guard=None):
         return self._service.send_text(message.chat_id, text, expected_session=message.session_id,
                                        delivery_guard=delivery_guard)
+
+    def enable_local_recall(self):
+        if "message.recall.local" not in self.capabilities:
+            raise CapabilityError("当前插件缺少本机防撤回能力")
+        return self._service.enable_local_recall()
+
+    def disable_local_recall(self, owner):
+        return self._service.disable_local_recall(owner)
 
     def reply_quote(self, message, text, *, delivery_guard=None):
         """在原会话中发送一条微信原生引用回复。"""

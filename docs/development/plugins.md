@@ -166,6 +166,12 @@ voice.send / friend.voice.send / group.voice.send
 
 `message.recall` 表示后端可提供微信原始消息编号和撤回通知。框架把撤回事件及媒体监控元数据定向交给内置防撤回插件，不广播为普通文本；参考 `anti_recall` 的精确编号匹配、会话缓存和发送连接检查。它同时补发文字、内置表情和 emoji；后端提供 `emoticon.send` 时，还会异步缓存类型 47 的原件并用 `ctx.reply_emoticon` 补发。原始 XML、CDN 地址及凭据不应进入日志或大模型。补发插件默认开启，网页监控标记独立保留。
 
+## 本机保留撤回消息
+
+微信 4.2.0.12 的指定构建提供 `message.recall.local` 能力。内置 `anti_recall_local` 在 `on_load` 中调用 `owner = ctx.enable_local_recall()`，在 `on_unload` 中调用 `ctx.disable_local_recall(owner)`。凭证用于避免热重载时旧实例关闭新实例的开关；连接恢复后框架会重新应用启用状态。
+
+本机保留不发送新消息，作用于当前账号的全部会话；与会话白名单内的四类撤回补发独立。默认关闭，使用范围与限制见[防撤回](../messages/recall.md)。
+
 ## 联系人
 
 `ctx.contacts(expected_session=message.session_id)` 返回含 `account`、`session_id`、`scanned_at`、`contacts` 和标签目录 `tags` 的快照。每位好友含 `wxid`、`nickname`、`remark`、`alias`、`description`、`sex`、`country`、`province`、`city`、`signature`、`tag_ids`、`tags` 和 `tags_status`。`tags_status == "ready"` 且 `tags` 为空才代表已确认没有标签；`unavailable` 表示字段或标签名称尚未就绪。未读取到的个人资料为空，性别为 `unknown`。`complete` 当前为 `false`，仅表示已加载缓存，不保证完整好友名单。连接不可用或读期间切换账号会失败，不返回旧账号结果。当前仅验证微信 4.1.15.56，使用说明见[扫描联系人](../guide/web-panel.md#扫描联系人)。

@@ -39,7 +39,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
     "group.file.receive", "group.file.send", "voice.receive", "voice.xml.receive", "voice.send",
     "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "video.receive", "friend.video.receive", "group.video.receive", "friend.request.send",
-    "text.quote.send",
+    "text.quote.send", "message.recall.local",
 })
 
 
@@ -125,6 +125,9 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def chats(self):
         return list(self.raw.chats.values())
+
+    def set_local_recall(self, enabled):
+        return self.raw.set_local_recall(enabled)
 
     def send_quote_text(self, chat_id, original_id, content):
         return self.raw.send_quote_text(chat_id, original_id, content)

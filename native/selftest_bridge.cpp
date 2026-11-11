@@ -44,6 +44,10 @@ static bool factory_hook_created = false;
 #ifdef WXBOT_QUOTE_SEND
 static bool quote_manager_hook_created = false;
 #endif
+#ifdef WXBOT_LOCAL_RECALL
+static bool local_recall_hook_created = false;
+static volatile LONG local_recall_enabled = 0;
+#endif
 static bool image_download_factory_hook_created = false;
 static DWORD factory_tls = TLS_OUT_OF_INDEXES;
 using ReceiveFunction = uintptr_t (__fastcall*)(void*, const uintptr_t*, uint8_t, uint8_t);
@@ -639,6 +643,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxWaitForTasks(void*) {
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
+#ifdef WXBOT_LOCAL_RECALL
+    InterlockedExchange(&local_recall_enabled, 0);
+#endif
     const auto target = reinterpret_cast<void*>(core_address(core_base, 0x178f100));
     MH_STATUS status = MH_OK;
     if (hook_created) {
@@ -677,6 +684,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
 #endif
+#ifdef WXBOT_LOCAL_RECALL
+    auto local_recall_target = local_recall_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x1852d70)) : nullptr;
+    if (local_recall_hook_created) {
+        status = MH_DisableHook(local_recall_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+#endif
     void* image_factory_target = reinterpret_cast<void*>(core_address(core_base, 0x5240720));
     if (image_download_factory_hook_created) {
         status = MH_DisableHook(image_factory_target);
@@ -694,6 +709,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
 #endif
 #ifdef WXBOT_QUOTE_SEND
     hooks_present = hooks_present || quote_manager_hook_created;
+#endif
+#ifdef WXBOT_LOCAL_RECALL
+    hooks_present = hooks_present || local_recall_hook_created;
 #endif
     if (!hooks_present) return 0;
     if (hook_created) {
@@ -730,10 +748,19 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         if (status != MH_OK) return 600 + status;
     }
 #endif
+#ifdef WXBOT_LOCAL_RECALL
+    if (local_recall_hook_created) {
+        status = MH_RemoveHook(local_recall_target);
+        if (status != MH_OK) return 600 + status;
+    }
+#endif
     status = MH_Uninitialize();
     if (status == MH_OK) {
         hook_created = false; receive_hook_created = false; factory_hook_created = false;
         image_download_factory_hook_created = false;
+#ifdef WXBOT_LOCAL_RECALL
+        local_recall_hook_created = false;
+#endif
 #ifdef WXBOT_QUOTE_SEND
         quote_manager_hook_created = false;
 #endif

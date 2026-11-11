@@ -75,6 +75,7 @@ VERIFIED_RVAS = {
 # Observed VerifyUser and quote paths, applicable only to the exact 4.2.0.12 build.
 VERIFIED_42012_ONLY = {
     0x1a5a850: 0x1a5a850,
+    0x1852d70: 0x1852d70, 0x91aa8b8: 0x91aa8b8, 0x2425b51: 0x2425b51,
     0x1804cc0: 0x1804cc0, 0xaa1910: 0xaa1910, 0x1aa3a60: 0x1aa3a60,
     0x3ab6aa0: 0x3ab6aa0, 0x9074f18: 0x9074f18, 0xee4c70: 0xee4c70,
     0x1b7ff0: 0x1b7ff0, 0x1ce140: 0x1ce140, 0x5721175: 0x5721175, 0x5721535: 0x5721535,
@@ -221,9 +222,9 @@ class NativeVersionBridgeTests(unittest.TestCase):
         text = code_without_comments(source("selftest_bridge.cpp"))
         removal = text.split("DWORD WINAPI WxRemoveSelfTest(void*)", 1)[1].split("BOOL WINAPI DllMain", 1)[0]
         targets = {int(value, 16) for value in re.findall(r"core_address\(core_base,\s*(0x[0-9a-f]+)\)", removal)}
-        self.assertEqual(targets, {0x178F100, 0x17B9010, 0x229E790, 0x3866510, 0x6F4C70, 0x5240720, 0x6F4D90})
+        self.assertEqual(targets, {0x178F100, 0x17B9010, 0x229E790, 0x3866510, 0x6F4C70, 0x5240720, 0x6F4D90, 0x1852D70})
         install = "\n".join(code_without_comments(source(name)) for name in
-                            ("selftest_bridge.cpp", "text_bridge.cpp", "friend_receive.h", "image_download.h", "quote_send.h"))
+                            ("selftest_bridge.cpp", "text_bridge.cpp", "friend_receive.h", "image_download.h", "quote_send.h", "local_recall.h"))
         for legacy in targets:
             self.assertGreaterEqual(len(re.findall(r"core_address\(core_base,\s*" + hex(legacy) + r"\)", install)), 2)
         self.assertNotRegex(removal, r"core_profile_id\s*=|InterlockedExchange\([^,]*core_profile_id")
