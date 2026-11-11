@@ -447,12 +447,20 @@ class NativeTextService(NativeFileHelperService):
                                            "is_group": bool(data["room_wxid"])}
             if message.type == 34:
                 data['monitor_only'] = True
-                data['raw_content'] = data.get('content') or body
+                from wxbot_framework.voice_receiver import parse_voice_xml
+                try:
+                    xml, _ = parse_voice_xml(data.get('content') or body)
+                except (ValueError, TypeError, UnicodeError):
+                    xml = ''
+                data.update(raw_content=xml, voice_xml=xml)
                 enabled = not self.image_allowlist or data['chat_id'] in self.image_allowlist
                 receiving = enabled and self._voice_receiver is not None
                 status = 'pending' if receiving else 'unavailable' if enabled else 'skipped'
-                sanitized = dict(data, voice_status=status, voice_path='')
-                for field in ('raw_content', 'content', 'msg'):
+                sanitized = dict(data, voice_status=status, voice_path='',
+                                 voice_xml_only=bool(xml) and status == 'unavailable')
+                if not enabled:
+                    sanitized.update(raw_content='', voice_xml='')
+                for field in ('content', 'msg'):
                     sanitized[field] = ''
                 if receiving:
                     # Validation failure can synchronously deliver failed; always

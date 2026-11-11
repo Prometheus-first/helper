@@ -131,6 +131,17 @@ class BotApplication:
         message = self._with_group_role(message)
         self._observe_message(message)
         allowed = self.config.get('chat_allowlist', [])
+        if (message.type == 34 and message.data.get('voice_xml') and
+                message.data.get('voice_status') in ('ready', 'failed', 'unavailable') and
+                (message.data.get('dispatch_to_plugins', True) or message.data.get('voice_xml_only')) and
+                not message.is_self and not message.data.get('bot_generated')):
+            if not allowed or message.chat_id in allowed:
+                if message.data['voice_status'] == 'ready':
+                    self.plugins.dispatch(message)
+                else:
+                    self._dispatch_recall_plugins(message)
+                    self.plugins.dispatch(message, required='voice.xml.receive')
+            return
         recall = message.type in (10000, 10002) and isinstance(message.data.get('recall'), dict)
         if recall or message.data.get('monitor_only'):
             # 防撤回插件需要原始媒体类型和撤回通知；不把监控事件交给普通玩法。
