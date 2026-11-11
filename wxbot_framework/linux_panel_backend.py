@@ -16,7 +16,7 @@ PANEL_CAPABILITIES = frozenset({"text.receive", "text.send", "friend.text.receiv
     "image.recall.receive", "file.recall.receive", "voice.recall.receive",
     "image.receive", "friend.image.receive", "group.image.receive",
     "file.receive", "friend.file.receive", "group.file.receive",
-    "voice.receive", "friend.voice.receive", "group.voice.receive", "emoticon.extract"})
+    "voice.receive", "voice.xml.receive", "friend.voice.receive", "group.voice.receive", "emoticon.extract"})
 
 
 class LinuxPanelBackend(LinuxNativeTextBackend):

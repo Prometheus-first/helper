@@ -162,7 +162,12 @@ class Plugin:
             self.assertTrue(message.data['dispatch_to_plugins'])
             self.assertNotIn('_linux_voice', message.data)
             self.assertNotIn('_linux_media', message.data)
-            self.assertNotIn('private-fixture', repr(dict(message.data)))
+            if kind == 34:
+                self.assertIn('<voicemsg ', message.data['voice_xml'])
+                self.assertEqual(message.data['voice_xml'], message.data['raw_content'])
+            visible = {key: value for key, value in message.data.items()
+                       if key not in ('voice_xml', 'raw_content')}
+            self.assertNotIn('private-fixture', repr(visible))
         self.backend.send_text.assert_not_called()
         self.assertEqual(self.app.plugins.records['media_probe'].errors, 0)
         monitored = [row for row in self.monitor.tail(0)['rows']

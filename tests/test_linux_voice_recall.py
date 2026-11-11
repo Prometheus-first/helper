@@ -117,6 +117,21 @@ class LinuxVoiceRecallTests(unittest.TestCase):
         self.assertTrue(all(row.data['media_cache_only'] for row in voice_rows))
         self.assertEqual([row.data['voice_status'] for row in voice_rows], ['pending', 'ready'] * 3)
 
+    def test_voice_xml_reaches_normal_plugins_once_after_success_or_cache_failure(self):
+        original_dispatch = self.app.plugins.dispatch
+        self.app.plugins.dispatch = Mock(wraps=original_dispatch)
+        for identifier, body in (('91', SILK), ('92', b'#!AMR\\n' + b'x' * 30)):
+            self.lease.receive(self.event(identifier=identifier, body=body))
+            self.wait(lambda: any(row.data.get('native_message_id') == identifier and
+                row.data.get('voice_status') in ('ready', 'failed') for row in self.rows))
+            self.lease.receive(self.event(identifier=identifier, body=body))
+        deliveries = [call.args[0] for call in self.app.plugins.dispatch.call_args_list
+                      if not call.kwargs.get('only') and call.args[0].type == 34]
+        self.assertEqual(len(deliveries), 2)
+        self.assertEqual({row.data['voice_status'] for row in deliveries}, {'ready', 'failed'})
+        self.assertTrue(all(row.data['voice_xml'] == XML and row.data['raw_content'] == XML
+                            for row in deliveries))
+
     def test_recall_before_original_waits_for_ready_and_never_sends_twice(self):
         self.lease.receive(self.revoke())
         self.drain()

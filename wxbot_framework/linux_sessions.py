@@ -176,26 +176,32 @@ class SessionLease:
             self._emitter(message)
 
     def _prepare_media_delivery(self, message):
-        """只有完整 ready 缓存交给普通插件，最近 1000 条媒体每条只交付一次。"""
+        """完整媒体或有效语音 XML 交给插件，最近 1000 条媒体每条只交付一次。"""
         media = {3: 'image', 49: 'file', 34: 'voice'}.get(message.type)
         if media is None or not message.data.get('media_cache_only'):
             return message
-        data = dict(message.data, monitor_only=True, dispatch_to_plugins=False)
+        data = dict(message.data, monitor_only=True, dispatch_to_plugins=False, voice_xml_only=False)
         from .recall import message_id
         key = self._media_key(message)
         receiver = self._voice_receiver if message.type == 34 else self._media_receiver
+        voice_metadata_only = bool(message.type == 34 and data.get('voice_xml') and
+                                   data.get('voice_status') in ('failed', 'unavailable'))
         if (message.is_self or data.get('bot_generated') or not message_id(data.get('native_message_id')) or
                 data.get('self_wxid') != self.account or
                 (self.allowed and message.chat_id not in self.allowed) or
                 media + '.receive' not in self.capabilities or receiver is None or
-                not callable(getattr(receiver, 'owns_ready', None)) or not receiver.owns_ready(message)):
+                not callable(getattr(receiver, 'owns_ready', None)) or
+                (not voice_metadata_only and not receiver.owns_ready(message))):
             return replace(message, data=data)
         with self._delivery_lock:
             if not self.closed and key not in self._delivered_media:
                 self._delivered_media[key] = None
                 while len(self._delivered_media) > 1000:
                     self._delivered_media.popitem(last=False)
-                data.update(monitor_only=False, dispatch_to_plugins=True)
+                if voice_metadata_only:
+                    data['voice_xml_only'] = True
+                else:
+                    data.update(monitor_only=False, dispatch_to_plugins=True)
         return replace(message, data=data)
 
     def _media_ready(self, message):

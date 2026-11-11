@@ -123,6 +123,8 @@ Linux 视频发送需要 `video.send` 能力，使用 Linux 本机 MP4 文件，
 
 视频发送目前支持微信 4.2.0.12 的本地 MP4 文件。可在插件的 `requires` 中声明 `video.send`；框架会读取容器时长，并将副本放入微信暂存目录。文件传输助手和群聊已验证，好友私聊尚未单独实测。
 
+语音插件可订阅类型 `34` 并声明 `voice.receive` 和 `voice.xml.receive`，通过 `message.data["voice_xml"]` 读取完整语音 XML（含微信本次提供的 `aeskey`、`voiceurl` 等属性）。`raw_content` 保留相同内容，音频缓存失败时仍可读取有效 XML。见[语音 XML](../messages/voice.md#读取收到的语音-xml)。
+
 ## 处理图片
 
 合并转发需要单独声明 `forwarded.receive` 并接收类型 `49`，通过 `message.data["forwarded_records"]` 访问文字和图片结果，见[合并转发解析](../messages/forwarded.md)。普通图片消息仍使用下述类型 `3`。
