@@ -1,7 +1,9 @@
 {
   "api": "v1",
   "default_enabled": false,
-  "description": "阻止已验证的微信 4.2.0.12 更新程序，保护结果可恢复",
+  "description": "启动前封锁已验证微信的更新器和下载缓存路径，清除升级包，支持恢复",
   "requires": [],
-  "message_types": [1]
+  "message_types": [
+    1
+  ]
 }

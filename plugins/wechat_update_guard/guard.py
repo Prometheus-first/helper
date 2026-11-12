@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
 import shutil
 import stat
+import time
 import uuid
 
 import pefile
@@ -17,6 +19,9 @@ UPDATER = 'WeixinUpdate.exe'
 BACKUP = 'WeixinUpdate.exe.helper-disabled'
 STAGED_ENTRIES = {'update.data', 'download-4.2.0.13', 'patch-4.2.0.13'}
 STAGED_NAME = re.compile(r'staged-(?:[0-9a-f]{32}|4\.2\.0\.13-[0-9]{8}-[0-9]{6})\Z')
+UPDATE_VERSION = re.compile(r'4\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z')
+BLOCKER_FILE = 'HELPER_UPDATE_GUARD'
+BLOCKER_CONTENT = b'helper-wechat-update-guard-v1\n'
 
 
 class GuardError(RuntimeError):
@@ -76,6 +81,100 @@ def _backup_root():
     return root
 
 
+@contextmanager
+def _guard_lock():
+    from wxbot_framework.locking import InstanceLock
+    root = _backup_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / 'guard.lock'
+    if path.exists() and (_reparse(path) or not path.is_file()):
+        raise GuardError('更新保护锁路径无效')
+    lock, deadline = InstanceLock(path), time.monotonic() + 5
+    while True:
+        try:
+            lock.acquire()
+            break
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise GuardError('另一个更新保护任务仍在运行，请稍后重试') from None
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        lock.close()
+
+
+def _cache_root():
+    roaming = os.environ.get('APPDATA')
+    if not roaming or not Path(roaming).is_absolute():
+        raise GuardError('无法定位当前用户的更新缓存')
+    root = Path(roaming) / 'Tencent' / 'xwechat' / 'update'
+    for path in (root, *root.parents):
+        if path.exists() and _reparse(path):
+            raise GuardError('更新缓存路径不能包含链接')
+    return root
+
+
+def _owned_cache_blocker(path):
+    return path.is_file() and not _reparse(path) and path.stat().st_size == len(BLOCKER_CONTENT) and path.read_bytes() == BLOCKER_CONTENT
+
+
+def _owned_updater_blocker(path):
+    if not path.is_dir() or _reparse(path):
+        return False
+    return {entry.name for entry in path.iterdir()} == {BLOCKER_FILE} and _owned_cache_blocker(path / BLOCKER_FILE)
+
+
+def _block_update_paths(folder):
+    updater = folder / VERSION / UPDATER
+    if not _owned_updater_blocker(updater):
+        if updater.exists():
+            raise GuardError('更新器原路径存在未知内容，未覆盖')
+        updater.mkdir()
+        try:
+            with (updater / BLOCKER_FILE).open('xb') as stream:
+                stream.write(BLOCKER_CONTENT)
+        except OSError:
+            if not any(updater.iterdir()):
+                updater.rmdir()
+            raise
+    cache = _cache_root()
+    if _owned_cache_blocker(cache):
+        return
+    if cache.exists():
+        if not cache.is_dir():
+            raise GuardError('更新缓存原路径存在未知文件，未覆盖')
+        # 只移除搬空后的两层目录；未知项目或并发重建会使 rmdir 失败。
+        for name in ('download', 'patch'):
+            directory = cache / name
+            if directory.exists():
+                if _reparse(directory) or not directory.is_dir():
+                    raise GuardError('更新下载目录存在未知内容，未清理')
+                directory.rmdir()
+        cache.rmdir()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with cache.open('xb') as stream:
+        stream.write(BLOCKER_CONTENT)
+    cache.chmod(stat.S_IREAD)
+
+
+def _release_update_blockers(folder):
+    updater = folder / VERSION / UPDATER
+    cache = _cache_root()
+    if updater.is_dir() and not _owned_updater_blocker(updater):
+        raise GuardError('更新器目录含未知内容，未移除')
+    if cache.is_file() and not _owned_cache_blocker(cache):
+        raise GuardError('更新缓存路径含未知文件，未移除')
+    if _owned_updater_blocker(updater):
+        if _digest(folder / VERSION / BACKUP) != UPDATER_SHA256:
+            raise GuardError('更新器恢复备份不匹配，保护占位保留')
+        (updater / BLOCKER_FILE).unlink()
+        updater.rmdir()
+    if _owned_cache_blocker(cache):
+        cache.chmod(stat.S_IREAD | stat.S_IWRITE)
+        cache.unlink()
+
+
 def _check_backup_tree(path, root):
     if _backup_root() != root:
         raise GuardError('更新缓存备份目录已变化，未清理')
@@ -93,7 +192,9 @@ def _check_backup_tree(path, root):
             raise GuardError('更新缓存备份包含未知文件类型，未清理')
 
 
-def _prune_staged_updates():
+def _prune_staged_updates(keep=1):
+    if type(keep) is not int or keep < 0:
+        raise GuardError('备份保留数量无效')
     root = _backup_root()
     if not root.exists():
         return 0
@@ -106,13 +207,14 @@ def _prune_staged_updates():
         if not path.is_dir():
             continue
         entries = {entry.name for entry in path.iterdir()}
-        if not entries or not entries <= STAGED_ENTRIES:
+        if not entries or not all(name in STAGED_ENTRIES or
+                (name.startswith(('download-', 'patch-')) and UPDATE_VERSION.fullmatch(name.split('-', 1)[1])) for name in entries):
             continue  # 非插件目录或未知文件保留，不能按名称猜测后删除。
         _check_backup_tree(path, root)
         backups.append((path.stat().st_mtime_ns, path.name, path))
     backups.sort(reverse=True)
     removed = 0
-    for _, _, path in backups[1:]:
+    for _, _, path in backups[keep:]:
         # 真正删除前再次验证完整目标；最新备份、进行中的搬移均不在列表中。
         try:
             _check_backup_tree(path, root)
@@ -129,7 +231,14 @@ def _update_directory(folder, restore=False):
         raise GuardError('微信版本目录不能是链接')
     source = directory / (BACKUP if restore else UPDATER)
     destination = directory / (UPDATER if restore else BACKUP)
+    if not restore and _owned_updater_blocker(source):
+        if _digest(destination) == UPDATER_SHA256:
+            return False
+        raise GuardError('更新器恢复备份与已验证版本不一致')
     if source.exists() and destination.exists():
+        if not restore and _digest(source) == UPDATER_SHA256 and _digest(destination) == UPDATER_SHA256:
+            source.unlink()  # 微信重建了同一更新器；已核验的恢复备份不再重复保存。
+            return True
         raise GuardError('更新器和备份同时存在，请手动检查，不覆盖任何文件')
     if not source.exists():
         if destination.exists() and _digest(destination) == UPDATER_SHA256:
@@ -142,23 +251,38 @@ def _update_directory(folder, restore=False):
 
 
 def _backup_staged_updates():
-    roaming = os.environ.get('APPDATA')
-    local = os.environ.get('LOCALAPPDATA')
-    if not roaming or not local:
-        raise GuardError('无法定位当前用户的更新缓存')
-    root = Path(roaming) / 'Tencent' / 'xwechat' / 'update'
+    root = _cache_root()
     if not root.exists():
         return 0
+    if _owned_cache_blocker(root):
+        return 0
+    if not root.is_dir():
+        raise GuardError('更新缓存路径存在未知文件')
     if _reparse(root):
         raise GuardError('更新缓存目录不能是链接')
-    entries = [('update.data', 'update.data'), ('download/4.2.0.13', 'download-4.2.0.13'),
-               ('patch/4.2.0.13', 'patch-4.2.0.13')]
+    entries = [('update.data', 'update.data')]
+    for category in ('download', 'patch'):
+        directory = root / category
+        if directory.exists():
+            if _reparse(directory) or not directory.is_dir():
+                raise GuardError('更新下载目录无效或为链接')
+            entries.extend((f'{category}/{path.name}', f'{category}-{path.name}')
+                           for path in directory.iterdir() if UPDATE_VERSION.fullmatch(path.name))
     present = []
     for relative, name in entries:
         source = root / relative
         if source.exists():
             if _reparse(source) or any(_reparse(parent) for parent in source.parents if parent != root and root in parent.parents):
                 raise GuardError('更新缓存路径包含链接，未转移')
+            pending = [source]
+            while pending:
+                item = pending.pop()
+                if _reparse(item):
+                    raise GuardError('更新缓存内部包含链接，未转移')
+                if item.is_dir():
+                    pending.extend(item.iterdir())
+                elif not item.is_file():
+                    raise GuardError('更新缓存内部包含未知文件类型')
             present.append((source, name))
     if not present:
         return 0
@@ -173,12 +297,17 @@ def _backup_staged_updates():
     return len(present)
 
 
-def protect(root):
+def protect(root, *, block_paths=True):
     try:
         folder = _installation(root)
-        changed = _update_directory(folder)
-        count = _backup_staged_updates()
-        removed = _prune_staged_updates()
+        with _guard_lock():
+            changed = _update_directory(folder)
+            count = _backup_staged_updates()
+            if block_paths:
+                _block_update_paths(folder)
+            removed = _prune_staged_updates(keep=0 if block_paths else 1)
+        if block_paths:
+            return f'更新器和下载缓存原路径已封锁；已清除 {count} 项更新缓存及 {removed} 份缓存备份；恢复用更新器保留'
         return (f'更新器{"已停用" if changed else "已处于停用状态"}；已备份 {count} 项更新缓存'
                 f'；已清理 {removed} 份旧缓存备份，仅保留最新一份')
     except GuardError:
@@ -199,7 +328,9 @@ def cleanup_backups():
 def restore(root):
     try:
         folder = _installation(root)
-        changed = _update_directory(folder, restore=True)
+        with _guard_lock():
+            _release_update_blockers(folder)
+            changed = _update_directory(folder, restore=True)
         return '更新器已恢复' if changed else '更新器原本已启用'
     except GuardError:
         raise

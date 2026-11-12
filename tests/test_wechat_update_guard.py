@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import tempfile
@@ -41,15 +42,15 @@ class WechatUpdateGuardTests(unittest.TestCase):
             (directory / 'fixture.bin').write_bytes(b'data')
         untouched = self.cache / 'download' / 'unrelated'
         untouched.mkdir()
-        self.assertIn('备份 3 项', guard.protect(Path('.')))
+        self.assertIn('备份 3 项', guard.protect(Path('.'), block_paths=False))
         self.assertFalse(self.updater.exists())
         self.assertTrue((self.version / guard.BACKUP).exists())
         self.assertTrue(untouched.exists())
-        backups = list((self.local / 'helper-wechat-update-backup').iterdir())
+        backups = list((self.local / 'helper-wechat-update-backup').glob('staged-*'))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / 'update.data').read_text(encoding='utf-8'), 'test')
         self.assertEqual((backups[0] / 'patch-4.2.0.13' / 'fixture.bin').read_bytes(), b'data')
-        self.assertIn('已处于停用状态', guard.protect(Path('.')))
+        self.assertIn('已处于停用状态', guard.protect(Path('.'), block_paths=False))
         self.assertEqual(guard.restore(Path('.')), '更新器已恢复')
         self.assertTrue(self.updater.is_file())
         self.assertFalse((self.cache / 'update.data').exists())
@@ -57,7 +58,7 @@ class WechatUpdateGuardTests(unittest.TestCase):
     def test_unknown_updater_is_never_modified(self):
         self.updater.write_bytes(b'unknown updater')
         with self.assertRaises(guard.GuardError):
-            guard.protect(Path('.'))
+            guard.protect(Path('.'), block_paths=False)
         self.assertEqual(self.updater.read_bytes(), b'unknown updater')
         self.assertFalse((self.version / guard.BACKUP).exists())
 
@@ -65,7 +66,7 @@ class WechatUpdateGuardTests(unittest.TestCase):
         backup = self.version / guard.BACKUP
         backup.write_bytes(b'previous backup')
         with self.assertRaises(guard.GuardError):
-            guard.protect(Path('.'))
+            guard.protect(Path('.'), block_paths=False)
         self.assertEqual(backup.read_bytes(), b'previous backup')
         self.assertTrue(self.updater.exists())
 
@@ -85,7 +86,7 @@ class WechatUpdateGuardTests(unittest.TestCase):
                     patch('native.moments_transport._core_profile', return_value=SimpleNamespace(version=guard.VERSION)), \
                     patch.object(guard, '_version', return_value=(4, 2, 0, 13)):
                 with self.assertRaises(guard.GuardError):
-                    guard.protect(Path('.'))
+                    guard.protect(Path('.'), block_paths=False)
             self.assertTrue(self.updater.exists())
             self.assertFalse((self.version / guard.BACKUP).exists())
         finally:
@@ -100,12 +101,12 @@ class WechatUpdateGuardTests(unittest.TestCase):
 
     def test_repeated_protect_retains_only_latest_cache_and_restore_still_works(self):
         (self.cache / 'update.data').write_text('first', encoding='utf-8')
-        guard.protect(Path('.'))
-        old = next((self.local / 'helper-wechat-update-backup').iterdir())
+        guard.protect(Path('.'), block_paths=False)
+        old = next((self.local / 'helper-wechat-update-backup').glob('staged-*'))
         os.utime(old, ns=(1, 1))
         (self.cache / 'update.data').write_text('second', encoding='utf-8')
-        self.assertIn('已清理 1 份', guard.protect(Path('.')))
-        backups = list((self.local / 'helper-wechat-update-backup').iterdir())
+        self.assertIn('已清理 1 份', guard.protect(Path('.'), block_paths=False))
+        backups = list((self.local / 'helper-wechat-update-backup').glob('staged-*'))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / 'update.data').read_text('utf-8'), 'second')
         self.assertFalse(old.exists())
@@ -115,7 +116,7 @@ class WechatUpdateGuardTests(unittest.TestCase):
     def test_protect_cleans_legacy_backups_even_without_new_downloads(self):
         old = self.staged('staged-4.2.0.13-20261110-094553')
         latest = self.staged('staged-' + 'b' * 32, b'latest', 2)
-        self.assertIn('已清理 1 份', guard.protect(Path('.')))
+        self.assertIn('已清理 1 份', guard.protect(Path('.'), block_paths=False))
         self.assertFalse(old.exists())
         self.assertEqual((latest / 'update.data').read_bytes(), b'latest')
         self.assertTrue((self.version / guard.BACKUP).is_file())
@@ -165,7 +166,7 @@ class WechatUpdateGuardTests(unittest.TestCase):
             return rename(path, target)
         with patch.object(Path, 'rename', fail_move):
             with self.assertRaises(guard.GuardError):
-                guard.protect(Path('.'))
+                guard.protect(Path('.'), block_paths=False)
         self.assertTrue(old.is_dir())
         self.assertTrue((self.cache / 'update.data').is_file())
         self.assertTrue(any(old.parent.glob('pending-*')))
@@ -180,6 +181,99 @@ class WechatUpdateGuardTests(unittest.TestCase):
         with patch.dict(os.environ, {'LOCALAPPDATA': 'relative-directory'}):
             with self.assertRaises(guard.GuardError):
                 guard.cleanup_backups()
+
+    def test_default_protection_removes_all_packages_and_blocks_recreation(self):
+        self.staged('staged-' + 'a' * 32)
+        (self.cache / 'update.data').write_bytes(b'update metadata')
+        for category in ('download', 'patch'):
+            for version in ('4.2.0.13', '4.2.0.14'):
+                directory = self.cache / category / version
+                directory.mkdir(parents=True)
+                (directory / 'WeixinUpdate.exe').write_bytes(b'new updater')
+        self.assertIn('原路径已封锁', guard.protect(Path('.')))
+        self.assertTrue(self.updater.is_dir())
+        self.assertEqual(self.cache.read_bytes(), guard.BLOCKER_CONTENT)
+        self.assertEqual((self.version / guard.BACKUP).read_bytes(), b'fixture-updater')
+        self.assertEqual(list((self.local / 'helper-wechat-update-backup').glob('staged-*')), [])
+        with self.assertRaises(FileExistsError):
+            self.cache.mkdir()
+        with self.assertRaises(OSError):
+            self.updater.write_bytes(b'recreated updater')
+        self.assertIn('已清除 0 项', guard.protect(Path('.')))
+        self.assertEqual(guard.restore(Path('.')), '更新器已恢复')
+        self.assertEqual(self.updater.read_bytes(), b'fixture-updater')
+        self.assertFalse(self.cache.exists())
+
+    def test_recreated_verified_updater_reuses_restore_backup(self):
+        (self.version / guard.BACKUP).write_bytes(b'fixture-updater')
+        guard.protect(Path('.'))
+        self.assertTrue(self.updater.is_dir())
+        self.assertEqual((self.version / guard.BACKUP).read_bytes(), b'fixture-updater')
+
+    def test_unknown_cache_content_is_not_deleted(self):
+        unknown = self.cache / 'notes.txt'
+        unknown.write_text('unrelated', encoding='utf-8')
+        with self.assertRaises(guard.GuardError):
+            guard.protect(Path('.'))
+        self.assertEqual(unknown.read_text('utf-8'), 'unrelated')
+
+    def test_restore_refuses_unknown_updater_placeholder(self):
+        guard.protect(Path('.'))
+        unknown = self.updater / 'notes.txt'
+        unknown.write_text('keep', encoding='utf-8')
+        with self.assertRaises(guard.GuardError):
+            guard.restore(Path('.'))
+        self.assertEqual(unknown.read_text('utf-8'), 'keep')
+        self.assertTrue(self.cache.is_file())
+
+    def test_restore_preserves_blockers_when_backup_hash_is_wrong(self):
+        guard.protect(Path('.'))
+        (self.version / guard.BACKUP).write_bytes(b'unknown backup')
+        with self.assertRaises(guard.GuardError):
+            guard.restore(Path('.'))
+        self.assertTrue(guard._owned_updater_blocker(self.updater))
+        self.assertTrue(guard._owned_cache_blocker(self.cache))
+
+    def test_multiple_accounts_share_a_serialized_protection_operation(self):
+        (self.cache / 'update.data').write_bytes(b'new update')
+        with ThreadPoolExecutor(3) as executor:
+            results = list(executor.map(lambda _: guard.protect(Path('.')), range(3)))
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all('原路径已封锁' in result for result in results))
+        self.assertTrue(guard._owned_cache_blocker(self.cache))
+        self.assertTrue(guard._owned_updater_blocker(self.updater))
+
+    def test_startup_preflight_is_opt_in_and_runs_without_a_bot_connection(self):
+        from wxbot_framework.update_guard import check_update_protection
+        root = Path(self.temp.name) / 'project'
+        self.assertIsNone(check_update_protection(root, {'plugins': {}}))
+        self.assertTrue(self.updater.is_file())
+        result = check_update_protection(root, {'plugins': {'wechat_update_guard': {'enabled': True}}})
+        self.assertIn('原路径已封锁', result)
+        self.assertTrue(guard._owned_cache_blocker(self.cache))
+
+    def test_wechat_launch_does_not_run_when_protection_fails(self):
+        from wxbot_framework.wechat_login import _launch
+        from wxbot_framework.panel_common import PanelError
+        with patch('wxbot_framework.update_guard.check_update_protection', side_effect=guard.GuardError('fixture refusal')), \
+                patch('wxbot_framework.wechat_login.subprocess.Popen') as launch:
+            with self.assertRaises(PanelError):
+                _launch(Path(self.temp.name))
+        launch.assert_not_called()
+
+    def test_wechat_launch_checks_protection_before_creating_the_process(self):
+        import json
+        from wxbot_framework.wechat_login import _launch
+        root = Path(self.temp.name) / 'project'
+        root.mkdir()
+        (root / 'bot_config.json').write_text(json.dumps({'plugins': {'wechat_update_guard': {'enabled': True}}}), encoding='utf-8')
+        def launch(*args, **kwargs):
+            self.assertTrue(guard._owned_cache_blocker(self.cache))
+            self.assertTrue(guard._owned_updater_blocker(self.updater))
+            return SimpleNamespace(pid=123)
+        with patch('wxbot_framework.wechat_login._install_path', return_value=self.install / 'Weixin.exe'), \
+                patch('wxbot_framework.wechat_login.subprocess.Popen', side_effect=launch):
+            self.assertEqual(_launch(root).pid, 123)
 
 
 if __name__ == '__main__':

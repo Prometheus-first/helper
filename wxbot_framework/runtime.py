@@ -74,6 +74,8 @@ class BotApplication:
                     return
             self._emit(message)
         try:
+            from .update_guard import check_update_protection
+            check_update_protection(self.root, self.config)
             candidate = self.backend_factory()
             self.backend = candidate
             raw = getattr(candidate, "raw", None)

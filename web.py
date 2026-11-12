@@ -35,6 +35,8 @@ def main():
         initialize_configs(ROOT)
         configure_logging(ConfigStore(ROOT / 'bot_config.json').load(), directory=ROOT / 'logs/panel')
         with InstanceLock(ROOT / '.runtime/web.lock'):
+            from wxbot_framework.update_guard import check_update_protection
+            check_update_protection(ROOT)
             from wxbot_framework.robot_hub import RobotHub
             controller = RobotHub(ROOT)
             server = PanelServer(controller, args.port)

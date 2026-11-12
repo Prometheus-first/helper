@@ -82,6 +82,8 @@ def main():
             return 0
         configure_logging(config)
         with InstanceLock(ROOT / ".runtime/bot.lock"):
+            from wxbot_framework.update_guard import check_update_protection
+            check_update_protection(ROOT, config)
             ensure_account_binding(ROOT, store, timeout=args.run_seconds)
             app = BotApplication(ROOT, store)
             with ShutdownHandlers(app):

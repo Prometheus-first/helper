@@ -204,6 +204,12 @@ def _install_path(root):
 
 
 def _launch(root):
+    from .update_guard import check_update_protection
+    from plugins.wechat_update_guard.guard import GuardError
+    try:
+        check_update_protection(root)
+    except GuardError as error:
+        raise PanelError(f'微信更新保护未完成，未启动微信：{error}', 409) from None
     exe = _install_path(root)
     try:
         return subprocess.Popen([str(exe)], cwd=str(exe.parent))

@@ -2,11 +2,15 @@
 
 ## 如何保护微信 4.2.0.12 不自动更新？
 
-可选插件 `wechat_update_guard` 默认关闭，仅适用于核验通过的 Windows 微信 4.2.0.12 构建。在启动微信前，在项目目录执行 `python tools/wechat_update_guard.py --protect`；工具会重命名已核验的更新程序，并备份已发现的 4.2.0.13 更新缓存。运行前请确认愿意暂停微信自动更新。
+在插件管理中启用 `wechat_update_guard`；工具仅适用于核验通过的 Windows 微信 4.2.0.12。管理台、控制台、网页登录微信和机器人连接前会执行已启用的保护。也可在启动微信前运行 `python tools/wechat_update_guard.py --protect`。
 
-插件在机器人启动后才运行，不能保证赶在微信启动时触发的更新之前；也不能保证拦住所有更新途径。不同构建、安装布局或权限不匹配时会停止并报告。恢复更新程序可执行 `python tools/wechat_update_guard.py --restore`；关闭插件不会自动恢复更新器，缓存备份也不会自动放回。停用更新会影响后续安全更新。
+新版除了保留原更新器的恢复备份，还会清空已识别的升级包，用带标记的占位封住更新器及下载缓存的原路径，阻止正常重建。不同 4.x 数字版本的缓存也会处理，不局限于 4.2.0.13；聊天数据和已安装的微信核心文件保留。
 
-每次检查保护时会清理旧缓存备份，只保留最新一份。已有备份较多时，也可单独运行 `python tools/wechat_update_guard.py --cleanup-backups`，无需启动微信或机器人。安装目录中的 `WeixinUpdate.exe.helper-disabled` 用于恢复更新器，不属于此项清理范围。
+一次启用后，占位在关闭机器人、重启电脑后仍会保留，不需要机器人一直运行。保护覆盖当前安装及当前 Windows 用户的微信账号，不代表永久禁止全电脑所有微信版本更新。
+
+解除占位并恢复更新器使用 `python tools/wechat_update_guard.py --restore`；关闭插件不会自动恢复。旧备份单独整理命令 `python tools/wechat_update_guard.py --cleanup-backups` 仍只保留最新一份，而 `--protect` 会清除全部已识别的升级缓存备份。
+
+重新安装或修复微信、更换安装目录或新增更新路径可能使措施失效，不能保证永久拦截所有更新；停用更新会影响后续安全更新。
 
 ## 必须安装 Visual Studio 吗
 
