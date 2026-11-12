@@ -32,6 +32,13 @@ try {
             ..\text_bridge.cpp /Fe:..\build_text\text_bridge.dll /Fo:text_bridge.obj `
             /link /MACHINE:X64 bcrypt.lib minhook.lib
         if ($LASTEXITCODE -ne 0) { throw '文本桥接 DLL 编译失败。' }
+        # Run the production notice-layout policy with assertions enabled.
+        & cl.exe /nologo /std:c++17 /EHsc /W4 /utf-8 /MD /O2 `
+            ..\..\tests\native_local_recall_policy.cpp /Fe:local_recall_policy_test.exe `
+            /Fo:local_recall_policy_test.obj
+        if ($LASTEXITCODE -ne 0) { throw '本机防撤回边界测试编译失败。' }
+        & '.\local_recall_policy_test.exe'
+        if ($LASTEXITCODE -ne 0) { throw '本机防撤回边界测试失败。' }
     }
     if ($Target -in @('all', 'filehelper')) {
         New-Item -ItemType Directory -Path '..\build' -Force | Out-Null

@@ -46,6 +46,9 @@ static bool quote_manager_hook_created = false;
 #endif
 #ifdef WXBOT_LOCAL_RECALL
 static bool local_recall_hook_created = false;
+static bool local_recall_delete_hook_created = false;
+static bool local_recall_insert_hook_created = false;
+static bool local_recall_replace_hook_created = false;
 static volatile LONG local_recall_enabled = 0;
 #endif
 static bool image_download_factory_hook_created = false;
@@ -691,6 +694,24 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_DisableHook(local_recall_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
+    auto local_recall_delete_target = local_recall_delete_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x18121d0)) : nullptr;
+    if (local_recall_delete_hook_created) {
+        status = MH_DisableHook(local_recall_delete_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+    auto local_recall_insert_target = local_recall_insert_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x18536a0)) : nullptr;
+    if (local_recall_insert_hook_created) {
+        status = MH_DisableHook(local_recall_insert_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+    auto local_recall_replace_target = local_recall_replace_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x1853740)) : nullptr;
+    if (local_recall_replace_hook_created) {
+        status = MH_DisableHook(local_recall_replace_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
 #endif
     void* image_factory_target = reinterpret_cast<void*>(core_address(core_base, 0x5240720));
     if (image_download_factory_hook_created) {
@@ -711,7 +732,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
     hooks_present = hooks_present || quote_manager_hook_created;
 #endif
 #ifdef WXBOT_LOCAL_RECALL
-    hooks_present = hooks_present || local_recall_hook_created;
+    hooks_present = hooks_present || local_recall_hook_created ||
+        local_recall_delete_hook_created || local_recall_insert_hook_created || local_recall_replace_hook_created;
 #endif
     if (!hooks_present) return 0;
     if (hook_created) {
@@ -753,6 +775,18 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_RemoveHook(local_recall_target);
         if (status != MH_OK) return 600 + status;
     }
+    if (local_recall_delete_hook_created) {
+        status = MH_RemoveHook(local_recall_delete_target);
+        if (status != MH_OK) return 600 + status;
+    }
+    if (local_recall_insert_hook_created) {
+        status = MH_RemoveHook(local_recall_insert_target);
+        if (status != MH_OK) return 600 + status;
+    }
+    if (local_recall_replace_hook_created) {
+        status = MH_RemoveHook(local_recall_replace_target);
+        if (status != MH_OK) return 600 + status;
+    }
 #endif
     status = MH_Uninitialize();
     if (status == MH_OK) {
@@ -760,6 +794,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         image_download_factory_hook_created = false;
 #ifdef WXBOT_LOCAL_RECALL
         local_recall_hook_created = false;
+        local_recall_delete_hook_created = false;
+        local_recall_insert_hook_created = false;
+        local_recall_replace_hook_created = false;
 #endif
 #ifdef WXBOT_QUOTE_SEND
         quote_manager_hook_created = false;

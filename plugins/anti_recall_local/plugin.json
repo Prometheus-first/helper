@@ -1,7 +1,7 @@
 {
   "api": "v1",
   "default_enabled": false,
-  "description": "在当前电脑微信保留撤回原消息，仅自己可见，可与四类撤回补发分别开关",
+  "description": "在当前电脑微信保留原消息并显示灰色撤回提示，仅自己可见，与四类撤回补发分别开关",
   "message_types": [
     10002
   ],

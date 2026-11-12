@@ -44,6 +44,8 @@ python tools/run_tests.py --pattern test_web_panel.py --verbose
 
 测试使用临时文件、模拟后端和本机测试 HTTP 服务，不启动真实机器人、不注入微信，也不发送真实消息。它们不能替代新微信版本的实机验证。
 
+在 MSVC x64 开发者环境中运行 `native/build_bridges.ps1 -Target text` 时，还会编译并执行本机防撤回的 C++ 边界测试，检查提示编号分离、原消息与排序字段保留，以及无效输入不被修改。
+
 前端语法与文档构建：
 
 ```powershell

@@ -89,6 +89,11 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x5721175: return 0x5721175;
             case 0x5721535: return 0x5721535;
             case 0x1852d70: return 0x1852d70; // Local revoke update only, 4.2.0.12
+            case 0x18121d0: return 0x18121d0; // Local deletion during revoke
+            case 0x18536a0: return 0x18536a0; // Local insert before revoke notice is saved
+            case 0x1853740: return 0x1853740; // Alternate revoke-notice storage path
+            case 0x1cd330: return 0x1cd330; // RawMessage copy constructor
+            case 0x17f8020: return 0x17f8020; // Local added-message vector signal
             case 0x91aa8b8: return 0x91aa8b8; // Parsed revoke message type
             case 0x2425b51: return 0x2425b51; // Local user's successful revoke callback
             case 0x3866510: return 0x3959710;
