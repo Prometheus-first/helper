@@ -6,6 +6,8 @@
 
 插件在机器人启动后才运行，不能保证赶在微信启动时触发的更新之前；也不能保证拦住所有更新途径。不同构建、安装布局或权限不匹配时会停止并报告。恢复更新程序可执行 `python tools/wechat_update_guard.py --restore`；关闭插件不会自动恢复更新器，缓存备份也不会自动放回。停用更新会影响后续安全更新。
 
+每次检查保护时会清理旧缓存备份，只保留最新一份。已有备份较多时，也可单独运行 `python tools/wechat_update_guard.py --cleanup-backups`，无需启动微信或机器人。安装目录中的 `WeixinUpdate.exe.helper-disabled` 用于恢复更新器，不属于此项清理范围。
+
 ## 必须安装 Visual Studio 吗
 
 日常运行不需要。项目提供已编译的桥接 DLL，只需匹配的 Windows 微信、64 位 Python、Python 依赖和 Microsoft Visual C++ x64 运行库。修改原生源码并重新编译时才需要 MSVC 工具链。

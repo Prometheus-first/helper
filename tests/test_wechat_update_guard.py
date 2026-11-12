@@ -91,6 +91,96 @@ class WechatUpdateGuardTests(unittest.TestCase):
         finally:
             self.install_patch.start()
 
+    def staged(self, name, content=b'cached-update', stamp=1):
+        directory = self.local / 'helper-wechat-update-backup' / name
+        directory.mkdir(parents=True)
+        (directory / 'update.data').write_bytes(content)
+        os.utime(directory, ns=(stamp, stamp))
+        return directory
+
+    def test_repeated_protect_retains_only_latest_cache_and_restore_still_works(self):
+        (self.cache / 'update.data').write_text('first', encoding='utf-8')
+        guard.protect(Path('.'))
+        old = next((self.local / 'helper-wechat-update-backup').iterdir())
+        os.utime(old, ns=(1, 1))
+        (self.cache / 'update.data').write_text('second', encoding='utf-8')
+        self.assertIn('已清理 1 份', guard.protect(Path('.')))
+        backups = list((self.local / 'helper-wechat-update-backup').iterdir())
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / 'update.data').read_text('utf-8'), 'second')
+        self.assertFalse(old.exists())
+        self.assertTrue((self.version / guard.BACKUP).is_file())
+        self.assertEqual(guard.restore(Path('.')), '更新器已恢复')
+
+    def test_protect_cleans_legacy_backups_even_without_new_downloads(self):
+        old = self.staged('staged-4.2.0.13-20261110-094553')
+        latest = self.staged('staged-' + 'b' * 32, b'latest', 2)
+        self.assertIn('已清理 1 份', guard.protect(Path('.')))
+        self.assertFalse(old.exists())
+        self.assertEqual((latest / 'update.data').read_bytes(), b'latest')
+        self.assertTrue((self.version / guard.BACKUP).is_file())
+
+    def test_cleanup_preserves_unknown_files_other_versions_and_pending_moves(self):
+        old = self.staged('staged-' + 'a' * 32)
+        latest = self.staged('staged-' + 'b' * 32, stamp=2)
+        unknown = self.staged('staged-' + 'c' * 32, stamp=3)
+        (unknown / 'personal.txt').write_text('keep', encoding='utf-8')
+        other = self.staged('staged-4.2.0.14-20261110-094553', stamp=4)
+        pending = self.staged('pending-' + 'd' * 32, stamp=5)
+        self.assertIn('已清理 1 份', guard.cleanup_backups())
+        self.assertFalse(old.exists())
+        for path in (latest, unknown, other, pending):
+            self.assertTrue(path.is_dir())
+        # 单独清理缓存不会修改安装目录的更新器。
+        self.assertTrue(self.updater.is_file())
+
+    def test_nested_reparse_is_rejected_before_any_backup_is_deleted(self):
+        old = self.staged('staged-' + 'a' * 32)
+        newer = self.staged('staged-' + 'b' * 32, stamp=2)
+        cache = old / 'download-4.2.0.13'
+        cache.mkdir()
+        os.utime(old, ns=(1, 1))
+        original = guard._reparse
+        with patch.object(guard, '_reparse', side_effect=lambda p: p == cache or original(p)):
+            with self.assertRaises(guard.GuardError):
+                guard.cleanup_backups()
+        self.assertTrue(old.is_dir())
+        self.assertTrue(newer.is_dir())
+
+    def test_backup_root_reparse_is_rejected_without_touching_files(self):
+        old = self.staged('staged-' + 'a' * 32)
+        original = guard._reparse
+        with patch.object(guard, '_reparse', side_effect=lambda p: p == old.parent or original(p)):
+            with self.assertRaises(guard.GuardError):
+                guard.cleanup_backups()
+        self.assertTrue(old.is_dir())
+
+    def test_failed_move_is_left_pending_and_existing_backups_are_not_pruned(self):
+        old = self.staged('staged-' + 'a' * 32)
+        (self.cache / 'update.data').write_text('new', encoding='utf-8')
+        rename = Path.rename
+        def fail_move(path, target):
+            if path == self.cache / 'update.data':
+                raise PermissionError('fixture locked cache')
+            return rename(path, target)
+        with patch.object(Path, 'rename', fail_move):
+            with self.assertRaises(guard.GuardError):
+                guard.protect(Path('.'))
+        self.assertTrue(old.is_dir())
+        self.assertTrue((self.cache / 'update.data').is_file())
+        self.assertTrue(any(old.parent.glob('pending-*')))
+
+    def test_cleanup_with_no_backups_is_idempotent(self):
+        self.assertIn('已清理 0 份', guard.cleanup_backups())
+        only = self.staged('staged-' + 'a' * 32)
+        self.assertIn('已清理 0 份', guard.cleanup_backups())
+        self.assertTrue(only.is_dir())
+
+    def test_cleanup_refuses_relative_local_app_data(self):
+        with patch.dict(os.environ, {'LOCALAPPDATA': 'relative-directory'}):
+            with self.assertRaises(guard.GuardError):
+                guard.cleanup_backups()
+
 
 if __name__ == '__main__':
     unittest.main()

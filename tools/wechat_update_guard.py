@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from plugins.wechat_update_guard.guard import GuardError, protect, restore
+from plugins.wechat_update_guard.guard import GuardError, cleanup_backups, protect, restore
 
 
 def main():
@@ -15,9 +15,10 @@ def main():
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument('--protect', action='store_true', help='停用已验证的更新器并备份 4.2.0.13 缓存')
     choice.add_argument('--restore', action='store_true', help='恢复更新器，不自动放回更新缓存')
+    choice.add_argument('--cleanup-backups', action='store_true', help='清理旧更新缓存备份，保留最新一份和更新器恢复备份')
     args = parser.parse_args()
     try:
-        print((protect if args.protect else restore)(ROOT))
+        print(cleanup_backups() if args.cleanup_backups else (protect if args.protect else restore)(ROOT))
         return 0
     except GuardError as error:
         print(f'操作未完成：{error}', file=sys.stderr)

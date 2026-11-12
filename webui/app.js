@@ -33,6 +33,7 @@ let selectedPlugin = '', toastTimer, pollBusy = false, serviceAvailable = true;
 let pluginEditor = null, pluginEditorGeneration = 0, pluginFunctionSignature = '';
 let robot = sessionStorage.getItem('helper-robot') || 'default', robotRows = [], lastRobotFetch = 0;
 let pluginSignature = '', accountSignature = '', robotOptionsSignature = '';
+let recallPluginsExpanded = false;
 let messages=[], messageCursor=0, messageStream='', messagePaused=false, messageError='', messageGeneration=0, messageSignature='';
 let loggedAccounts = [], selectedAccounts = new Set(), accountsError = '', accountsLoading = true, accountsFetching = false, lastAccountFetch = 0, batchStarting = false;
 let loginAttempt = '', loginGeneration = 0, loginTimer = null, loginStarting = false;
@@ -131,20 +132,30 @@ function renderPlugins() {
   if (!state) { pluginSignature=''; $('#plugin-list').innerHTML='<tr><td colspan="4" class="table-empty">正在读取插件列表…</td></tr>'; return; }
   const query = $('#plugin-search').value.trim().toLowerCase();
   const cards = state.plugins.filter(p => (p.name + (pluginNames[p.name]?.[0]||'') + p.description).toLowerCase().includes(query));
-  const signature = JSON.stringify([robot,query,busy,serviceAvailable,cards]);
+  const recall = cards.filter(p => p.name === 'anti_recall' || p.name.startsWith('anti_recall_'));
+  const signature = JSON.stringify([robot,query,busy,serviceAvailable,recallPluginsExpanded,cards]);
   if (signature === pluginSignature) return;
   pluginSignature = signature;
   const focused = document.activeElement?.closest('[data-plugin]');
   const focusKey = focused && [focused.dataset.plugin,focused.dataset.action];
-  $('#plugin-list').innerHTML = cards.map(p => {
+  const groupFocused = document.activeElement?.matches('[data-plugin-group]');
+  const row = p => {
     const name = pluginNames[p.name]?.[0] || p.name;
-    return `<tr class="plugin-row"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reset" ${busy||!serviceAvailable?'disabled':''}>重置</button></div></td></tr>`;
+    const grouped = recall.includes(p);
+    return `<tr id="plugin-${escape(p.name)}" class="plugin-row${grouped?' recall-plugin':''}${grouped&&!recallPluginsExpanded?' hidden':''}"><td><span class="plugin-name">${escape(name)}</span><span class="plugin-code">${escape(p.name)}</span></td><td class="plugin-description">${escape(p.description)}${p.error?`<p class="plugin-error">${escape(p.error)}</p>`:''}</td><td><span class="inline-state ${!serviceAvailable?'waiting':p.active?'active':p.error?'failed':''}">${!serviceAvailable?'待更新':p.active?'运行中':p.enabled?'已启用':'已停用'}</span></td><td><div class="plugin-actions"><button class="secondary small" data-plugin="${escape(p.name)}" data-action="${p.enabled?'disable':'enable'}" ${busy||!serviceAvailable?'disabled':''}>${p.enabled?'停用':'启用'}</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reload" ${!p.active||busy||!serviceAvailable?'disabled':''}>重载</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="configure" ${busy||!serviceAvailable?'disabled':''}>配置</button><button class="text-button" data-plugin="${escape(p.name)}" data-action="reset" ${busy||!serviceAvailable?'disabled':''}>重置</button></div></td></tr>`;
+  };
+  let groupInserted = false;
+  $('#plugin-list').innerHTML = cards.map(p => {
+    if (!recall.includes(p)) return row(p);
+    if (groupInserted) return '';
+    groupInserted = true;
+    return `<tr class="plugin-group-row"><td colspan="4"><button type="button" class="plugin-group-toggle" data-plugin-group="recall" aria-expanded="${recallPluginsExpanded}" aria-controls="${recall.map(p=>'plugin-'+escape(p.name)).join(' ')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><span>防撤回</span><span class="count">${recall.length} 项</span></button></td></tr>` + recall.map(row).join('');
   }).join('') || '<tr><td colspan="4" class="table-empty">没有匹配的插件。</td></tr>';
   if (focusKey) {
     const candidates = [...$('#plugin-list').querySelectorAll('[data-plugin]')];
     const target = candidates.find(n=>n.dataset.plugin===focusKey[0]&&n.dataset.action===focusKey[1]&&!n.disabled) || candidates.find(n=>n.dataset.plugin===focusKey[0]&&!n.disabled);
     target?.focus({preventScroll:true});
-  }
+  } else if (groupFocused) $('[data-plugin-group]')?.focus({preventScroll:true});
 }
 function renderAccounts() {
   const rows=loggedAccounts.map(row=>{
@@ -323,8 +334,14 @@ $('#account-list').onclick=event=>{
     action(async()=>{await api('stop',{},account.robot_id);await loadRobots();await loadAccounts();toast('正在停止，等待连接清理完成');});
   } else action(()=>launchAccounts([account]));
 };
-$('#plugin-search').oninput = renderPlugins;
+$('#plugin-search').oninput = () => {
+  if ($('#plugin-search').value.trim()) recallPluginsExpanded = true;
+  renderPlugins();
+};
 $('#plugin-list').onclick = e => {
+  if(e.target.closest('[data-plugin-group]')) {
+    recallPluginsExpanded=!recallPluginsExpanded;renderPlugins();return;
+  }
   const button=e.target.closest('[data-plugin]');if(!button)return;
   if(['configure','reset'].includes(button.dataset.action)) {
     action(()=>openPluginEditor(button.dataset.plugin,button.dataset.action==='reset'));return;
