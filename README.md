@@ -24,6 +24,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 - 群聊管理：群聊备注、进退群通知、成员昵称绑定、聊天总结、人格切换、成语游戏和图库取图。
 - 模型与语音：支持 OpenAI 兼容的 Chat Completions API、可选的图片生成插件、Fish Audio 合成和按群切换音色。
 - 插件管理：防撤回插件默认折叠，展开后可分别操作；支持在网页修改业务函数与配置、保存生效及恢复默认。
+- 小程序：微信 4.2.0.12 原生唤起、组件读取、引擎内点击、文字输入和截图，见[通用开发接口](docs/development/miniprograms.md)。
 
 自用版另有原生红包自动领取功能，不包含在此公开仓库；需要可联系交流群群主。
 
@@ -79,6 +80,7 @@ python main.py
 | 图片、文件、视频、表情和语音 | [图片](docs/messages/images.md) · [文件](docs/messages/files.md) · [视频](docs/messages/videos.md) · [表情](docs/messages/emoticons.md) · [语音](docs/messages/voice.md) |
 | 合并转发与防撤回 | [合并转发](docs/messages/forwarded.md) · [防撤回](docs/messages/recall.md) |
 | 好友申请、群成员与群管理 | [好友申请与群管理](docs/guide/friends-and-groups.md) |
+| 开发小程序业务 | [小程序通用接口](docs/development/miniprograms.md) |
 | 开发和维护 | [插件开发](docs/development/plugins.md) · [代码结构与验证](docs/development/structure.md) |
 
 ## 目录

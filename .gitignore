@@ -35,6 +35,7 @@ native/.build/
 !native/build/selftest_bridge.dll
 !native/build_text/text_bridge.dll
 !native/build_article/article_bridge.dll
+!native/build_miniprogram/miniprogram_bridge.dll
 *.zip
 *.7z
 *.rar

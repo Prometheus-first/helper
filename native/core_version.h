@@ -77,6 +77,7 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x7544b0: return 0x77b3f0;
             case 0x1a26440: return 0x1a69dc0;
             case 0x1a5a850: return 0x1a5a850; // 4.2.0.12 VerifyUser
+            case 0x94f780: return 0x94f780; // 4.2.0.12 native small-program IPC dispatcher
             // 4.2.0.12 only: quote lookup, construction, destruction, and text-builder call sites.
             case 0x1804cc0: return 0x1804cc0;
             case 0xaa1910: return 0xaa1910;

@@ -75,6 +75,7 @@ VERIFIED_RVAS = {
 # Observed VerifyUser and quote paths, applicable only to the exact 4.2.0.12 build.
 VERIFIED_42012_ONLY = {
     0x1a5a850: 0x1a5a850,
+    0x94f780: 0x94f780,  # Native small-program IPC dispatcher, fingerprint locked.
     0x1852d70: 0x1852d70, 0x91aa8b8: 0x91aa8b8, 0x2425b51: 0x2425b51,
     0x18121d0: 0x18121d0, 0x18536a0: 0x18536a0, 0x1853740: 0x1853740,
     0x1cd330: 0x1cd330, 0x17f8020: 0x17f8020,

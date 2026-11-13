@@ -778,6 +778,20 @@ class NativeTextService(NativeFileHelperService):
             return read_loaded_moments(self.pid, self.self_wxid, limit=limit,
                                        cancelled=lambda: self._stop.is_set() or cancelled())
 
+    def miniprogram_commands(self, app_id, session_id, requests, *, check_app=True, cancelled=lambda: False):
+        from native.miniprogram_transport import execute_commands
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError('微信尚未连接')
+            self._check_account(force=True)
+            account = self.self_wxid
+            result = execute_commands(self.pid, account, app_id, session_id, requests,
+                check_app=check_app, cancelled=lambda: self._stop.is_set() or cancelled())
+            self._check_account(force=True)
+            if account != self.self_wxid:
+                raise RuntimeError('微信账号已切换，请先核对小程序页面')
+            return result
+
     def publish_moments(self, payload):
         from moments_transport import publish_moments
         with self._calls:

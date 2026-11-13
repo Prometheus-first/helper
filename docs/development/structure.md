@@ -8,6 +8,7 @@
 | --- | --- |
 | `runtime.py` / `backend.py` | 微信连接、消息分发与后端能力 |
 | `plugins.py` / `sdk.py` | 插件加载、隔离与业务 API |
+| `miniprograms.py` | 账号隔离的小程序客户端、组件描述、引擎点击及输入 |
 | `members.py` / `message_monitor.py` | 群称呼、当天聊天缓存与管理台消息缓冲 |
 | `llm.py` / `personality.py` / `speech.py` | 模型调用、人格与语音回复 |
 | `plugin_business.py` / `plugin_sources.py` | 业务函数编辑、版本校验与默认恢复 |
@@ -23,6 +24,8 @@
 表内 Python 模块位于 `wxbot_framework/`。`webui/` 只负责页面交互，通过 HTTP API 调用管理台；`plugins/` 负责具体群聊业务。
 
 原生层见 [原生适配说明](https://github.com/Prometheus-first/helper/blob/main/native/README.md)。`native/run_selftest.py` 名称虽然包含 selftest，但承担生产运行所需的进程、远程调用和桥接清理，不能按测试残留删除。消息桥接、公众号桥接及其对应源码、版本指纹和 MinHook 也需要保留。
+
+小程序使用独立的 `miniprogram_bridge.cpp`、`miniprogram_transport.py` 和 `build_miniprogram/miniprogram_bridge.dll`。调用结束后关闭观察 Hook 并卸载；停止与退出守护同时检查残留桥接。构建只需使用 `-Target miniprograms`，不需要替换消息桥接。
 
 ## 本地数据与开发资料
 

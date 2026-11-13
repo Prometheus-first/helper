@@ -2,6 +2,8 @@
 
 插件通过 Python 接口处理消息，不需要接触 DLL 或原生地址。
 
+小程序业务可使用 `ctx.miniprogram(app_id)`，参见[小程序通用接口](miniprograms.md)。
+
 ## 新建插件
 
 网页“插件管理 → 配置”只展示可修改的业务函数和 JSON 选项，保存后自动重载；支持按账号隔离与恢复默认，见[网页修改与重置插件](../guide/web-panel.md#网页修改与重置插件)。项目的 `plugins/` 目录作为默认代码，网页修改保存在当前机器人的 `.runtime/plugin_code/` 副本中。插件资源相对 `__file__` 所在目录读取；需要项目根目录时可使用 `ctx.project_root`。

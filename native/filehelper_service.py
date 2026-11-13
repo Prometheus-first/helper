@@ -20,7 +20,8 @@ def loaded_project_bridges(pid):
     """先核对所有桥接路径，不能卸载其他项目副本的模块。"""
     loaded = modules(pid)
     result = []
-    for dll in (DLL, TEXT_DLL):
+    mini_dll = Path(__file__).resolve().parent / 'build_miniprogram/miniprogram_bridge.dll'
+    for dll in (DLL, TEXT_DLL, mini_dll):
         entry = loaded.get(dll.name.lower())
         if entry:
             if Path(entry[1]).resolve() != dll.resolve():
@@ -32,7 +33,11 @@ def loaded_project_bridges(pid):
 def cleanup_loaded_bridges(pid):
     results = []
     for dll in loaded_project_bridges(pid):
-        result = run("--remove", pid=pid, bridge_path=dll, preserve_report=False)
+        if dll.name == 'miniprogram_bridge.dll':
+            from native.miniprogram_transport import cleanup_miniprogram_bridge
+            result = cleanup_miniprogram_bridge(pid, bridge_path=dll)
+        else:
+            result = run("--remove", pid=pid, bridge_path=dll, preserve_report=False)
         if result["code"] or not result.get("dll_unloaded"):
             raise RuntimeError(f"桥接尚有原生任务未结束，暂不卸载：code={result['code']}")
         results.append(result)

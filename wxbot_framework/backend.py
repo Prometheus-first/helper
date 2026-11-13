@@ -40,6 +40,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "group.file.receive", "group.file.send", "voice.receive", "voice.xml.receive", "voice.send",
     "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "video.receive", "friend.video.receive", "group.video.receive", "friend.request.send",
     "text.quote.send", "message.recall.local",
+    "miniprogram.control",
 })
 
 
@@ -180,6 +181,10 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def read_moments(self, limit=20, *, cancelled=lambda: False):
         return self.raw.read_moments(limit, cancelled=cancelled)
+
+    def miniprogram_commands(self, app_id, session_id, requests, *, check_app=True, cancelled=lambda: False):
+        return self.raw.miniprogram_commands(app_id, session_id, requests,
+                                             check_app=check_app, cancelled=cancelled)
 
     def send_emoticon(self, chat_id, path):
         return self.raw.send_emoticon(chat_id, path)

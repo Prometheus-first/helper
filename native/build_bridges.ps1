@@ -1,4 +1,4 @@
-﻿param([ValidateSet('all', 'text', 'filehelper', 'articles')][string]$Target = 'all')
+﻿param([ValidateSet('all', 'text', 'filehelper', 'articles', 'miniprograms')][string]$Target = 'all')
 
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -53,6 +53,13 @@ try {
             ..\article_bridge.cpp /Fe:..\build_article\article_bridge.dll /Fo:article_bridge.obj `
             /link /MACHINE:X64 bcrypt.lib minhook.lib
         if ($LASTEXITCODE -ne 0) { throw '公众号读取桥接 DLL 编译失败。' }
+    }
+    if ($Target -in @('all', 'miniprograms')) {
+        New-Item -ItemType Directory -Path '..\build_miniprogram' -Force | Out-Null
+        & cl.exe /nologo /std:c++17 /EHsc /W4 /utf-8 /LD /MD /O2 /DNDEBUG `
+            ..\miniprogram_bridge.cpp /Fe:..\build_miniprogram\miniprogram_bridge.dll /Fo:miniprogram_bridge.obj `
+            /link /MACHINE:X64 bcrypt.lib minhook.lib
+        if ($LASTEXITCODE -ne 0) { throw '小程序原生 IPC 桥接 DLL 编译失败。' }
     }
 } finally {
     Pop-Location

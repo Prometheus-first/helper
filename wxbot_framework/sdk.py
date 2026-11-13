@@ -449,6 +449,32 @@ class ServiceFacade:
                 raise RuntimeError('微信连接已结束')
             return result
 
+    def miniprogram(self, app_id, *, expected_session=None):
+        """获取跟随当前机器人连接的小程序通用接口；断线后旧对象失效。"""
+        from .miniprograms import MiniProgramClient
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if (backend is None or not self._available or
+                    expected_session is not None and backend.session_id != expected_session):
+                raise RuntimeError('请先连接微信')
+            session = backend.session_id
+            method = getattr(backend, 'miniprogram_commands', None)
+            if not callable(method):
+                raise CapabilityError('当前后端尚未开放小程序操作')
+        def command(app, native_session, requests, *, check_app):
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != session):
+                    raise RuntimeError('小程序所属的微信连接已结束')
+            # 不持连接锁等待 IPC；close 可立即发出取消信号。
+            result = method(app, native_session, requests, check_app=check_app, cancelled=cancel.is_set)
+            with self._lock:
+                if (self._backend is not backend or not self._available or cancel.is_set() or
+                        backend.session_id != session):
+                    raise RuntimeError('微信连接已结束，请先核对小程序操作结果')
+            return result
+        return MiniProgramClient(app_id, command)
+
     def accept_friend(self, request_id, *, expected_session=None):
         if not isinstance(request_id, str) or not request_id or len(request_id) > 80:
             raise ValueError("请提供 friend-requests 中显示的申请 ID")
@@ -640,6 +666,11 @@ class PluginContext:
         if "contact.read" not in self.capabilities:
             raise CapabilityError("当前插件缺少联系人读取能力")
         return self._service.contacts(expected_session=expected_session)
+
+    def miniprogram(self, app_id, *, expected_session=None):
+        if 'miniprogram.control' not in self.capabilities:
+            raise CapabilityError('当前插件缺少小程序操作能力')
+        return self._service.miniprogram(app_id, expected_session=expected_session)
 
     def group_member_name(self, room, wxid, *, expected_session=None):
         return self._service.group_member_name(room, wxid, expected_session=expected_session)
