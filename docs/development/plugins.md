@@ -176,7 +176,7 @@ voice.send / friend.voice.send / group.voice.send
 
 ## 联系人
 
-`ctx.contacts(expected_session=message.session_id)` 返回含 `account`、`session_id`、`scanned_at`、`contacts` 和标签目录 `tags` 的快照。每位好友含 `wxid`、`nickname`、`remark`、`alias`、`description`、`sex`、`country`、`province`、`city`、`signature`、`tag_ids`、`tags` 和 `tags_status`。`tags_status == "ready"` 且 `tags` 为空才代表已确认没有标签；`unavailable` 表示字段或标签名称尚未就绪。未读取到的个人资料为空，性别为 `unknown`。`complete` 当前为 `false`，仅表示已加载缓存，不保证完整好友名单。连接不可用或读期间切换账号会失败，不返回旧账号结果。当前仅验证微信 4.1.15.56，使用说明见[扫描联系人](../guide/web-panel.md#扫描联系人)。
+`ctx.contacts(expected_session=message.session_id)` 返回含 `account`、`session_id`、`scanned_at`、`contacts` 和标签目录 `tags` 的快照。每位好友含 `wxid`、`nickname`、`remark`、`alias`、`description`、`sex`、`country`、`province`、`city`、`signature`、`tag_ids`、`tags` 和 `tags_status`。`tags_status == "ready"` 且 `tags` 为空才代表已确认没有标签；`unavailable` 表示字段或标签名称尚未就绪。未读取到的个人资料为空，性别为 `unknown`。`complete` 当前为 `false`，仅表示已加载缓存，不保证完整好友名单。连接不可用或读期间切换账号会失败，不返回旧账号结果。当前已验证微信 4.1.15.56 / 4.2.0.12，两个构建分别校验扩展资料和标签缓存身份。使用说明见[扫描联系人](../guide/web-panel.md#扫描联系人)。
 
 ## 群成员与昵称
 

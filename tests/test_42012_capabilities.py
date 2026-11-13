@@ -11,7 +11,7 @@ class Capability42012Tests(unittest.TestCase):
         for feature in ('text.send', 'text.receive', 'image.send', 'image.receive',
                         'file.send', 'file.receive', 'voice.send', 'voice.receive',
                         'message.recall', 'group.members.read', 'group.text.mention', 'group.events',
-                        'friend.request.receive', 'friend.request.accept'):
+                        'friend.request.receive', 'friend.request.accept', 'contact.read'):
             self.assertIn(feature, backend.capabilities)
-        for feature in ('emoticon.send', 'contact.read'):
+        for feature in ('emoticon.send',):
             self.assertNotIn(feature, backend.capabilities)

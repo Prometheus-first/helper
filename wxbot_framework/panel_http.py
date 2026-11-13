@@ -172,6 +172,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.group_members(parse_qs(parsed.query).get('room', [''])[0]))
             if path == '/api/contacts':
                 return self.send(200, controller.contacts())
+            if path == '/api/directory-cache':
+                return self.send(200, controller.cached_directory())
             if path == '/api/articles-connection':
                 return self.send(200, controller.articles_connection())
             if path == '/api/articles-publishers':

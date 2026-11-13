@@ -31,6 +31,7 @@ from .scheduled_tasks import ScheduledTasks
 from .scheduled_actions import discover_actions
 from .articles import Articles, ArticlesError, normalize_article_url
 from .official_account_sync import OfficialAccountSync
+from .directory_cache import DirectoryCache
 
 __all__ = ['LogBuffer', 'PanelController', 'PanelError', 'PanelHandler', 'PanelServer',
            'atomic_json', 'read_json', 'redact']
@@ -102,6 +103,7 @@ class PanelController:
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         self.logs = LogBuffer()
         self.messages = MessageBuffer(sanitize=redact_full)
+        self.directory_cache = DirectoryCache(self.workspace)
         self.send_jobs = {}
         self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
         self.articles = Articles(self.workspace)
@@ -458,7 +460,31 @@ class PanelController:
                     self.store.set_enabled(name, action == 'enable')
 
     def chats(self):
-        return self._call(lambda app: app.backend.chats() if app.backend and hasattr(app.backend, 'chats') else [])
+        def query(app):
+            rows = app.backend.chats() if app.backend and hasattr(app.backend, 'chats') else []
+            account = app.config.get('wechat_account')
+            if account_is_unbound(account):
+                return rows
+            with self.lock:
+                if self.app is not app or self.store.load().get('wechat_account') != account:
+                    raise PanelError('群聊所属的微信账号已变化', 409)
+                groups = self.directory_cache.remember_groups(account,
+                    [row for row in rows if row.get('chat_id', '').endswith('@chatroom')])
+            current = {row['chat_id']: row for row in groups}
+            for row in rows:
+                previous = current.get(row['chat_id'], {})
+                current[row['chat_id']] = dict(row, name=previous['name']) if not row.get('name') and previous.get('name') else row
+            return list(current.values())
+        return self._call(query)
+
+    def cached_directory(self):
+        """仅从所选账号的磁盘目录读取；不要求微信连接，不触发扫描。"""
+        with self.lock:
+            account = self.store.load().get('wechat_account')
+            if account_is_unbound(account):
+                return {'account': '', 'contacts': None, 'groups': []}
+            return {'account': account, 'contacts': self.directory_cache.contacts(account),
+                    'groups': self.directory_cache.groups(account)}
 
     def plugin_editor(self, name):
         name = validate_name(name)
@@ -556,6 +582,12 @@ class PanelController:
                 raise PanelError('联系人所属的微信连接已结束，请重新扫描', 409)
             if snapshot is None:
                 raise PanelError('微信联系人缓存尚未就绪，请稍后重试', 409)
+            with self.lock:
+                account = app.config.get('wechat_account')
+                if (self.app is not app or self.store.load().get('wechat_account') != account or
+                        snapshot.get('account') != account):
+                    raise PanelError('联系人所属的微信账号已变化', 409)
+                self.directory_cache.save_contacts(account, snapshot)
             return dict(snapshot, session_id=session)
         return self._call(query)
 

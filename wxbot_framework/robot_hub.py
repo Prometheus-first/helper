@@ -119,6 +119,7 @@ class RobotProxy:
     def accounts(self): return self.request('accounts')['accounts']
     def chats(self): return self.request('chats')['chats']
     def contacts(self): return self.request('contacts')
+    def cached_directory(self): return self.request('directory-cache')
     def articles_connection(self): return self.request('articles-connection')
     def article_publishers(self, account=None):
         from urllib.parse import urlencode

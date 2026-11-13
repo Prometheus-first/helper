@@ -41,6 +41,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "video.receive", "friend.video.receive", "group.video.receive", "friend.request.send",
     "text.quote.send", "message.recall.local",
     "miniprogram.control",
+    "contact.read",
 })
 
 

@@ -13,7 +13,7 @@ from test_web_panel import PanelFixture
 from wxbot_framework.backend import NativeTextBackend, TEXT_CAPABILITIES
 from wxbot_framework.robot_hub import RobotProxy
 from wxbot_framework.sdk import CapabilityError, PluginContext, ServiceFacade
-from wxbot_framework.web_panel import PanelError, PanelServer
+from wxbot_framework.web_panel import PanelController, PanelError, PanelServer
 
 ACCOUNT = "wxid_contact_robot"
 SESSION = "synthetic-contact-session"
@@ -162,6 +162,7 @@ class ContactNativeTests(unittest.TestCase):
 
 class ContactPanelTests(PanelFixture):
     def connect(self):
+        self.accounts = [{'pid': 1234, 'wxid': ACCOUNT, 'name': '合成账号'}]
         self.controller.start()
         self.backend = ContactBackend()
         self.service = ServiceFacade(text_delay={"enabled": False})
@@ -205,6 +206,71 @@ class ContactPanelTests(PanelFixture):
         with self.assertRaisesRegex(PanelError, "连接已结束"):
             self.controller.contacts()
 
+    def test_saved_directory_is_available_after_stop_and_controller_restart_without_scanning(self):
+        self.connect()
+        self.controller.contacts()
+        calls = self.backend.calls
+        self.wait_stopped()
+        fresh = PanelController(self.root, app_factory=lambda *_: self.fail('不应启动机器人'))
+        self.addCleanup(fresh.close)
+        cache = fresh.cached_directory()
+        self.assertEqual(cache['account'], ACCOUNT)
+        self.assertEqual(cache['contacts']['contacts'][0]['remark'], '合成备注')
+        self.assertTrue(cache['contacts']['cached'])
+        self.assertEqual(cache['contacts']['session_id'], '')
+        self.assertEqual(self.backend.calls, calls)
+        self.assertEqual(fresh.snapshot()['state'], 'stopped')
+
+    def test_failed_scan_and_foreign_snapshot_preserve_previous_directory(self):
+        self.connect()
+        self.controller.contacts()
+        path = self.controller.directory_cache.path(ACCOUNT, 'contacts')
+        original = path.read_bytes()
+        for data in (None, dict(directory(), account='wxid_foreign_account')):
+            self.backend.snapshot = data
+            with self.assertRaises(PanelError) as error:
+                self.controller.contacts()
+            self.assertEqual(error.exception.status, 409)
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_group_discovery_survives_restart_and_partial_results_preserve_names(self):
+        self.connect()
+        self.backend.chats = lambda: [{'chat_id': '101@chatroom', 'is_group': True, 'name': '合成群'},
+                                      {'chat_id': 'wxid_synthetic_peer', 'name': '测试私聊'}]
+        self.controller.chats()
+        self.backend.chats = lambda: [{'chat_id': '101@chatroom', 'is_group': True, 'name': ''},
+                                      {'chat_id': '102@chatroom', 'is_group': True}]
+        rows = self.controller.chats()
+        self.assertEqual(rows[0]['name'], '合成群')
+        self.wait_stopped()
+        fresh = PanelController(self.root)
+        self.addCleanup(fresh.close)
+        self.assertEqual([row['chat_id'] for row in fresh.cached_directory()['groups']], ['101@chatroom', '102@chatroom'])
+        fresh.scan = lambda _: [{'pid': 5678, 'wxid': 'wxid_another_robot', 'name': '另一个合成账号'}]
+        fresh.bind_account({'wxid': 'wxid_another_robot', 'pid': 5678})
+        self.assertEqual(fresh.cached_directory(), {'account': 'wxid_another_robot', 'contacts': None, 'groups': []})
+
+    def test_directory_cache_http_is_authenticated_and_readable_while_stopped(self):
+        self.connect()
+        self.controller.contacts()
+        self.wait_stopped()
+        server = PanelServer(self.controller, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        for token, expected in ((False, 403), (True, 200)):
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+            connection.request('GET', '/api/directory-cache', headers={'X-Helper-Token': server.token} if token else {})
+            response = connection.getresponse()
+            data = json.loads(response.read())
+            self.assertEqual(response.status, expected)
+            if token:
+                self.assertEqual(response.getheader('Cache-Control'), 'no-store')
+                self.assertEqual(data['contacts']['account'], ACCOUNT)
+                self.assertTrue(data['contacts']['cached'])
+            connection.close()
+
     def test_http_is_read_only_authenticated_and_does_not_cache_contacts(self):
         self.connect()
         server = PanelServer(self.controller, 0)
@@ -240,6 +306,8 @@ class ContactPanelTests(PanelFixture):
         hub = SimpleNamespace(request=lambda *args: calls.append(args) or directory())
         self.assertEqual(RobotProxy(hub, "profile-second").contacts(), directory())
         self.assertEqual(calls, [("profile-second", "contacts", None)])
+        RobotProxy(hub, 'profile-second').cached_directory()
+        self.assertEqual(calls[-1], ('profile-second', 'directory-cache', None))
 
 
 if __name__ == "__main__":

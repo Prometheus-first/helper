@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import struct
 import json
+from types import MappingProxyType
 
 from .account import APP_GLOBAL_RVA, _pointer, read_current_account, validate_account
 from .native_profiles import select_memory_profile
@@ -15,6 +16,16 @@ MAX_DIRECTORY_CONTACTS = 10000
 MAX_DIRECTORY_BYTES = 3 * 1024 * 1024
 LABEL_CACHE_VTABLE_RVA = 0x901F638  # 4.1.15.56: 726EB0 constructs this account component.
 CONTACT_EXT_VTABLE_RVA = 0x91798C8  # 4.1.15.56: micromsg.ContactExtData, size 0x130.
+
+# Account components and protobuf vtables change independently of the shared
+# contact prefix. Never apply a different build's optional-field identities.
+# 4.2.0.12: ContactExtData ctor F85F70/parser F88410 retain the 0x130 schema;
+# label ctor 739710/reload 16D8F80 retain object+40 and node+20/+40/+48.
+# The account's label tree and all its referenced label IDs were checked live.
+_DIRECTORY_LAYOUTS = MappingProxyType({
+    '4.1.15.56': (LABEL_CACHE_VTABLE_RVA, CONTACT_EXT_VTABLE_RVA),
+    '4.2.0.12': (0x9125D28, 0x9282FD8),
+})
 
 
 class ContactDirectoryError(RuntimeError):
@@ -195,8 +206,8 @@ def _tree_nodes(reader, address, limit):
     return nodes
 
 
-def _directory_labels(reader, context, base):
-    cache = _directory_component(reader, context, base, LABEL_CACHE_VTABLE_RVA)
+def _directory_labels(reader, context, base, *, cache_vtable_rva=LABEL_CACHE_VTABLE_RVA):
+    cache = _directory_component(reader, context, base, cache_vtable_rva)
     if cache is None:
         return None
     labels, visited = [], set()
@@ -212,12 +223,12 @@ def _directory_labels(reader, context, base):
     return [row for _, row in sorted(labels, key=lambda value: (value[0], int(value[1]['id'])))]
 
 
-def _contact_details(reader, record, base, labels):
+def _contact_details(reader, record, base, labels, *, extension_vtable_rva=CONTACT_EXT_VTABLE_RVA):
     details = {'sex': 'unknown', 'country': '', 'province': '', 'city': '', 'signature': '',
                'tag_ids': [], 'tags': [], 'tags_status': 'unavailable'}
     try:
         kind = struct.unpack('<I', reader.read(record + 4, 4))[0]
-        if kind != 1 or reader.ptr(record + 0x1E0) != base + CONTACT_EXT_VTABLE_RVA:
+        if kind != 1 or reader.ptr(record + 0x1E0) != base + extension_vtable_rva:
             return details
         presence = struct.unpack('<I', reader.read(record + 0x304, 4))[0]
     except (OSError, ValueError, struct.error):
@@ -265,13 +276,14 @@ def read_contact_directory(read_memory, core_base, *, expected_account):
     profile = select_memory_profile(read_memory, core_base)
     if profile is None:
         return None
-    if profile.version != '4.1.15.56':
-        raise ContactDirectoryError('当前联系人扫描已核对微信 4.1.15.56，请使用该适配版本')
+    layout = _DIRECTORY_LAYOUTS.get(profile.version)
+    if layout is None:
+        raise ContactDirectoryError('当前联系人扫描支持已核对构建的微信 4.1.15.56 / 4.2.0.12')
     reader = _DirectoryReader(read_memory)
     try:
         context, cache = _directory_cache(reader, core_base, profile.rva)
         try:
-            labels = _directory_labels(reader, context, core_base)
+            labels = _directory_labels(reader, context, core_base, cache_vtable_rva=layout[0])
         except (OSError, ValueError, struct.error):
             labels = None
         contacts = []
@@ -287,7 +299,8 @@ def read_contact_directory(read_memory, core_base, *, expected_account):
                              'alias': reader.string(record + 0x28, 256),
                              'remark': reader.string(record + 0x78, 1024),
                              'description': reader.string(record + 0x1A0, 2048),
-                             **_contact_details(reader, record, core_base, labels)})
+                             **_contact_details(reader, record, core_base, labels,
+                                                extension_vtable_rva=layout[1])})
         contacts.sort(key=lambda row: (row['remark'] or row['nickname'] or row['wxid']).casefold())
         result = {'contacts': contacts, 'tags': labels or [], 'source': 'wechat_cache', 'complete': False}
         if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_DIRECTORY_BYTES:
