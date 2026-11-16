@@ -59,6 +59,8 @@ class PluginSpec:
     requires: frozenset
     message_types: frozenset = frozenset({1})
     default_enabled: bool = True
+    observe_commands: bool = False
+    commands: frozenset[str] | None = None
 
 
 class PluginRecord:
@@ -68,47 +70,74 @@ class PluginRecord:
         self.queue = queue.Queue(maxsize=queue_size)
         self.stop_event = threading.Event()
         self.callback_lock = threading.RLock()
+        self._enqueue_lock = threading.Lock()
         self.active = True
         self.handled = self.errors = self.dropped = 0
         self.last_error = ""
         self.thread = threading.Thread(target=self._run, name=f"Plugin.{spec.name}", daemon=True)
 
-    def enqueue(self, message):
-        if not self.active:
-            return
-        try:
-            self.queue.put_nowait(message)
-        except queue.Full:
-            self.dropped += 1
-            if self.dropped == 1 or self.dropped % 100 == 0:
-                self.context.logger.warning("插件队列已满，累计丢弃 %d 条", self.dropped)
+    def enqueue(self, message, *, next_handler=None):
+        with self._enqueue_lock:
+            if not self.active:
+                return False
+            try:
+                self.queue.put_nowait((message, next_handler))
+                return True
+            except queue.Full:
+                self.dropped += 1
+                if self.dropped == 1 or self.dropped % 100 == 0:
+                    self.context.logger.warning("插件队列已满，累计丢弃 %d 条", self.dropped)
+                return False
+
+    def _handle(self, message, *, command=False):
+        with self.callback_lock:
+            if not self.active:
+                return False
+            if command and message.session_id and not self.context._service.session_is_current(message.session_id):
+                return True
+            try:
+                if self.spec.api == "legacy":
+                    service = LegacyService(self.context._service, message.session_id)
+                    result = self.instance.on_message(message.protocol, copy.deepcopy(dict(message.data)), service)
+                else:
+                    result = self.instance.on_message(message, self.context)
+                self.handled += 1
+                return result is True
+            except BaseException as error:
+                self.errors += 1
+                self.last_error = str(error)
+                self.context.logger.exception("插件处理消息失败；继续处理后续消息")
+                # The callback might have already sent a reply or changed state.
+                return True
 
     def _run(self):
         try:
             while not self.stop_event.is_set():
                 try:
-                    message = self.queue.get(timeout=0.2)
+                    message, next_handler = self.queue.get(timeout=0.2)
                 except queue.Empty:
                     continue
                 try:
-                    with self.callback_lock:
-                        if not self.active:
-                            continue
-                        try:
-                            if self.spec.api == "legacy":
-                                service = LegacyService(self.context._service, message.session_id)
-                                self.instance.on_message(message.protocol, copy.deepcopy(dict(message.data)), service)
-                            else:
-                                self.instance.on_message(message, self.context)
-                            self.handled += 1
-                        except BaseException as error:
-                            self.errors += 1
-                            self.last_error = str(error)
-                            self.context.logger.exception("插件处理消息失败；继续处理后续消息")
+                    handled = self._handle(message, command=next_handler is not None)
+                    if not handled and next_handler is not None:
+                        next_handler()
                 finally:
                     self.queue.task_done()
         finally:
-            self.unload()
+            try:
+                # Deactivation closes the queue to new work before draining it.
+                while True:
+                    try:
+                        _, next_handler = self.queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        if next_handler is not None:
+                            next_handler()
+                    finally:
+                        self.queue.task_done()
+            finally:
+                self.unload()
 
     def unload(self):
         try:
@@ -127,8 +156,9 @@ class PluginRecord:
         if not acquired and not force:
             raise RuntimeError(f"插件 {self.spec.name} 正在处理消息，请稍后重试")
         try:
-            self.active = False
-            self.stop_event.set()
+            with self._enqueue_lock:
+                self.active = False
+                self.stop_event.set()
         finally:
             if acquired:
                 self.callback_lock.release()
@@ -147,6 +177,7 @@ class PluginManager:
         self.capabilities = frozenset(capabilities)
         self.queue_size = queue_size
         self._lock = threading.RLock()
+        self._stopping = threading.Event()
         self.records = {}
         self.load_errors = {}
         self.config = store.load()
@@ -178,6 +209,7 @@ class PluginManager:
                 requires = manifest.get("requires", ["text.receive"])
                 message_types = manifest.get("message_types", [1])
                 default_enabled = manifest.get("default_enabled", True)
+                observe_commands, commands = self.sources.command_options(manifest)
                 if type(default_enabled) is not bool:
                     raise ValueError("plugin.json 的 default_enabled 必须是布尔值")
                 if api not in ("v1", "legacy") or not isinstance(requires, list) or not all(isinstance(x, str) for x in requires):
@@ -186,7 +218,8 @@ class PluginManager:
                         any(type(value) is not int or value <= 0 for value in message_types)):
                     raise ValueError("plugin.json 的 message_types 必须是非空正整数列表")
                 specs[name] = PluginSpec(name, path, api, str(manifest.get("description", "")),
-                                         frozenset(requires), frozenset(message_types), default_enabled)
+                                         frozenset(requires), frozenset(message_types), default_enabled,
+                                         observe_commands, commands)
             except Exception as error:
                 self.load_errors[directory.name] = str(error)
                 logger.error("插件 %s 无法发现：%s", directory.name, error)
@@ -294,13 +327,41 @@ class PluginManager:
                 self.load_errors[target] = str(error)
                 logger.exception("插件 %s 加载失败，其他插件继续运行", target)
 
-    def dispatch(self, message, *, only=None, required=None):
+    def dispatch(self, message, *, only=None, required=None, command_owner=None):
         with self._lock:
             records = tuple(self.records.values())
+        command = None
+        if only is None and message.type == 1 and isinstance(message.text, str):
+            text = message.text.lstrip()
+            if text.startswith('/'):
+                command = text.split(maxsplit=1)[0]
+        handlers = []
         for record in records:
-            if ((only is None or record.spec.name == only) and message.type in record.spec.message_types and
-                    (required is None or (record.spec.api == "v1" and required in record.spec.requires))):
+            spec = record.spec
+            if (only is not None and spec.name != only) or message.type not in spec.message_types:
+                continue
+            if required is not None and (spec.api != "v1" or required not in spec.requires):
+                continue
+            if not command or spec.observe_commands:
                 record.enqueue(message)
+            elif command_owner is not None:
+                if spec.name == command_owner:
+                    handlers.append(record)
+            elif spec.commands is None or command in spec.commands:
+                handlers.append(record)
+
+        if not handlers:
+            return
+        remaining = iter(handlers)
+
+        def next_handler():
+            if self._stopping.is_set():
+                return
+            for record in remaining:
+                if record.enqueue(message, next_handler=next_handler):
+                    return
+
+        next_handler()
 
     def run_scheduled(self, action_id, params, session, allowlist, valid=lambda: True):
         parts = action_id.split('.') if isinstance(action_id, str) else []
@@ -354,6 +415,7 @@ class PluginManager:
             return rows
 
     def shutdown(self):
+        self._stopping.set()
         with self._lock:
             records = tuple(self.records.values())
             self.records.clear()

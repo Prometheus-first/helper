@@ -161,6 +161,91 @@ class FrameworkTests(unittest.TestCase):
         self.assertTrue(self.manager.records["broken"].thread.is_alive())
         self.assertIn(("filehelper", "好的"), self.backend.sent)
 
+    def test_slash_command_stops_at_first_handler_in_registration_order(self):
+        first = '''class Plugin:
+    def on_message(self, message, ctx):
+        if message.text.strip() == '/help':
+            ctx.reply(message, '先注册的回复')
+            return True
+'''
+        second = '''class Plugin:
+    def on_message(self, message, ctx):
+        ctx.reply(message, '后注册的回复')
+        return True
+'''
+        self.create_plugin('z_first', first, manifest={'commands': ['/help']})
+        self.create_plugin('a_second', second, manifest={'commands': ['/help']})
+        self.manager.load_one('z_first')
+        self.manager.load_one('a_second')
+        self.manager.reload('z_first')
+        self.manager.dispatch(self.message('  /help'))
+        first_record = self.manager.records['z_first']
+        wait_for(lambda: first_record.handled == 1 and not first_record.queue.unfinished_tasks)
+        self.assertEqual(self.manager.records['a_second'].queue.unfinished_tasks, 0)
+        self.assertEqual(self.manager.records['a_second'].handled, 0)
+        self.assertEqual(self.backend.sent, [('filehelper', '先注册的回复')])
+        self.manager.disable('z_first')
+        self.manager.enable('z_first')
+        self.manager.dispatch(self.message('/help', 2))
+        wait_for(lambda: self.manager.records['a_second'].handled == 1)
+        self.assertEqual(self.backend.sent[-1], ('filehelper', '后注册的回复'))
+
+    def test_unhandled_command_reaches_next_handler_and_observer_always_sees_it(self):
+        source = '''class Plugin:
+    def on_message(self, message, ctx):
+        if ctx.config.get('accept'):
+            ctx.reply(message, '后续回复')
+            return True
+        return False
+'''
+        self.create_plugin('first', source)
+        self.create_plugin('second', source, manifest={'commands': ['/help']})
+        self.create_plugin('different', source, manifest={'commands': ['/other']})
+        self.create_plugin('observer', 'class Plugin:\n def on_message(self,m,c): return True\n',
+                           manifest={'observe_commands': True})
+        self.config['plugins']['second'] = {'accept': True}
+        self.write_config()
+        self.manager.config = self.store.load()
+        for name in ('observer', 'different', 'first', 'second'):
+            self.manager.load_one(name)
+        self.manager.dispatch(self.message('/help 参数'))
+        wait_for(lambda: self.manager.records['second'].handled == 1 and self.manager.records['observer'].handled == 1)
+        self.assertEqual(self.manager.records['first'].handled, 1)
+        self.assertEqual(self.manager.records['different'].handled, 0)
+        self.assertEqual(self.backend.sent, [('filehelper', '后续回复')])
+
+    def test_command_exception_does_not_trigger_duplicate_reply_but_normal_text_still_fans_out(self):
+        first = '''class Plugin:
+    def on_message(self, message, ctx):
+        if message.text == '/help':
+            ctx.reply(message, '已处理')
+            raise RuntimeError('模拟回复后异常')
+        return True
+'''
+        self.create_plugin('first', first)
+        self.create_plugin('second', "class Plugin:\n def on_message(self,m,c): c.reply(m, '后续回复')\n")
+        self.manager.load_one('first')
+        self.manager.load_one('second')
+        self.manager.dispatch(self.message('/help'))
+        wait_for(lambda: self.manager.records['first'].errors == 1)
+        self.assertEqual(self.manager.records['second'].queue.unfinished_tasks, 0)
+        self.assertEqual(self.backend.sent, [('filehelper', '已处理')])
+        self.manager.dispatch(self.message('普通聊天', 2))
+        wait_for(lambda: self.manager.records['first'].handled == 1 and self.manager.records['second'].handled == 1)
+        self.assertEqual(self.backend.sent[-1], ('filehelper', '后续回复'))
+
+    def test_queued_command_does_not_run_after_session_ends(self):
+        self.create_plugin('command', "class Plugin:\n def on_message(self,m,c): raise AssertionError('过期指令已执行')\n")
+        self.manager.load_one('command')
+        record = self.manager.records['command']
+        with record.callback_lock:
+            self.manager.dispatch(self.message('/help'))
+            self.assertEqual(record.queue.unfinished_tasks, 1)
+            self.service.cancel_pending()
+        wait_for(lambda: record.queue.unfinished_tasks == 0)
+        self.assertEqual(record.errors, 0)
+        self.assertEqual(record.handled, 0)
+
     def test_image_plugins_opt_in_without_changing_existing_text_plugins(self):
         self.create_plugin("image_handler", "class Plugin:\n def __init__(self):\n  self.seen=[]\n"
                            " def on_message(self,m,c):\n  self.seen.append((m.type,m.image_path))\n",

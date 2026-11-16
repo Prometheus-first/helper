@@ -8,8 +8,9 @@ class Plugin:
 
     def on_message(self, message, ctx):
         # 修改指令和回复内容，即可实现你自己的功能。
-        if message.text.strip() == "/hello":
+        if message.type == 1 and message.text.strip() == "/hello":
             ctx.reply(message, "你好，插件正在运行 🌸")
+            return True
 
     def scheduled_greeting(self, params, ctx):
         # 在网页创建定时任务后，按设置的时间执行这个业务函数。

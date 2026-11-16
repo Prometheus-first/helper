@@ -49,9 +49,8 @@ class Plugin:
             return
         text=message.text.strip()
         if text=='/help':
-            if not any(ctx.plugin_is_active(name) for name in ('idiom_chain','picture_idiom')):
-                self._failure(message,ctx,'1. /来张图\n\n2. /help')
-            return
+            self._failure(message,ctx,'1. /来张图\n\n2. /help')
+            return True
         if text not in self.commands:
             return
         if self.session_id!=message.session_id:
@@ -62,7 +61,7 @@ class Plugin:
             return
         previous=self.last_request.get(message.chat_id)
         if previous is not None and received-previous<self.cooldown:
-            return
+            return True
         self.last_request[message.chat_id]=received
         current=lambda:self._current(message,ctx)
         guard=lambda:self._guard(message,ctx)
@@ -79,14 +78,15 @@ class Plugin:
                 if not success:
                     image.retain()
                     ctx.logger.warning('图库图片发送结果未确认，保留单次缓存，不自动重发')
-                    return
+                    return True
         except GalleryCancelled:
-            return
+            return True
         except GalleryError as error:
             ctx.logger.warning('图库取图失败：%s',error)
             self._failure(message,ctx,'取图失败，请稍后再试。')
         except Exception as error:
             ctx.logger.warning('图库图片处理未完成（%s），不自动重发',type(error).__name__)
+        return True
 
     def _guard_check(self, message, ctx):
         if not self._current(message,ctx):

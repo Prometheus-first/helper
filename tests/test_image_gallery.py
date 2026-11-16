@@ -242,7 +242,7 @@ class PluginTests(unittest.TestCase):
         values={'text':text,'chat_id':'123@chatroom','sender_id':'wxid_test_sender','is_group':True,
                 'session_id':'one','received_at':self.now}
         values.update(kwargs)
-        self.plugin.on_message(Message(**values),self.ctx)
+        return self.plugin.on_message(Message(**values),self.ctx)
 
     def test_command_sends_only_image_and_deletes_successful_cache(self):
         self.send()
@@ -293,9 +293,8 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(self.ctx.sent[0][2].is_file())
         self.assertEqual(len(self.ctx.sent),1)
 
-    def test_help_is_merged_or_shown_only_when_no_other_menu_plugin(self):
-        self.send('/help');self.assertEqual(self.ctx.sent,[])
-        self.ctx.active={'image_gallery'};self.send('/help')
+    def test_help_is_claimed_when_framework_dispatches_it_to_gallery(self):
+        self.assertIs(self.send('/help'),True)
         self.assertEqual(self.ctx.sent,[('text','123@chatroom','1. /来张图\n\n2. /help')])
         self.assertEqual(self.fetch_count,0)
 

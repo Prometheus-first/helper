@@ -129,10 +129,10 @@ class Plugin:
             self.games.clear()
             self.session_id = message.session_id
         text = message.text.strip()
-        if text == '/help' and not getattr(ctx, 'plugin_is_active', lambda name: False)('idiom_chain'):
+        if text == '/help':
             gallery = getattr(ctx, 'plugin_is_active', lambda name: False)('image_gallery')
             ctx.reply(message, '1. 看图猜成语\n\n2. /来张图\n\n3. /help' if gallery else '1. 看图猜成语\n\n2. /help')
-            return
+            return True
         if text == '成语接龙' and getattr(ctx, 'plugin_is_active', lambda name: False)('idiom_chain'):
             self.games.pop(message.chat_id, None)
             return
@@ -146,7 +146,7 @@ class Plugin:
                 self._question(message, ctx, game)
             else:
                 ctx.reply_image(message, game.current.image_path or self.renderer.render(game.current))
-            return
+            return True
         if text == '退出猜成语':
             if self.games.pop(message.chat_id, None) is not None:
                 ctx.reply(message, '已退出看图猜成语。')
@@ -189,7 +189,7 @@ class Plugin:
                 candidate = explicit[1].strip(' 。！!？?，,') if len(explicit) == 2 else ''
                 if not FOUR_CHINESE.fullmatch(candidate):
                     ctx.reply(message, '用法：/猜 四字成语', delivery_guard=guard)
-                    return
+                    return True
             else:
                 candidate = text
             if not FOUR_CHINESE.fullmatch(candidate) or message.received_at <= game.ready_at:
@@ -197,12 +197,13 @@ class Plugin:
             if candidate != game.current.answer:
                 if time.monotonic() - game.last_wrong >= self.cooldown:
                     feedback = {'嘴臭': '这都没猜中？再看图。', '卑微': '爷，是小的图没画好，再瞧瞧？',
-                                '夸夸': '思路不错，再观察一下！'}.get(personality.name, '还没猜中，再看看图；也可以发送“提示”。')
+                                '夸夸': '思路不错，再观察一下！', '猫娘': '差一点就猜对啦，再仔细看看嘛喵。'}.get(personality.name, '还没猜中，再看看图；也可以发送“提示”。')
                     if ctx.reply_at(message, feedback, delivery_guard=guard):
                         game.last_wrong = time.monotonic()
-                return
+                return True
             if ctx.reply_at(message, self._feedback(game.current, personality, correct=True), delivery_guard=guard):
                 game.current = None
                 self._question(message, ctx, game)
         except SnapshotExpired:
             ctx.logger.info('看图猜成语回复已取消：人格已切换')
+        return True

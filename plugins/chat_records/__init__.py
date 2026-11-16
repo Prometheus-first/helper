@@ -11,6 +11,7 @@ class Plugin:
             return
         if len(words) != 1:
             ctx.reply(message, "用法：/清空")
-            return
+            return True
         self.members.clear(message.chat_id)
         ctx.reply(message, "已清空本群聊天记录。")
+        return True

@@ -244,7 +244,11 @@ class BotApplication:
             if message.data.get("dispatch_to_plugins", True):
                 if self.plugins.is_active("personality"):
                     message = prepare_switch(message, self.members)
-                self.plugins.dispatch(message)
+                if "personality_switch" in message.data or "personality_error" in message.data:
+                    # The switch was already handled before dispatch to protect the next message.
+                    self.plugins.dispatch(message, command_owner="personality")
+                else:
+                    self.plugins.dispatch(message)
 
     def _publish_group_events(self, events, session_id):
         if not self._connection_ready or self.backend is None or self.backend.session_id != session_id:

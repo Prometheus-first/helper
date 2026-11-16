@@ -57,9 +57,10 @@ class Plugin:
             return
         personality = ctx.personality(message)
         try:
-            self._handle(message, ctx, personality)
+            return self._handle(message, ctx, personality)
         except SnapshotExpired:
             ctx.logger.info("接龙回复已取消：人格已切换")
+            return text == "/help"
 
     def _handle(self, message, ctx, personality):
         text = message.text.strip()
@@ -70,7 +71,7 @@ class Plugin:
             self.session_id = message.session_id
         if text == "/help":
             ctx.reply(message, HELP, delivery_guard=guard)
-            return
+            return True
         game = self.games.get(message.chat_id)
         if text in ('看图猜成语', '/看图猜成语') and getattr(ctx, 'plugin_is_active', lambda name: False)('picture_idiom'):
             self.games.pop(message.chat_id, None)

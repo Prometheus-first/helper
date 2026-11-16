@@ -43,6 +43,7 @@ class Plugin:
         if message.type == 1 and message.text.strip() == "/hello":
             # 回复原消息所属会话，保留连接隔离检查。
             ctx.reply(message, self.greeting)
+            return True
 
     def on_unload(self, ctx):
         # 如创建了线程、定时器或文件连接，在这里释放。
@@ -61,6 +62,12 @@ class Plugin:
 ```
 
 以上是 `plugins` 内的条目，保留其他配置不变。执行 `python main.py --check` 后，在运行中的终端输入 `reload hello`，或重启主程序。
+
+## 指令优先级
+
+以 `/` 开头的文字消息按插件注册顺序处理。初次启动按插件目录名排序，热重载保留已注册的位置，停用后重新启用会排到末尾。插件匹配并接手指令后在 `on_message` 返回 `True`，同一条指令就不会交给后面的处理插件。不匹配、当前会话不支持时返回 `None` 或 `False`。已经接手的指令，即使只回复用法或已经交给后台任务，也返回 `True`。回调异常时停止分发该指令，因为它可能已发送过回复。
+
+可在 `plugin.json` 写 `"commands": ["/help", "/hello"]`，让带斜杠的消息只在首个词匹配时进入该插件的队列。省略该字段时兼容原来的回调过滤逻辑。`"observe_commands": true` 留给防撤回等需要完整消息流的观察插件，观察回调不参与拦截。普通文字和其他消息类型继续按原方式投递。已由框架即时保存的 `/切换人格` 直接交给人格插件确认。
 
 ## 注册定时动作
 

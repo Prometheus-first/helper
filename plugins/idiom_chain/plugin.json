@@ -1,5 +1,6 @@
 {
   "api": "v1",
+  "commands": ["/help", "/看图猜成语"],
   "description": "群内成语接龙：独立艾特、合并抢答、退出及 /help；大模型判定与出题",
   "requires": [
     "group.text.receive",

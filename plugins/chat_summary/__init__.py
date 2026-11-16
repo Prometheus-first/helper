@@ -21,13 +21,13 @@ class Plugin:
         group = words[0] == "/总结群聊"
         if len(words) != (1 if group else 2):
             ctx.reply(message, "用法：/总结群聊" if group else "用法：/总结 昵称")
-            return
+            return True
         try:
             snapshot = (self.members.today_group_snapshot(message.chat_id) if group else
                         self.members.today_snapshot(words[1], message.chat_id))
         except MemberError as error:
             ctx.reply(message, str(error) + ("。" if group else "。请本人先发送 /绑定 昵称。"))
-            return
+            return True
         rows = conversation_rows(snapshot)
         personality = ctx.personality(message)
         guard = lambda: ctx.response_guard(snapshot, personality)
@@ -35,7 +35,7 @@ class Plugin:
             if not rows:
                 name = "本群" if group else snapshot.member.name
                 ctx.reply(message, f"{name}今天还没有可总结的聊天记录。", delivery_guard=guard)
-                return
+                return True
             self.reply_summary(message, ctx, snapshot, rows, personality, group, guard)
             ctx.logger.info("聊天总结完成：room=%s scope=%s member=%s records=%d", message.chat_id,
                             "group" if group else "member", "本群" if group else snapshot.member.name, len(rows))
@@ -47,6 +47,7 @@ class Plugin:
                 ctx.reply(message, "暂时无法生成聊天总结，请稍后重试。", delivery_guard=guard)
             except SnapshotExpired:
                 pass
+        return True
 
     def scheduled_group_summary(self, params, ctx):
         """复用现有群聊总结、人格及记录失效保护。"""

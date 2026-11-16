@@ -1,6 +1,7 @@
 {
   "api": "v1",
   "default_enabled": true,
+  "observe_commands": true,
   "description": "撤回后补发文字、内置表情和已缓存表情包，默认开启",
   "message_types": [
     1,

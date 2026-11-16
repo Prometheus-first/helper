@@ -14,12 +14,13 @@ class Plugin:
             return
         if len(parts) != 2:
             ctx.reply(message, "用法：/绑定 昵称")
-            return
+            return True
         name = parts[1].strip()
         try:
             member = self.members.register(name, message.chat_id, message.sender_id)
         except MemberError as error:
             ctx.reply(message, str(error))
-            return
+            return True
         ctx.logger.info("成员已绑定：room=%s name=%s wxid=%s", member.room, member.name, member.wxid)
         ctx.reply(message, f"已绑定：{member.name}。")
+        return True

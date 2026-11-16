@@ -85,13 +85,13 @@ class Plugin:
         guard = lambda: self._guard(message, ctx)
         if not prompt:
             ctx.reply(message, '用法：/生图 提示词', delivery_guard=guard)
-            return
+            return True
         if len(prompt) > 4000:
             ctx.reply(message, '提示词太长，请控制在 4000 字以内。', delivery_guard=guard)
-            return
+            return True
         if not self.slots.acquire(blocking=False):
             ctx.reply(message, '生图任务较多，请稍后再试。', delivery_guard=guard)
-            return
+            return True
         try:
             if not self._current(message, ctx):
                 self.slots.release()
@@ -100,6 +100,7 @@ class Plugin:
         except BaseException:
             self.slots.release()
             raise
+        return True
 
     def _generate(self, message, prompt, ctx):
         guard = lambda: self._guard(message, ctx)

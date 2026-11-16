@@ -1,5 +1,6 @@
 {
   "api": "v1",
+  "commands": ["/查看音色", "/音色"],
   "default_enabled": false,
   "description": "按群选择 Fish Audio 音色，艾特机器人后用语音回复",
   "message_types": [

@@ -12,3 +12,4 @@ class Plugin:
             text = message.text[len(self.prefix):]
             if text.strip():
                 ctx.reply(message, text)
+                return True

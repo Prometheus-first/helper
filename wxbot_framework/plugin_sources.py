@@ -151,6 +151,21 @@ class PluginSources:
             raise ValueError('plugin.json 的 message_types 应为正整数列表')
         if type(value.get('default_enabled', True)) is not bool:
             raise ValueError('plugin.json 的 default_enabled 应为布尔值')
+        PluginSources.command_options(value)
+
+    @staticmethod
+    def command_options(manifest):
+        observe = manifest.get('observe_commands', False)
+        if type(observe) is not bool:
+            raise ValueError('plugin.json 的 observe_commands 应为布尔值')
+        commands = manifest.get('commands')
+        if commands is None:
+            return observe, None
+        if not isinstance(commands, list) or any(
+                not isinstance(name, str) or len(name) < 2 or not name.startswith('/') or
+                any(char.isspace() for char in name) for name in commands):
+            raise ValueError('plugin.json 的 commands 应为斜杠指令名称列表')
+        return observe, frozenset(commands)
 
     def prepare(self, name, texts):
         self.validate(name, texts)

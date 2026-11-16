@@ -88,3 +88,4 @@ class Plugin:
             ctx.reply(message, str(error))
         except SnapshotExpired:
             ctx.logger.info('音色查询已取消：配置已更新')
+        return True

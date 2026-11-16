@@ -12,6 +12,7 @@ class Plugin:
             return
         if message.data.get("personality_error"):
             ctx.reply(message, message.data["personality_error"])
+            return True
         state = message.data.get("personality_switch")
         if state is None:
             return
@@ -20,3 +21,4 @@ class Plugin:
             ctx.logger.info("人格已切换：room=%s name=%s", state.room, state.name)
         except SnapshotExpired:
             pass
+        return True

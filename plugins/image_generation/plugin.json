@@ -1,5 +1,6 @@
 {
   "api": "v1",
+  "commands": ["/生图"],
   "default_enabled": false,
   "description": "AI 生图：发送 /生图 加提示词生成图片",
   "requires": ["text.receive", "text.send", "image.send"],
