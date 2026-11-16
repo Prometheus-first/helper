@@ -38,13 +38,10 @@ ctx.reply_file(message, r"C:\测试文件\hello.txt")
 
 ```python
 class Plugin:
-    def on_load(self, ctx):
-        self.ctx = ctx
-
-    def on_message(self, message):
+    def on_message(self, message, ctx):
         if message.data.get("file_status") == "ready":
             # 路径指向已下载的本地附件；由插件决定如何使用。
-            self.ctx.logger.info("文件已保存：%s", message.file_path)
+            ctx.logger.info("文件已保存：%s", message.file_path)
 ```
 
 事件中 `message.text` 为空，附件 XML 不进入文本聊天记录或模型上下文。文件状态为 `ready` 或 `failed`，对应字段为 `file_name`、`file_size`、`file_path`、`file_error`。文件名仅用于展示和安全保存，消息不能指定目录；相同名称的文件不会覆盖已有文件。

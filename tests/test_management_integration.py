@@ -106,7 +106,8 @@ class AutoAcceptPluginTests(unittest.TestCase):
             shutil.copyfile(ROOT / "plugins/friend_auto_accept" / name, directory / name)
         path = root / "bot_config.json"
         path.write_text(json.dumps({"backend": "native_text", "plugins": {}}), encoding="utf-8")
-        manager = PluginManager(root / "plugins", ConfigStore(path), Mock(),
+        service = Mock()
+        manager = PluginManager(root / "plugins", ConfigStore(path), service,
                                 {"friend.request.receive", "friend.request.accept"})
         self.addCleanup(manager.shutdown)
         manager.reload()
@@ -116,6 +117,12 @@ class AutoAcceptPluginTests(unittest.TestCase):
         manager.enable("friend_auto_accept")
         self.assertTrue(manager.is_active("friend_auto_accept"))
         self.assertTrue(ConfigStore(path).load()["plugins"]["friend_auto_accept"]["enabled"])
+        request = PendingFriendRequests(ACCOUNT, "original").add(parse_friend_request(XML))
+        manager.dispatch(Message("", "fmessage", type=37, session_id="original",
+                                 data={"friend_request": request}))
+        manager.records["friend_auto_accept"].queue.join()
+        service.accept_friend.assert_called_once_with(request["request_id"], expected_session="original")
+        self.assertEqual(manager.status()[0]["errors"], 0)
 
     def test_matching_request_only_and_preserves_session(self):
         context = Mock(config={"verification_keywords": ["测试"]})
@@ -123,14 +130,14 @@ class AutoAcceptPluginTests(unittest.TestCase):
         plugin.on_load(context)
         public = PendingFriendRequests(ACCOUNT, "original").add(parse_friend_request(XML))
         message = Message("", "fmessage", type=37, session_id="original", data={"friend_request": public})
-        plugin.on_message(message)
+        plugin.on_message(message, context)
         context.accept_friend.assert_called_once_with(public["request_id"], expected_session="original")
         context.accept_friend.reset_mock()
-        plugin.on_message(Message("create-group a b", ROOM))
+        plugin.on_message(Message("create-group a b", ROOM), context)
         plugin.on_message(Message("", "fmessage", type=37,
-            data={"friend_request": dict(public, verification="其他内容")}))
+            data={"friend_request": dict(public, verification="其他内容")}), context)
         plugin.on_message(Message("", "fmessage", type=37,
-            data={"friend_request": dict(public, status="accepted")}))
+            data={"friend_request": dict(public, status="accepted")}), context)
         context.accept_friend.assert_not_called()
 
     def test_exception_cannot_write_request_credentials_to_log(self):
@@ -139,7 +146,7 @@ class AutoAcceptPluginTests(unittest.TestCase):
         plugin.on_load(context)
         context.accept_friend.side_effect = RuntimeError("v4_SECRET_SHOULD_NOT_LOG")
         plugin.on_message(Message("", "fmessage", type=37, session_id="original",
-            data={"friend_request": {"request_id": "fr_" + "a" * 32, "status": "pending"}}))
+            data={"friend_request": {"request_id": "fr_" + "a" * 32, "status": "pending"}}), context)
         self.assertNotIn("v4_SECRET_SHOULD_NOT_LOG", str(context.logger.warning.call_args))
 
 
