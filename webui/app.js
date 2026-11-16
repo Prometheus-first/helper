@@ -51,11 +51,12 @@ const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊�
 const pluginNames = {anti_recall_local:['本机防撤回'], anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], image_generation:['AI 生图'], wechat_update_guard:['微信更新保护'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-async function api(path, body, identifier = robot) {
+async function api(path, body, identifier = robot, {download = false} = {}) {
   const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
   const response = await fetch('/api/' + path + scope, {method: body === undefined ? 'GET' : 'POST', cache:'no-store',
     headers:{'X-Helper-Token':token, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
     ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  if (response.ok && download) return response.blob();
   const data = await response.json();
   if (!response.ok) { const error=new Error(data.error||'操作失败');error.status=response.status;throw error; }
   return data;
@@ -625,6 +626,121 @@ function renderMessages() {
 $('#message-search').oninput=renderMessages;
 $('#pause-messages').onclick=()=>{messagePaused=!messagePaused;$('#pause-messages').textContent=messagePaused?'继续滚动':'暂停滚动';if(!messagePaused)$('#message-scroll').scrollTop=$('#message-scroll').scrollHeight;};
 $('#clear-messages').onclick=()=>{messages=[];renderMessages();};
+const exportDialog = $('#message-export-dialog');
+const exportForm = $('#message-export-form');
+const exportChat = $('#export-chat');
+const exportKind = $('#export-chat-kind');
+const exportButton = $('#download-message-export');
+const exportStatus = $('#message-export-status');
+const exportError = $('.dialog-error', exportDialog);
+const archiveEnabled = $('#message-archive-enabled');
+const archiveError = $('#message-archive-error');
+let exportSelection = null;
+
+function renderArchive(selection) {
+  archiveEnabled.checked = selection.archive?.enabled === true;
+  archiveEnabled.disabled = !selection.account || selection.savingArchive;
+  archiveError.textContent = selection.archive?.write_failed ? '归档写入失败，请检查磁盘空间和权限。' : '';
+  archiveError.classList.toggle('hidden', !archiveError.textContent);
+}
+
+function renderExportChats() {
+  const previous = exportChat.value;
+  const rows = exportSelection?.chats.filter(row => !exportKind.value ||
+    (row.is_group ? 'group' : 'private') === exportKind.value) || [];
+  exportChat.replaceChildren(new Option('选择会话', ''));
+  for (const row of rows) {
+    const id = row.chat_id, label = row.name && row.name !== id ? row.name + ' · ' + id : id;
+    exportChat.add(new Option(label, id));
+  }
+  if (rows.some(row => row.chat_id === previous)) exportChat.value = previous;
+  exportChat.disabled = !rows.length;
+  exportButton.disabled = !exportChat.value || exportSelection?.downloading;
+  exportStatus.textContent = rows.length ? '' : '目前没有此类型的已记录会话。';
+}
+
+$('#open-message-export').onclick = async () => {
+  const selection = {robot, chats: [], account: '', downloading: false};
+  exportSelection = selection;
+  exportForm.reset();
+  renderArchive(selection);
+  renderExportChats();
+  exportStatus.textContent = '正在读取已记录的会话…';
+  openDialog('#message-export-dialog');
+  try {
+    const data = await api('recorded-chats', undefined, selection.robot);
+    if (exportSelection !== selection || robot !== selection.robot) return;
+    selection.chats = data.chats;
+    selection.account = data.account;
+    selection.archive = data.archive;
+    renderExportChats();
+    renderArchive(selection);
+  } catch (error) {
+    if (exportSelection !== selection || robot !== selection.robot) return;
+    exportStatus.textContent = '';
+    exportError.textContent = error.message;
+    exportError.classList.remove('hidden');
+  }
+};
+$('#close-message-export').onclick = () => exportDialog.close();
+exportDialog.onclose = () => { if (!exportDialog.open) exportSelection = null; };
+archiveEnabled.onchange = async () => {
+  const selection = exportSelection;
+  if (!selection?.account || selection.savingArchive || selection.robot !== robot) return;
+  selection.savingArchive = true;
+  archiveEnabled.disabled = true;
+  exportError.classList.add('hidden');
+  try {
+    selection.archive = await api('message-archive',
+      {account: selection.account, enabled: archiveEnabled.checked}, selection.robot);
+  } catch (error) {
+    if (exportDialog.open && exportSelection === selection && robot === selection.robot) {
+      exportError.textContent = error.message;
+      exportError.classList.remove('hidden');
+    }
+  } finally {
+    selection.savingArchive = false;
+    if (exportDialog.open && exportSelection === selection && robot === selection.robot) renderArchive(selection);
+  }
+};
+exportKind.onchange = () => {
+  if (exportSelection) renderExportChats();
+};
+exportChat.onchange = () => { exportButton.disabled = !exportChat.value || exportSelection?.downloading; };
+exportForm.onsubmit = async event => {
+  event.preventDefault();
+  const selection = exportSelection;
+  if (!selection?.account || selection.downloading || selection.robot !== robot) return;
+  const query = new URLSearchParams(new FormData(exportForm));
+  query.set('account', selection.account);
+  selection.downloading = true;
+  exportButton.disabled = true;
+  exportError.classList.add('hidden');
+  exportStatus.textContent = '正在生成 CSV…';
+  try {
+    const blob = await api('message-export?' + query, undefined, selection.robot, {download: true});
+    if (!exportDialog.open || exportSelection !== selection || robot !== selection.robot) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'helper-chat.csv';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    exportDialog.close();
+  } catch (error) {
+    if (exportDialog.open && exportSelection === selection && robot === selection.robot) {
+      exportError.textContent = error.message;
+      exportError.classList.remove('hidden');
+    }
+  } finally {
+    selection.downloading = false;
+    if (exportSelection === selection && robot === selection.robot) {
+      exportButton.disabled = !exportChat.value;
+      exportStatus.textContent = '';
+    }
+  }
+};
+
 async function pollMessages(requested,generation) {
   try {
     let tail=await api('messages?after='+messageCursor,undefined,requested);
@@ -905,6 +1021,7 @@ async function loadRobots(){
 }
 async function switchRobot(identifier){
   if($('#plugin-dialog').open)$('#plugin-dialog').close();
+  if(exportDialog.open)exportDialog.close();
   articles.reset();
   resetContacts();
   resetDirectoryCache();

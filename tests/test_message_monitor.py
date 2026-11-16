@@ -3,23 +3,152 @@ import http.client
 import json
 from pathlib import Path
 import shutil
+import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from test_robot_hub import FakeWorker
+from wxbot_framework.chat_archive import ChatArchive
 from wxbot_framework.message_monitor import MessageBuffer
 from wxbot_framework.robot_hub import RobotHub
 from wxbot_framework.runtime import BotApplication
 from wxbot_framework.sdk import Message, ServiceFacade
-from wxbot_framework.web_panel import PanelServer, redact
+from wxbot_framework.web_panel import PanelServer, atomic_json, read_json, redact
 
 ROOT = Path(__file__).resolve().parents[1]
 ACCOUNT = 'wxid_monitor_robot'
 FRIEND = 'wxid_monitor_friend'
 ROOM = '12345678@chatroom'
+
+
+class ArchiveTests(unittest.TestCase):
+    def archive(self, **options):
+        scratch = ROOT / '.runtime/tests'
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        archive = ChatArchive(Path(temporary.name), read_json=read_json, write_json=atomic_json, **options)
+        self.addCleanup(archive.close)
+        buffer = MessageBuffer(archive=archive)
+        buffer.configure_archive(ACCOUNT, True)
+        return archive, buffer
+
+    def test_waits_for_batch_and_flushes_remaining_rows_on_close(self):
+        archive, buffer = self.archive(interval=3600, batch_size=2)
+        buffer.append(Message('第一条', FRIEND, FRIEND), account=ACCOUNT)
+        self.assertFalse(archive.path.exists())
+        written = threading.Event()
+        original_write = archive._write
+
+        def write(db, rows):
+            original_write(db, rows)
+            written.set()
+
+        with patch.object(archive, '_write', side_effect=write):
+            buffer.append(Message('第二条', FRIEND, FRIEND), account=ACCOUNT)
+            self.assertTrue(written.wait(3))
+            self.assertEqual(archive.status(ACCOUNT), {'enabled': True, 'write_failed': False})
+            buffer.append(Message('待关停写入', FRIEND, FRIEND), account=ACCOUNT)
+            archive.close()
+        with archive.reader() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM messages').fetchone()[0], 3)
+
+    def test_timer_retries_failed_batch(self):
+        archive, buffer = self.archive(interval=0.05, batch_size=100)
+        written = threading.Event()
+        original_write = archive._write
+        attempted = []
+
+        def write(db, rows):
+            attempted.append(len(rows))
+            if len(attempted) == 1:
+                raise sqlite3.OperationalError('simulated busy database')
+            original_write(db, rows)
+            written.set()
+
+        with self.assertLogs('ChatArchive', level='WARNING'), patch.object(archive, '_write', side_effect=write):
+            buffer.append(Message('待重试', FRIEND, FRIEND), account=ACCOUNT)
+            self.assertTrue(written.wait(3))
+            archive.close()
+        self.assertEqual(attempted, [1, 1])
+        with archive.reader() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM messages').fetchone()[0], 1)
+
+    def test_reconnection_keeps_one_message_per_account_and_conversation(self):
+        archive, buffer = self.archive(interval=3600)
+        native = '18446744073709551614'
+        first = Message('最初收到', FRIEND, FRIEND, session_id='first', sequence=1,
+                        data={'native_message_id': int(native)})
+        buffer.append(first, account=ACCOUNT)
+        self.assertTrue(archive.flush())
+        archive.close()
+        reopened = ChatArchive(archive.path.parent.parent, read_json=read_json, write_json=atomic_json)
+        self.addCleanup(reopened.close)
+        buffer = MessageBuffer(archive=reopened)
+        replay = Message('重投正文', FRIEND, FRIEND, session_id='second', sequence=2,
+                         data={'native_message_id': native})
+        buffer.append(replay, account=ACCOUNT)
+        buffer.append(Message('另一会话', ROOM, FRIEND, is_group=True, data=replay.data), account=ACCOUNT)
+        other_account = 'wxid_other_archive_user'
+        buffer.configure_archive(other_account, True)
+        buffer.append(replay, account=other_account)
+        for _ in range(2):
+            buffer.append(Message('两个没有原始编号的独立消息', FRIEND, FRIEND), account=ACCOUNT)
+        self.assertTrue(reopened.flush())
+        with reopened.reader() as db:
+            rows = db.execute('SELECT native_id, payload FROM messages').fetchall()
+        messages = [json.loads(payload) for _, payload in rows]
+        self.assertEqual(sum(identifier == native for identifier, _ in rows), 3)
+        own = [row['content'] for row in messages if row['account'] == ACCOUNT and row['chat_id'] == FRIEND]
+        self.assertCountEqual(own, ['最初收到', '两个没有原始编号的独立消息', '两个没有原始编号的独立消息'])
+
+    def test_replayed_forward_retains_every_part_and_late_recall(self):
+        archive, buffer = self.archive(interval=3600)
+        native = '123456789'
+        data = {'native_message_id': native, 'app_type': 19, 'forwarded_records': [
+            {'kind': 'text', 'text': '第一条'}, {'kind': 'text', 'text': '第二条'}]}
+        for connection in ('first', 'second'):
+            buffer.reset()
+            buffer.append(Message('', ROOM, FRIEND, type=49, session_id=connection, sequence=1,
+                                  data=data, is_group=True), account=ACCOUNT)
+            self.assertTrue(archive.flush())
+        buffer.reset()
+        buffer.append(Message('', ROOM, type=10002, is_group=True, data={'recall': {
+            'chat_id': ROOM, 'message_id': native, 'notice': '对方撤回了一条消息'}}), account=ACCOUNT)
+        self.assertTrue(archive.flush())
+        with archive.reader() as db:
+            parts = [(part, json.loads(payload)) for part, payload in
+                     db.execute('SELECT forwarded_part, payload FROM messages ORDER BY forwarded_part')]
+        self.assertEqual([part for part, _ in parts], [0, 1, 2])
+        self.assertEqual([row['content'] for _, row in parts[1:]], ['第一条', '第二条'])
+        self.assertTrue(all(row['recalled'] and not row.get('recall_missing') for _, row in parts))
+
+    def test_migrates_existing_archive_and_keeps_earliest_content_and_recall(self):
+        archive, _ = self.archive(interval=3600)
+        with closing(sqlite3.connect(archive.path)) as db, db:
+            db.execute('''CREATE TABLE messages (
+                stream TEXT NOT NULL, id INTEGER NOT NULL, account TEXT NOT NULL, chat_id TEXT NOT NULL,
+                captured_at REAL NOT NULL, day TEXT NOT NULL, capture_session TEXT, capture_sequence INTEGER,
+                payload TEXT NOT NULL, PRIMARY KEY (stream, id)
+            ) WITHOUT ROWID''')
+            buffer = MessageBuffer(clock=lambda: 200)
+            buffer.append(Message('早期正文', ROOM, FRIEND, is_group=True, data={'native_message_id': '765'}), account=ACCOUNT)
+            old = buffer.tail()['rows'][0]
+            later = dict(old, timestamp=300, content='重投正文', recalled=True, recalled_at=301, recall_notice='已撤回')
+            for source, session, row in [('a', 'later', later), ('b', 'earlier', old)]:
+                db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                           (source, row['id'], ACCOUNT, ROOM, row['timestamp'], row['date'], session, 1, json.dumps(row)))
+        with archive.reader() as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+            messages = [json.loads(payload) for (payload,) in db.execute('SELECT payload FROM messages')]
+            self.assertEqual(db.execute('SELECT session FROM message_capture_aliases').fetchone()[0], 'earlier')
+        self.assertEqual(len(messages), 1)
+        self.assertEqual((messages[0]['timestamp'], messages[0]['content'], messages[0]['recalled']),
+                         (200, '早期正文', True))
 
 
 class BufferTests(unittest.TestCase):

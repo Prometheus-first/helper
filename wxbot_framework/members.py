@@ -81,6 +81,13 @@ def name_key(value):
     return value.strip().casefold()
 
 
+def member_database_path(config_file, options):
+    database = options.get("database_file", ".runtime/member_data.sqlite3")
+    if not isinstance(database, str) or not database.strip() or "\0" in database:
+        raise MemberError("database_file 应为数据库路径")
+    return (config_file.parent / database).resolve()
+
+
 class MemberStore:
     def __init__(self, config_file, account, *, now=None):
         self.account = validate_account(account)
@@ -88,10 +95,7 @@ class MemberStore:
         options = json.loads(self.config_file.read_text(encoding="utf-8-sig"))
         if not isinstance(options, dict) or not isinstance(options.get("groups"), dict):
             raise MemberError("成员配置应包含 groups 对象")
-        database = options.get("database_file", ".runtime/member_data.sqlite3")
-        if not isinstance(database, str) or not database.strip() or "\0" in database:
-            raise MemberError("database_file 应为数据库路径")
-        self.path = (self.config_file.parent / database).resolve()
+        self.path = member_database_path(self.config_file, options)
         self.history_enabled = options.get("history_enabled", False)
         if type(self.history_enabled) is not bool:
             raise MemberError("history_enabled 必须是布尔值")

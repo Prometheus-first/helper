@@ -15,7 +15,7 @@
 <body>
 <a class="skip-link" href="#workspace">跳转到主要内容</a>
 <aside class="sidebar" id="primary-sidebar" aria-label="工作空间导航">
-  <a class="brand" href="#overview" aria-label="helper v1.1 管理台首页">helper<span class="brand-version">v1.1</span></a>
+  <a class="brand" href="#overview" aria-label="helper v1.2 管理台首页">helper<span class="brand-version">v1.2</span></a>
   <nav aria-label="主导航">
     <a href="#overview" data-page="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/></svg>运行概览</a>
     <a href="#plugins" data-page="plugins"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"/><rect x="14" y="14" width="6.5" height="6.5" rx="1"/></svg>插件管理<span id="nav-plugin-count" class="nav-count">—</span></a>
@@ -50,7 +50,7 @@
       <div id="batch-result" class="batch-result hidden" role="status" aria-live="polite"></div>
     </section>
     <section class="section message-monitor" aria-labelledby="messages-heading">
-      <div class="section-heading"><h2 id="messages-heading">消息监控 <span id="message-count" class="count">0 条</span></h2><div class="message-actions"><button id="pause-messages" class="secondary small">暂停滚动</button><button id="clear-messages" class="text-button small">清空视图</button></div></div>
+      <div class="section-heading"><h2 id="messages-heading">消息监控 <span id="message-count" class="count">0 条</span></h2><div class="message-actions"><button id="open-message-export" class="secondary small" type="button">归档与导出</button><button id="pause-messages" class="secondary small">暂停滚动</button><button id="clear-messages" class="text-button small">清空视图</button></div></div>
       <label class="sr-only" for="message-search">搜索消息</label><input id="message-search" class="message-search" type="search" placeholder="搜索 ID、昵称或内容" autocomplete="off">
       <p id="message-error" class="account-error hidden" role="status"></p>
       <div id="message-scroll" class="table-container message-scroll" tabindex="0" aria-label="实时消息列表"><table class="message-table"><thead><tr><th scope="col">时间</th><th scope="col">会话 ID</th><th scope="col">发送者</th><th scope="col">消息内容</th></tr></thead><tbody id="message-list"><tr><td colspan="4" class="table-empty">正在读取消息…</td></tr></tbody></table></div>
@@ -200,6 +200,21 @@
 
 </main>
 <div id="toast" class="toast hidden" role="status"></div>
+<dialog id="message-export-dialog" aria-labelledby="message-export-title">
+  <form id="message-export-form">
+    <div class="dialog-heading"><h2 id="message-export-title">归档与导出</h2><button id="close-message-export" type="button" class="text-button">关闭</button></div>
+    <label class="inline"><input id="message-archive-enabled" type="checkbox" disabled aria-describedby="message-archive-hint">保留旧消息到本机</label>
+    <p id="message-archive-hint" class="note">每 15 秒或累计 200 条待写记录批量保存。</p>
+    <p id="message-archive-error" class="account-error hidden" role="status" aria-live="polite"></p>
+    <label for="export-chat-kind">会话类型</label><select id="export-chat-kind"><option value="">全部</option><option value="private">私聊</option><option value="group">群聊</option></select>
+    <label for="export-chat">会话</label><select id="export-chat" name="chat_id" required disabled><option value="">选择会话</option></select>
+    <div class="field-pair"><label>开始日期<input type="date" name="start"></label><label>结束日期<input type="date" name="end"></label></div>
+    <p class="note">日期按电脑本地时间筛选，留空表示不限。</p>
+    <p id="message-export-status" class="note" role="status" aria-live="polite"></p>
+    <p class="dialog-error hidden" role="alert"></p>
+    <div class="form-footer"><button type="submit" class="primary" id="download-message-export" disabled>下载 CSV</button></div>
+  </form>
+</dialog>
 <dialog id="moments-confirm" class="moments-confirm" aria-labelledby="moments-confirm-title">
   <div class="dialog-heading"><h2 id="moments-confirm-title">发布朋友圈</h2><button type="button" id="moments-cancel" class="text-button" aria-label="关闭预览">取消</button></div>
   <p id="moments-preview-account" class="moments-identity"></p>

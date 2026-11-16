@@ -1,9 +1,11 @@
 """管理台 HTTP 传输：本机访问校验、静态资源和 API 路由。"""
 import html
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import secrets
+from shutil import copyfileobj
 from urllib.parse import parse_qs, urlsplit
 
 from .panel_common import PanelError, redact
@@ -35,16 +37,29 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def send(self, status, data, kind='application/json; charset=utf-8'):
         raw = json.dumps(data, ensure_ascii=False).encode('utf-8') if isinstance(data, (dict, list)) else data
+        self._response_headers(status, kind, len(raw))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _response_headers(self, status, kind, length):
         self.send_response(status)
         self.send_header('Content-Type', kind)
-        self.send_header('Content-Length', str(len(raw)))
+        self.send_header('Content-Length', str(length))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
+
+    def _send_message_export(self, source, length):
+        self._response_headers(200, 'text/csv; charset=utf-8', length)
+        self.send_header('Content-Disposition', 'attachment; filename="helper-chat.csv"')
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            copyfileobj(source, self.wfile, 65536)
+        except (OSError, HTTPException):
+            # Headers are already committed; the browser detects an incomplete download by length.
+            self.close_connection = True
 
     def _check(self, *, api=False):
         if self.headers.get('Host') not in self.server.hosts:
@@ -115,6 +130,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, hub.wechat_login().cancel(data))
                 if path == '/api/send-text':
                     return self.send(200, controller.send_text(data))
+                if path == '/api/message-archive':
+                    return self.send(200, controller.configure_message_archive(data))
                 if path == '/api/friend-request-send':
                     return self.send(200, controller.send_friend_request(data))
                 if path == '/api/scheduled-tasks':
@@ -200,6 +217,12 @@ class PanelHandler(BaseHTTPRequestHandler):
             if path == '/api/messages':
                 after = int(parse_qs(parsed.query).get('after', ['0'])[0])
                 return self.send(200, controller.message_tail(after))
+            if path == '/api/recorded-chats':
+                return self.send(200, controller.recorded_chats())
+            if path == '/api/message-export':
+                filters = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+                with controller.message_export(filters) as (source, length):
+                    return self._send_message_export(source, length)
             if path == '/api/robots':
                 return self.send(200, hub.robot_list() if hub is not None else
                     {'robots': [{'id': 'default', 'name': '默认机器人', 'account': '', 'state': controller.state}]})

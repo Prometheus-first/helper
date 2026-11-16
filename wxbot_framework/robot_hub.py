@@ -1,6 +1,7 @@
 """多机器人管理：共享代码，每个机器人一个子进程和独立本地工作区。"""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 import uuid
 
 from .config import account_is_unbound, initialize_configs
@@ -65,7 +67,7 @@ class RobotWorker:
                 raise PanelError('机器人管理进程未就绪，请查看该机器人的 logs/worker.log', 503) from None
             self.endpoint, self.token = f'http://127.0.0.1:{port}', token
 
-    def request(self, route, body=None):
+    def open_response(self, route, body=None):
         self.launch()
         with self.lock:
             endpoint, token = self.endpoint, self.token
@@ -76,12 +78,8 @@ class RobotWorker:
             # 不使用系统代理转发本机管理请求。
             # Loading one article includes a bounded client URL load and cache
             # polling. Catalog pages and other controls retain the short limit.
-            timeout = 45 if route.split('?', 1)[0] == 'article-read' else 20
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-                if len(raw) > 4 * 1024 * 1024:
-                    raise PanelError('机器人管理响应超过大小限制', 503)
-                return json.loads(raw)
+            timeout = 45 if route.split('?', 1)[0] in ('article-read', 'message-export') else 20
+            return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             try:
                 message = json.loads(error.read(16384)).get('error', '机器人操作失败')
@@ -90,6 +88,16 @@ class RobotWorker:
             raise PanelError(message, error.code) from None
         except (OSError, ValueError):
             raise PanelError('机器人管理进程连接已中断，请稍后刷新；原生连接由退出守护清理', 503) from None
+
+    def request(self, route, body=None):
+        with self.open_response(route, body) as response:
+            try:
+                raw = response.read(4 * 1024 * 1024 + 1)
+                if len(raw) > 4 * 1024 * 1024:
+                    raise PanelError('机器人管理响应超过大小限制', 503)
+                return json.loads(raw)
+            except (OSError, ValueError):
+                raise PanelError('机器人管理进程连接已中断，请稍后刷新；原生连接由退出守护清理', 503) from None
 
     def close(self):
         with self.lock:
@@ -163,6 +171,18 @@ class RobotProxy:
         return self.request('moments-status?' + urlencode({'id': identifier}))
     def tail(self, after=0): return self.request(f'logs?after={after}')
     def message_tail(self, after=0): return self.request(f'messages?after={after}')
+    def recorded_chats(self): return self.request('recorded-chats')
+    def configure_message_archive(self, data): return self.request('message-archive', data)
+
+    @contextmanager
+    def message_export(self, filters):
+        query = urlencode({key: filters[key] for key in ('account', 'chat_id', 'start', 'end') if key in filters})
+        with self.hub.request(self.identifier, 'message-export?' + query, download=True) as response:
+            length = response.length
+            if length is None or length <= 0 or response.headers.get_content_type() != 'text/csv':
+                raise PanelError('机器人返回了无效的导出文件', 503)
+            yield response, length
+
     def start(self): return self.request('start', {})
     def stop(self): return self.request('stop', {})
     def restart(self): return self.request('restart', {})
@@ -359,7 +379,7 @@ class RobotHub:
             if other == account:
                 raise PanelError(f'这个微信账号已绑定“{entry["name"]}”，请选择另一个账号', 409)
 
-    def request(self, identifier, route, data=None):
+    def request(self, identifier, route, data=None, *, download=False):
         # 账号检查与启动/绑定顺序串行，防止两个并发请求抢到同一账号。
         with self.lock:
             if self.stop_event.is_set():
@@ -377,6 +397,8 @@ class RobotHub:
                 worker = self.workers[identifier] = self.factory(self.root, workspace)
             if route in ('account', 'start', 'restart'):
                 return worker.request(route, data)
+        if download:
+            return worker.open_response(route, data)
         return worker.request(route, data)
 
     def robot_list(self):

@@ -8,7 +8,7 @@ from .recall import message_id
 
 
 class MessageBuffer:
-    def __init__(self, *, capacity=1000, sanitize=str, clock=time.time):
+    def __init__(self, *, capacity=1000, sanitize=str, clock=time.time, archive=None):
         self.rows = deque(maxlen=capacity)
         self.seen = deque(maxlen=capacity * 2)
         self.seen_keys = set()
@@ -18,6 +18,20 @@ class MessageBuffer:
         self.stream_id = uuid.uuid4().hex
         self.lock = threading.Lock()
         self.sanitize, self.clock = sanitize, clock
+        self.archive = archive
+
+    def _archive_row(self, row):
+        if self.archive is not None:
+            self.archive.record(self.stream_id, row)
+
+    def configure_archive(self, account, enabled):
+        with self.lock:
+            previously_enabled = self.archive.status(account)['enabled']
+            self.archive.configure(account, enabled)
+            if enabled and not previously_enabled:
+                for row in self.rows:
+                    if row['account'] == account:
+                        self._archive_row(row)
 
     def _text(self, value, limit=2000):
         return self.sanitize(value)[:limit] if isinstance(value, str) else ''
@@ -116,10 +130,12 @@ class MessageBuffer:
                             for field in ('recalled', 'recalled_at', 'recall_notice'):
                                 if field in old:
                                     comparable[field] = old[field]
+                            comparable['_capture'] = old['_capture']
                             if comparable == {k:v for k,v in old.items() if k not in ('id','revision')}:
                                 continue
                             self.sequence += 1
                             self.rows[position] = dict(comparable, id=identifier, revision=self.sequence)
+                            self._archive_row(self.rows[position])
                     return
                 if len(self.seen) == self.seen.maxlen:
                     oldest = self.seen[0]
@@ -135,14 +151,19 @@ class MessageBuffer:
                 old['account'] == row['account'] and old['chat_id'] == row['chat_id']), None)
             for index, projected_row in enumerate(projected):
                 self.sequence += 1
+                projected_row['_capture'] = (message.session_id, message.sequence) if deduplicate and index == 0 else None
                 if recall:
                     projected_row.update(recalled=True, recalled_at=recall[0], recall_notice=recall[1])
                 if index == 0 and placeholder is not None:
                     identifier = self.rows[placeholder]['id']
-                    self.rows[placeholder] = dict(projected_row, id=identifier, revision=self.sequence)
                 else:
                     identifier = self.sequence
-                    self.rows.append(dict(projected_row, id=identifier, revision=self.sequence))
+                current = dict(projected_row, id=identifier, revision=self.sequence)
+                if index == 0 and placeholder is not None:
+                    self.rows[placeholder] = current
+                else:
+                    self.rows.append(current)
+                self._archive_row(current)
                 identifiers.append(identifier)
             if deduplicate and records is not None:
                 self.forwarded_rows[key] = identifiers
@@ -170,6 +191,7 @@ class MessageBuffer:
                 self.sequence += 1
                 self.rows[index] = dict(old, recalled=True, recalled_at=now,
                     recall_notice=notice, revision=self.sequence)
+                self._archive_row(self.rows[index])
                 matched = True
             if not matched:
                 self.sequence += 1
@@ -180,6 +202,7 @@ class MessageBuffer:
                     'direction':'incoming', 'type':message.type,
                     'content':'[撤回消息] 原消息未捕获', 'message_id':identifier,
                     'recalled':True, 'recalled_at':now, 'recall_notice':notice, 'recall_missing':True})
+                self._archive_row(self.rows[-1])
 
     def tail(self, after=0):
         if type(after) is not int or after < 0:
@@ -195,12 +218,17 @@ class MessageBuffer:
             budget = 3 * 1024 * 1024
             rows, used = [], 0
             for row in candidates:
-                size = len(json.dumps(row, ensure_ascii=False).encode('utf-8')) + 1
+                public = {key: value for key, value in row.items() if key != '_capture'}
+                size = len(json.dumps(public, ensure_ascii=False).encode('utf-8')) + 1
                 if rows and used + size > budget:
                     break
-                rows.append(row)
+                rows.append(public)
                 used += size
             cursor = rows[-1]['revision'] if rows else self.sequence
-            return {'rows': [dict(row) for row in rows], 'cursor': cursor, 'latest': self.sequence,
+            return {'rows': rows, 'cursor': cursor, 'latest': self.sequence,
                     'stream_id': self.stream_id, 'reset': reset,
                     'dropped': bool(after and available and after < available[0]['id'] - 1)}
+
+    def recorded(self, account):
+        with self.lock:
+            return self.stream_id, [row for row in self.rows if row['account'] == account]

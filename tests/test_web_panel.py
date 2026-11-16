@@ -1,6 +1,10 @@
 """本地管理台：进程所有权、配置保留、任务线程和 HTTP 隔离。"""
 from concurrent.futures import Future
+from contextlib import closing
+import csv
+from datetime import datetime
 import http.client
+import io
 import json
 import logging
 from pathlib import Path
@@ -12,9 +16,12 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 from wxbot_framework.config import ConfigStore
+from wxbot_framework.members import MemberStore
 from wxbot_framework.runtime import BotApplication
+from wxbot_framework.sdk import Message
 from wxbot_framework.web_panel import LogBuffer, PanelController, PanelError, PanelServer, read_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -373,6 +380,103 @@ class HTTPTests(PanelFixture):
         self.assertEqual(headers['Cache-Control'],'no-store')
         for path in ('/app.js','/style.css'):
             self.assertEqual(self.request(path,token=False)[0],200)
+
+    def test_export_combines_monitor_archive_and_group_history(self):
+        account = self.accounts[0]['wxid']
+        friend, room = 'wxid_test_friend', '3100@chatroom'
+        self.controller.store.bind_account(account)
+        self.controller.save_configuration({'groups': [room], 'group_names': {room: '测试群'},
+                                            'history_enabled': True, 'daily_clear': False})
+        members = MemberStore(self.root/'members_config.json', account,
+                              now=lambda: datetime(2026, 6, 1, 12).astimezone())
+        self.addCleanup(members.close)
+        body = '中文，含逗号和换行\n' + '长' * 8500
+        native = {'native_message_id': '987654321012345678'}
+        shared = Message(body, room, friend, is_group=True, session_id='test-capture', sequence=2, data=native)
+        replay = Message(body, room, friend, is_group=True, session_id='new-session', sequence=1, data=native)
+        members.record(Message('仅群文字库', room, friend, is_group=True, session_id='test-capture', sequence=1))
+        members.record(shared)
+        members.record(replay)
+        messages = self.controller.messages
+        messages.clock = lambda: datetime(2026, 6, 1, 12, 30).timestamp()
+        messages.append(shared, account=account, sender_name='群成员')
+        messages.append(Message('=1+1', friend, friend), account=account, sender_name='测试好友')
+        messages.append(Message('隔离检查', friend, friend), account=self.accounts[0]['wxid'] + '_other')
+        messages.clock = lambda: datetime(2026, 6, 2, 12, 30).timestamp()
+        messages.append(replay, account=account, sender_name='群成员')
+        settings = {'account': account, 'enabled': True}
+        self.assertEqual(self.request('/api/message-archive', settings, token=False)[0], 403)
+        self.assertTrue(json.loads(self.request('/api/message-archive', settings)[2])['enabled'])
+
+        only_day = {'account': account, 'start': '2026-06-01', 'end': '2026-06-01'}
+        def export(chat_id, **dates):
+            query = urlencode(dict(only_day, chat_id=chat_id, **dates))
+            return self.request('/api/message-export?' + query)
+
+        self.assertEqual(export(room)[0], 200)
+        self.assertEqual(export(room, start='2026-06-02', end='')[0], 404)
+        messages.reset()  # The persisted rows survive the loss of the monitor cache.
+        listing = json.loads(self.request('/api/recorded-chats')[2])
+        self.assertEqual([(row['chat_id'], row['is_group']) for row in listing['chats']],
+                         [(room, True), (friend, False)])
+        status, headers, raw = export(room)
+        self.assertEqual(status, 200)
+        self.assertIn('attachment', headers['Content-Disposition'])
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        rows = list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'), newline='')))
+        self.assertEqual([row['正文'] for row in rows], ['仅群文字库', body])
+        self.assertEqual(rows[-1]['会话名称'], '测试群')
+        self.assertEqual(rows[-1]['发送者'], '群成员')
+        private = list(csv.DictReader(io.StringIO(export(friend)[2].decode('utf-8-sig'))))
+        self.assertEqual([row['正文'] for row in private], ["'=1+1"])
+        self.assertEqual(export(friend, start='2026-06-02', end='')[0], 404)
+        self.assertEqual(export(friend, start='2026-06-02')[0], 400)
+        self.assertEqual(export(friend, account='wxid_other')[0], 409)
+
+    def test_archive_keeps_evicted_rows_after_reopening_the_controller(self):
+        account, friend = self.accounts[0]['wxid'], 'wxid_test_friend'
+        self.controller.store.bind_account(account)
+        self.controller.configure_message_archive({'account': account, 'enabled': True})
+        for number in range(1003):
+            self.controller.messages.append(Message(f'记录 {number}', friend, friend), account=account)
+        self.assertEqual(len(self.controller.messages.recorded(account)[1]), 1000)
+        self.controller.close()
+        reopened = PanelController(self.root)
+        self.addCleanup(reopened.close)
+        self.assertTrue(reopened.recorded_chats()['archive']['enabled'])
+        self.assertEqual(reopened.configure_message_archive({'account': account, 'enabled': False}),
+                         {'enabled': False, 'write_failed': False})
+        reopened.messages.append(Message('停用后不归档', friend, friend), account=account)
+        reopened.messages.reset()
+        with reopened.message_export({'account': account, 'chat_id': friend}) as (source, length):
+            parsed = list(csv.DictReader(io.StringIO(source.read(length).decode('utf-8-sig'))))
+        self.assertEqual([row['正文'] for row in parsed], [f'记录 {number}' for number in range(1003)])
+
+    def test_csv_download_exceeds_json_limit_through_worker_proxy(self):
+        from wxbot_framework.robot_hub import RobotHub, RobotWorker
+
+        account, friend = self.accounts[0]['wxid'], 'wxid_test_friend'
+        self.controller.store.bind_account(account)
+        body = '中' * (1400000 + 1)
+        self.controller.messages.append(Message(body, friend, friend), account=account)
+        worker = RobotWorker(self.root, self.root)
+        worker.launch = lambda: None
+        worker.endpoint = f'http://127.0.0.1:{self.port}'
+        worker.token = self.server.token
+        hub = RobotHub(self.root, worker_factory=lambda *_: worker)
+        self.addCleanup(hub.close)
+        gateway = PanelServer(hub, 0)
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        self.addCleanup(gateway.server_close)
+        self.addCleanup(gateway.shutdown)
+        with closing(http.client.HTTPConnection('127.0.0.1', gateway.server_address[1], timeout=8)) as connection:
+            route = '/api/message-export?' + urlencode({'account': account, 'chat_id': friend, 'robot': 'default'})
+            connection.request('GET', route, headers={'X-Helper-Token': gateway.token})
+            result = connection.getresponse()
+            self.assertEqual(result.status, 200)
+            raw = result.read()
+        self.assertGreater(len(raw), 4 * 1024 * 1024)
+        self.assertTrue(raw.endswith((body + ',,,\r\n').encode('utf-8')))
 
     def test_scheduled_tasks_http_create_list_and_delete(self):
         self.controller.store.bind_account(self.accounts[0]['wxid'])

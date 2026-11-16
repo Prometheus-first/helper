@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque, OrderedDict
 from concurrent.futures import TimeoutError as ControlTimeout
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -16,6 +16,9 @@ import threading
 import time
 
 from .config import ConfigStore, account_is_unbound, initialize_configs, validate_name
+from . import chat_export
+from .chat_archive import ChatArchive
+from .members import member_database_path
 from .locking import InstanceLock
 from .panel_common import PanelError as PanelError, redact as redact, redact_full
 from .panel_http import PanelHandler as PanelHandler, PanelServer as PanelServer
@@ -102,7 +105,8 @@ class PanelController:
         self.state, self.error, self.started = 'stopped', '', None
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         self.logs = LogBuffer()
-        self.messages = MessageBuffer(sanitize=redact_full)
+        self.chat_archive = ChatArchive(self.workspace, read_json=read_json, write_json=atomic_json)
+        self.messages = MessageBuffer(sanitize=redact_full, archive=self.chat_archive)
         self.directory_cache = DirectoryCache(self.workspace)
         self.send_jobs = {}
         self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
@@ -212,6 +216,7 @@ class PanelController:
                             with self.lock:
                                 self.error = redact(error)
                         finally:
+                            self.chat_archive.flush()
                             lease.close()
                             with self.lock:
                                 self.state = 'error' if self.error else 'stopped'
@@ -259,6 +264,7 @@ class PanelController:
         self.stop()
         if self.worker is not None:
             self.worker.join(15)
+        self.chat_archive.close()
         logging.getLogger().removeHandler(self.logs)
         self.stopped_event.set()
 
@@ -328,6 +334,69 @@ class PanelController:
 
     def message_tail(self, after=0):
         return self.messages.tail(after)
+
+    def _chat_export_sources(self, *, expected_account=None, include_group_history=True):
+        with self.lock:
+            config = self.store.load()
+            account = config.get('wechat_account')
+            if account_is_unbound(account):
+                account = ''
+            if expected_account is not None and expected_account != account:
+                raise PanelError('当前微信账号已变化，请重新打开导出窗口', 409)
+            if not account:
+                return '', '', [], {}, None
+            stream, rows = self.messages.recorded(account)
+        names = {'filehelper': '文件传输助手'}
+        contacts = self.directory_cache.contacts(account) or {}
+        for contact in contacts.get('contacts', ()):
+            names[contact['wxid']] = contact['remark'] or contact['nickname'] or contact['alias']
+        names.update((group['chat_id'], group['name']) for group in self.directory_cache.groups(account)
+                     if group['name'])
+        for row in reversed(rows):
+            if not row['is_group'] and row['direction'] == 'incoming' and row['sender_name']:
+                names.setdefault(row['chat_id'], row['sender_name'])
+        path = self._paths(config).get('members')
+        database = None
+        if path is not None and path.is_file():
+            options = read_json(path)
+            names.update((chat, name) for chat, name in options.get('group_names', {}).items()
+                         if isinstance(name, str) and name)
+            if include_group_history:
+                database = member_database_path(path, options)
+        return account, stream, rows, names, database
+
+    def recorded_chats(self):
+        account, _, rows, names, path = self._chat_export_sources()
+        with chat_export.group_history(path) as db, self.chat_archive.reader() as archive:
+            return {'account': account, 'chats': chat_export.conversations(rows, db, archive, account, names),
+                    'archive': self.chat_archive.status(account)}
+
+    def configure_message_archive(self, data):
+        account, enabled = data.get('account'), data.get('enabled')
+        if not account or type(enabled) is not bool:
+            raise ValueError('归档设置需要当前微信账号和布尔开关')
+        with self.lock:
+            if self.store.load().get('wechat_account') != account or account_is_unbound(account):
+                raise PanelError('当前微信账号已变化，请重新打开导出窗口', 409)
+            self.messages.configure_archive(account, enabled)
+        if not enabled:
+            self.chat_archive.flush()
+        return self.chat_archive.status(account)
+
+    @contextmanager
+    def message_export(self, filters):
+        chat = validate_target(filters.get('chat_id'))
+        expected_account = filters.get('account')
+        if not expected_account:
+            raise ValueError('请先选择微信账号')
+        account, stream, rows, names, path = self._chat_export_sources(
+            expected_account=expected_account, include_group_history=chat.endswith('@chatroom'))
+        if not self.chat_archive.flush():
+            raise PanelError('有消息尚未写入本地归档，请检查磁盘空间和权限后重试', 503)
+        with ExitStack() as exported:
+            with chat_export.group_history(path) as db, self.chat_archive.reader() as archive:
+                download = exported.enter_context(chat_export.export_csv(stream, rows, db, archive, account, names, filters))
+            yield download
 
     def _save_many(self, changes):
         backup = self.workspace / '.runtime/web/backups' / str(time.time_ns())
