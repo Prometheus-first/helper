@@ -67,6 +67,8 @@ class ConfigStore:
         if not account_is_unbound(data.get("wechat_account")):
             from .account import validate_account
             validate_account(data["wechat_account"])
+        if type(data.get("linux_auto_recovery", True)) is not bool:
+            raise ValueError("linux_auto_recovery 应为布尔值")
         allowed = data.get("chat_allowlist", [])
         if not isinstance(allowed, list):
             raise ValueError("chat_allowlist 应为微信 ID 或群 ID 列表；空列表表示所有会话")

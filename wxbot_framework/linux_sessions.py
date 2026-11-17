@@ -18,6 +18,12 @@ from .linux_panel_backend import LinuxPanelBackend, PANEL_CAPABILITIES
 from .panel_common import PanelError
 
 
+NATIVE_STALL_MS = 90000
+RECOVERY_COOLDOWN = 600
+RECOVERY_LIMIT = 3
+RECOVERY_WINDOW = 3600
+
+
 def private_directory(path, parent):
     path, parent = Path(path), Path(parent).resolve()
     if path.is_symlink() or not path.absolute().is_relative_to(parent):
@@ -67,6 +73,10 @@ class ManagedLinuxBackend(LinuxPanelBackend):
 
     def bind_identity(self, account):
         return self._sender.bind_account(account)
+
+    def execution_health(self):
+        sender = self._sender
+        return sender.execution_health() if sender is not None else None
 
 
 class SessionLease:
@@ -377,7 +387,7 @@ class LinuxSessionController:
         self.backend_factory = backend_factory
         self.headless, self.display = headless, None
         self.lock = threading.RLock()
-        self.actions = threading.Lock()
+        self.actions = threading.RLock()
         self.stop_event, self.stopped_event = threading.Event(), threading.Event()
         self.capture_stop = threading.Event()
         self.profile = {'logged_in': False, 'wxid': '', 'name': ''}
@@ -386,6 +396,10 @@ class LinuxSessionController:
         self.backend = self.login_thread = None
         self.active_lease = self.emitter = None
         self._closed = False
+        self._verified_backend = None
+        self._recovery_attempts = {}
+        self._recovery_verified = False
+        self.recovery_status = ''
         directory = self.root / '.runtime/linux'
         private_directory(self.workspace, directory)
         metadata = self.workspace / 'identity.json'
@@ -408,6 +422,9 @@ class LinuxSessionController:
         return bool(self.backend and self.backend.process and self.backend.process.poll() is None)
 
     def open_wechat(self):
+        return self._open_wechat()
+
+    def _open_wechat(self, *, recovery_account='', resume_robot=False):
         with self.actions, self.lock:
             if self.stop_event.is_set():
                 raise PanelError('管理服务正在退出', 409)
@@ -416,11 +433,18 @@ class LinuxSessionController:
             self.capture_stop = threading.Event()
             self.login_state, self.login_error = 'starting', ''
             self.login_started_at = time.monotonic()
-            self.profile = {'logged_in': False, 'wxid': '', 'name': ''}
-            self.expected_account = ''
-            old = self.panel
-            self.panel = self._new_panel(self.workspace / 'pending')
-            old.close()
+            self._recovery_verified = False
+            self._verified_backend = None
+            if recovery_account:
+                self.profile = dict(self.profile, logged_in=False)
+                self.recovery_status = 'waiting_login'
+            else:
+                self.profile = {'logged_in': False, 'wxid': '', 'name': ''}
+                self.expected_account = ''
+                self.recovery_status = ''
+                old = self.panel
+                self.panel = self._new_panel(self.workspace / 'pending')
+                old.close()
             home = private_directory(self.workspace / 'home', self.workspace)
             for child in ('.config', '.local/share', '.cache', 'tmp'):
                 private_directory(home / child, home)
@@ -437,36 +461,121 @@ class LinuxSessionController:
             except BaseException:
                 self._close_display()
                 raise
-            self.login_thread = threading.Thread(target=self._watch, name='LinuxWechatSession', daemon=True)
+            self.login_thread = threading.Thread(target=self._watch, args=(self.backend, self.capture_stop, resume_robot),
+                                                 name='LinuxWechatSession', daemon=True)
             self.login_thread.start()
         return self.snapshot()
 
-    def _watch(self):
+    def _watch(self, backend, capture_stop, resume_robot):
         try:
-            self.backend.start(self._on_message)
+            backend.start(self._on_message)
+            health = getattr(backend, 'execution_health', None)
+            if callable(health):
+                threading.Thread(target=self._watch_recovery, args=(backend, capture_stop),
+                                 name='LinuxWechatRecovery', daemon=True).start()
             self.login_state = 'waiting_login'
-            while not self.capture_stop.is_set() and not self.stop_event.is_set():
+            while not capture_stop.is_set() and not self.stop_event.is_set():
                 if not self.wechat_running():
                     self.login_state = 'closed'
                     break
-                if self.backend.last_error:
+                if backend.last_error:
                     raise RuntimeError('Linux 微信接收通道已结束')
-                profile = self.backend.read_profile()
+                try:
+                    profile = backend.read_profile()
+                except (OSError, EOFError):
+                    if capture_stop.is_set():
+                        break
+                    if not callable(health) or not health():
+                        raise
+                    capture_stop.wait(1)
+                    continue
+                if capture_stop.is_set():
+                    break
                 self.accept_profile(profile)
-                self.capture_stop.wait(1)
+                if self.profile.get('logged_in') and self.recovery_status == 'waiting_login':
+                    if resume_robot and not capture_stop.is_set():
+                        try:
+                            self.panel.start()
+                        except (OSError, RuntimeError, ValueError):
+                            if self.panel.state != 'running':
+                                self.recovery_status = 'robot_failed'
+                    if self.recovery_status == 'waiting_login':
+                        self.recovery_status = 'restarted'
+                capture_stop.wait(1)
         except Exception as error:
-            # Keep native and configuration secrets out of status and worker logs.
-            self.login_error = 'Linux 微信会话失败（' + type(error).__name__ + '），请关闭该会话后重新登录'
-            self.login_state = 'error'
+            if not capture_stop.is_set():
+                # Keep native and configuration secrets out of status and worker logs.
+                self.login_error = 'Linux 微信会话失败（' + type(error).__name__ + '），请关闭该会话后重新登录'
+                self.login_state = 'error'
         finally:
             self.profile = dict(self.profile, logged_in=False)
             self.panel.stop()
             if not self.wechat_running():
                 self._close_display()
 
+    def _recovery_account(self, backend, capture_stop):
+        with self.lock:
+            if (self.stop_event.is_set() or capture_stop.is_set() or capture_stop is not self.capture_stop or
+                    self.backend is not backend or not self._recovery_verified or not self.wechat_running()):
+                return ''
+            account = self.expected_account
+            if not account or backend.account != account:
+                return ''
+            try:
+                enabled = self.panel.store.load().get('linux_auto_recovery', True)
+            except (OSError, ValueError):
+                return ''
+            return account if enabled is True else ''
+
+    def _watch_recovery(self, backend, capture_stop):
+        while not self.stop_event.is_set() and not capture_stop.wait(2):
+            if not self.wechat_running():
+                return
+            if not self._recovery_account(backend, capture_stop):
+                continue
+            health = backend.execution_health()
+            if health and health[1] >= NATIVE_STALL_MS:
+                if self._recover_stalled(backend, capture_stop, health[0]):
+                    return
+
+    def _recover_stalled(self, backend, capture_stop, request_id):
+        with self.actions:
+            account = self._recovery_account(backend, capture_stop)
+            if not account:
+                return False
+            with self.panel.lock:
+                health = backend.execution_health()
+                if not health or health[0] != request_id or health[1] < NATIVE_STALL_MS:
+                    return False
+                if self._recovery_account(backend, capture_stop) != account:
+                    return False
+                now = time.monotonic()
+                attempts = self._recovery_attempts.setdefault(account, [])
+                attempts[:] = [when for when in attempts if now - when < RECOVERY_WINDOW]
+                if len(attempts) >= RECOVERY_LIMIT or (attempts and now - attempts[-1] < RECOVERY_COOLDOWN):
+                    self.recovery_status = 'limited'
+                    return False
+                process = backend.process
+                attempts.append(now)
+                self.recovery_status = 'restarting'
+                resume_robot = self.panel.state in ('running', 'starting')
+                self.panel.stop()
+                self.panel._retire_old_send_jobs(None)
+            capture_stop.set()
+            try:
+                # End the native call and unblock socket reads before joining Python workers.
+                self._terminate_wechat(process, force=True)
+                self.close_wechat()
+                self._open_wechat(recovery_account=account, resume_robot=resume_robot)
+            except Exception as error:
+                self.recovery_status = 'failed'
+                self.login_error = '自动恢复未完成（' + type(error).__name__ + '），请检查该微信会话'
+            return True
+
     def accept_profile(self, profile):
         if not profile.get('logged_in'):
             with self.lock:
+                self._recovery_verified = False
                 self.profile = dict(self.profile, logged_in=False)
                 self.login_state = 'waiting_login'
             self.panel.stop()
@@ -476,12 +585,15 @@ class LinuxSessionController:
         with self.lock:
             changed = bool(self.expected_account and self.expected_account != account)
             if changed:
+                self._recovery_verified = False
                 self.profile = dict(self.profile, logged_in=False)
                 self.login_error = '此会话已切换账号，请关闭它并重新登录微信'
                 self.login_state = 'error'
-            elif not self.expected_account:
+            elif self._verified_backend is not self.backend:
                 self.backend.bind_identity(account)
                 self.backend.set_identity(profile)
+                self._verified_backend = self.backend
+            if not changed and not self.expected_account:
                 digest = hashlib.sha256(account.encode('ascii')).hexdigest()[:24]
                 directory = self.root / '.runtime/linux/accounts'
                 private_directory(directory, self.root / '.runtime/linux')
@@ -497,6 +609,7 @@ class LinuxSessionController:
                 from .web_panel import atomic_json
                 atomic_json(self.workspace / 'identity.json', {'wxid':account, 'name':profile.get('name', '')})
             if not changed:
+                self._recovery_verified = True
                 self.profile = {'logged_in': True, 'wxid': account, 'name': profile.get('name', '')}
                 self.login_state, self.login_error = 'logged_in', ''
         if changed:
@@ -539,7 +652,8 @@ class LinuxSessionController:
             identity = dict(platform='linux', account=self.profile.get('wxid') or self.expected_account,
                 account_name=self.profile.get('name', ''), logged_in=bool(self.profile.get('logged_in')),
                 pid=self.backend.pid if self.wechat_running() else None, login_state=self.login_state,
-                login_pending=self.wechat_running() and not self.profile.get('logged_in'))
+                login_pending=self.wechat_running() and not self.profile.get('logged_in'),
+                recovery_status=self.recovery_status)
             error = self.login_error
         result = panel.snapshot()
         return dict(result, **identity, error=result.get('error') or error)
@@ -587,38 +701,58 @@ class LinuxSessionController:
         if path not in ('/api/linux-session/open', '/api/linux-session/close', '/api/linux-login-qr'):
             return self.panel.guard_route(path, write)
 
+    def _terminate_wechat(self, process, *, force=False):
+        if process is None or process.poll() is not None:
+            return
+        # Keep the pidfd open through escalation to address the same child.
+        try:
+            descriptor = os.pidfd_open(process.pid)
+        except ProcessLookupError:
+            if process.poll() is not None:
+                return
+            raise
+        try:
+            if process.poll() is not None:
+                return
+            if Path(os.readlink(f'/proc/{process.pid}/exe')).resolve() != self.wechat_path.resolve():
+                raise PanelError('微信进程身份已变化，停止自动关闭', 409)
+            signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                if not force:
+                    raise PanelError('微信尚未退出，请在该微信窗口手动退出', 409) from None
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                process.wait(timeout=5)
+        except ProcessLookupError:
+            if process.poll() is None:
+                raise
+        finally:
+            os.close(descriptor)
+
     def close_wechat(self):
         with self.actions:
+            self.capture_stop.set()
             self.panel.stop()
             worker = self.panel.worker
             if worker is not None:
                 worker.join(15)
                 if worker.is_alive():
                     raise PanelError('机器人仍在清理，请稍后再关闭微信', 409)
-            self.capture_stop.set()
             backend = self.backend
             if backend is not None:
                 sender = getattr(backend, '_sender', None)
                 backend.stop()
                 process = backend.process
                 if process is not None and process.poll() is None:
-                    # This Popen instance is our own child; pidfd avoids PID reuse.
-                    descriptor = os.pidfd_open(process.pid)
-                    try:
-                        if Path(os.readlink(f'/proc/{process.pid}/exe')).resolve() != self.wechat_path.resolve():
-                            raise PanelError('微信进程身份已变化，停止自动关闭', 409)
-                        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
-                    finally:
-                        os.close(descriptor)
-                    try:
-                        process.wait(timeout=8)
-                    except subprocess.TimeoutExpired:
-                        raise PanelError('微信尚未退出，请在该微信窗口手动退出', 409) from None
+                    self._terminate_wechat(process)
                 cleanup = getattr(sender, 'cleanup_retained_files', None)
                 if callable(cleanup) and process is not None and process.poll() is not None:
                     cleanup()
             if self.login_thread is not None:
                 self.login_thread.join(3)
+                if self.login_thread.is_alive():
+                    raise PanelError('微信会话线程仍在退出，请稍后重试', 409)
             self._close_display()
             with self.lock:
                 self.profile = dict(self.profile, logged_in=False)

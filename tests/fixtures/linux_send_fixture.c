@@ -59,6 +59,10 @@ void fixture_sdk_send(void*x,const struct str*j,const struct str*r,struct cb**c)
   if(!late)abort();
   complete_callback(late,1);
  }
+ if(strstr(body,"NEVER_RETURN_FIXTURE")){
+  if(strstr(body,"EARLY_CALLBACK")){complete_callback(*c,1);*c=NULL;}
+  for(;;)pause();
+ }
  if(strstr(body,"BLOCK_NATIVE_FIXTURE"))usleep(900000);
  struct task*t=calloc(1,sizeof(*t));
  if(!t)abort();
@@ -78,6 +82,7 @@ void fixture_sdk_dispatch(struct shared*out,void*queue,const void*source,struct 
  struct callable*c=fn->callable;
  struct callable*copy=((struct callable*(*)(void*))c->v[2])(c);
  fn->callable=NULL;((void(*)(void*))c->v[5])(c);out->a=NULL;out->b=NULL;
+ if(getenv("HELPER_FIXTURE_SYNC_DISPATCH")){dispatch_run(copy);return;}
  void*(*invoke)(void*)=dispatch_run;
  static atomic_int dispatches;
  if(getenv("HELPER_FIXTURE_DEFER_SECOND_DISPATCH")&&atomic_fetch_add(&dispatches,1)==1)

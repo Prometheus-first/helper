@@ -36,6 +36,7 @@ class LinuxNativeSender:
         self._directory = Path(tempfile.mkdtemp(prefix="helper-send-", dir=directory))
         self._directory.chmod(0o700)
         self.path = self._directory / "send.sock"
+        self.health_path = self._directory / "health"
         if len(os.fsencode(self.path)) >= 108:
             self._directory.rmdir()
             raise ValueError("本地发送 socket 路径过长")
@@ -102,6 +103,26 @@ class LinuxNativeSender:
             if attempted:
                 raise LinuxSendIndeterminate("图片下载结果未知，不会自动重试" if command in (b"D", b"U") else "发送结果未知，消息可能已送出；不会自动重试") from error
             raise
+
+    def execution_health(self):
+        """Read the native execution state on an independent authenticated socket."""
+        if self._closed or self.expected_pid is None:
+            return None
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                conn.settimeout(1)
+                conn.connect(str(self.health_path))
+                pid, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if pid != self.expected_pid or uid != os.geteuid():
+                    return None
+                with conn.makefile("rb") as response:
+                    data = json.loads(response.readline(129))
+            request_id, elapsed_ms = data["request_id"], data["elapsed_ms"]
+            if type(request_id) is int and 0 < request_id < 2**64 and type(elapsed_ms) is int and elapsed_ms >= 0:
+                return request_id, elapsed_ms
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return None
 
     def wait_ready(self, *, timeout=5.0, process=None):
         deadline = time.monotonic() + timeout
@@ -346,6 +367,11 @@ class LinuxNativeSender:
             pass
         except OSError:
             return False
+        for path in (self.path, self.health_path):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         for snapshot, size in tuple(self._retained_files.items()):
             try:
                 if (snapshot.parent.parent != self._directory or

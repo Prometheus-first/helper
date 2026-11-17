@@ -311,6 +311,8 @@ class PanelController:
             'chat_allowlist': config.get('chat_allowlist', []),
             'text_send_delay': config.get('text_send_delay', {}),
             'plugins': config.get('plugins', {})}
+        if getattr(self, 'platform', '') == 'linux':
+            result['linux_auto_recovery'] = config.get('linux_auto_recovery', True)
         for name, path in paths.items():
             value = deepcopy(read_json(path))
             if name in ('llm', 'tts'):
@@ -351,6 +353,10 @@ class PanelController:
         with self.actions, self.lock, self._editing():
             config = self.store.load()
             paths, changes = self._paths(config), {}
+            if 'linux_auto_recovery' in data and getattr(self, 'platform', '') == 'linux':
+                if type(data['linux_auto_recovery']) is not bool:
+                    raise PanelError('自动恢复开关必须为布尔值')
+                config['linux_auto_recovery'] = data['linux_auto_recovery']
             if 'chat_allowlist' in data:
                 values = data['chat_allowlist']
                 if not isinstance(values, list) or len(values) > 1000:

@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -200,6 +201,7 @@ class LinuxSenderTests(unittest.TestCase):
         sender.ensure_context()
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_text("filehelper", "NEVER_CALLBACK_FIXTURE")
+        self.assertIsNone(sender.execution_health())
         self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
         self.assertIsNone(child.poll())
 
@@ -245,6 +247,53 @@ class LinuxSenderTests(unittest.TestCase):
                     raise
                 time.sleep(.02)
         self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
+
+    def test_health_remains_available_during_synchronous_native_deadlock(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge, timeout=1.1,
+                                   extra_env={"HELPER_FIXTURE_SYNC_DISPATCH": "1"})
+        self.assertTrue(sender.wait_ready(process=child))
+        self.assertTrue(sender.ensure_context())
+        self.assertIsNone(sender.execution_health())
+        healthy, other = self.spawn()
+        self.assertTrue(healthy.wait_ready(process=other))
+        outcomes = []
+
+        def send():
+            try:
+                sender.send_text("filehelper", "NEVER_RETURN_FIXTURE")
+            except LinuxSendIndeterminate:
+                outcomes.append("unknown")
+
+        worker = threading.Thread(target=send)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 2
+            while (health := sender.execution_health()) is None:
+                self.assertLess(time.monotonic(), deadline, "native task did not enter execution")
+                time.sleep(.01)
+            worker.join(2)
+            self.assertEqual(outcomes, ["unknown"])
+            stalled_id, elapsed = sender.execution_health()
+            self.assertEqual(stalled_id, health[0])
+            self.assertGreater(elapsed, health[1])
+        finally:
+            from wxbot_framework.linux_sessions import LinuxSessionController
+            owner = object.__new__(LinuxSessionController)
+            owner.wechat_path = self.fixture
+            owner._terminate_wechat(child, force=True)
+            worker.join(2)
+        self.assertIsNone(other.poll())
+        self.assertTrue(healthy.send_text("filehelper", "HEALTHY_ACCOUNT_FIXTURE"))
+
+    def test_early_callback_does_not_confirm_an_operation_still_executing(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge)
+        self.assertTrue(sender.wait_ready(process=child))
+        self.assertTrue(sender.ensure_context())
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_text("filehelper", "EARLY_CALLBACK NEVER_RETURN_FIXTURE")
+        self.assertIsNotNone(sender.execution_health())
+        child.terminate()
+        child.wait(3)
 
     def test_close_disables_sender_and_keeps_client_running(self):
         sender, child = self.spawn()

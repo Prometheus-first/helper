@@ -5,6 +5,7 @@
 #include <link.h>
 #include <linux/if_alg.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -71,7 +72,10 @@ static pthread_cond_t sdk_cond=PTHREAD_COND_INITIALIZER;
  * even after its caller's deadline; a completed task does not hold that slot. */
 enum sdk_task_state { SDK_IDLE, SDK_QUEUED, SDK_EXECUTING, SDK_RETURNED };
 static enum sdk_task_state sdk_state;
-static uint64_t sdk_request_sequence,sdk_waiting_request;
+static uint64_t sdk_request_sequence,sdk_waiting_request,sdk_executing_request;
+static struct timespec sdk_execution_start;
+static atomic_int sdk_health_stop;
+static char sdk_health_path[108];
 static int sdk_done;
 static char sdk_result[8192],sdk_error[2048],sdk_path[108];
 static const char sdk_busy_response[]=
@@ -825,6 +829,8 @@ static void sdk_task_invoke(struct sdk_callable*t){
   return;
  }
  sdk_state=SDK_EXECUTING;
+ sdk_executing_request=payload->request_id;
+ clock_gettime(CLOCK_MONOTONIC,&sdk_execution_start);
  pthread_mutex_unlock(&sdk_mutex);
  sdk_perform(payload->operation,payload->json,payload->request_id);
  pthread_mutex_lock(&sdk_mutex);
@@ -894,7 +900,9 @@ static void sdk_handle(int client,char operation,const char *json){
   if(pthread_cond_clockwait(&sdk_cond,&sdk_mutex,CLOCK_MONOTONIC,&until))break;
  }
  char result[50000];
- if(sdk_done){
+ if(sdk_state==SDK_EXECUTING){
+  strcpy(result,"{\"callback\":false,\"pending\":true}\n");
+ }else if(sdk_done){
   char a[32768],b[8192];
   sdk_escape(a,sizeof(a),sdk_result);sdk_escape(b,sizeof(b),sdk_error);
   snprintf(result,sizeof(result),"{\"callback\":true,\"result\":\"%s\",\"error\":\"%s\"}\n",a,b);
@@ -910,18 +918,53 @@ static void sdk_handle(int client,char operation,const char *json){
  pthread_mutex_unlock(&sdk_mutex);sdk_write(client,result);
 }
 static int sdk_read(int fd,void*out,size_t n){unsigned char*p=out;while(n){ssize_t k=recv(fd,p,n,0);if(k<=0){if(k<0&&errno==EINTR)continue;return 0;}p+=k;n-=(size_t)k;}return 1;}
+static int sdk_listen(const char *path){
+ int fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(fd<0)return -1;
+ struct sockaddr_un address={.sun_family=AF_UNIX};strcpy(address.sun_path,path);
+ if(bind(fd,(struct sockaddr*)&address,sizeof(address))){close(fd);return -1;}
+ if(chmod(path,0600)||listen(fd,4)){close(fd);unlink(path);return -1;}
+ return fd;
+}
+static int sdk_wait_client(int listener){
+ struct pollfd ready={.fd=listener,.events=POLLIN};
+ if(poll(&ready,1,1000)<=0||!(ready.revents&POLLIN))return -1;
+ int client=accept4(listener,NULL,NULL,SOCK_CLOEXEC);if(client<0)return -1;
+ struct ucred peer={0};socklen_t size=sizeof(peer);
+ if(getsockopt(client,SOL_SOCKET,SO_PEERCRED,&peer,&size)||peer.pid!=sdk_parent||peer.uid!=geteuid()){
+  close(client);return -1;
+ }
+ return client;
+}
+static void*sdk_serve_health(void*argument){
+ int listener=(int)(intptr_t)argument;
+ while(!atomic_load(&sdk_health_stop)&&getppid()==sdk_parent){
+  int client=sdk_wait_client(listener);if(client<0)continue;
+  struct timeval timeout={1,0};setsockopt(client,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
+  uint64_t request=0;
+  int64_t elapsed=0;
+  pthread_mutex_lock(&sdk_mutex);
+  if(sdk_state==SDK_EXECUTING){
+   struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);
+   request=sdk_executing_request;
+   elapsed=(now.tv_sec-sdk_execution_start.tv_sec)*INT64_C(1000)+
+           (now.tv_nsec-sdk_execution_start.tv_nsec)/1000000;
+  }
+  pthread_mutex_unlock(&sdk_mutex);
+  char response[128];
+  snprintf(response,sizeof(response),"{\"request_id\":%" PRIu64 ",\"elapsed_ms\":%" PRId64 "}\n",request,elapsed);
+  sdk_write(client,response);
+  close(client);
+ }
+ close(listener);unlink(sdk_health_path);return NULL;
+}
 static void*sdk_serve(void*unused){
  (void)unused;
  while(getppid()==sdk_parent){
-  fd_set set;FD_ZERO(&set);FD_SET(sdk_listener,&set);struct timeval tv={1,0};
-  int rc=select(sdk_listener+1,&set,NULL,NULL,&tv);if(rc<0){if(errno==EINTR)continue;break;}if(!rc)continue;
-  int c=accept4(sdk_listener,NULL,NULL,SOCK_CLOEXEC);if(c<0)continue;
-  struct ucred peer={0};socklen_t size=sizeof(peer);
-  if(getsockopt(c,SOL_SOCKET,SO_PEERCRED,&peer,&size)||peer.pid!=sdk_parent||peer.uid!=geteuid()){close(c);continue;}
+  int c=sdk_wait_client(sdk_listener);if(c<0)continue;
   struct timeval timeout={5,0};setsockopt(c,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
   setsockopt(c,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
   char op=0;if(recv(c,&op,1,0)==1){
-   if(op=='Q'){sdk_clear_image_scope(0,1);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
+   if(op=='Q'){atomic_store(&sdk_health_stop,1);sdk_clear_image_scope(0,1);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
    if(op=='P'){
     char account[128],name[512],a[1024],n[4096],response[5500];int logged=sdk_profile(account,name);
     sdk_escape(a,sizeof(a),logged?account:"");sdk_escape(n,sizeof(n),logged?name:"");
@@ -949,6 +992,7 @@ static void*sdk_serve(void*unused){
    }else sdk_handle(c,op,NULL);
   }close(c);
  }
+ atomic_store(&sdk_health_stop,1);
  sdk_clear_image_scope(0,1);
  close(sdk_listener);sdk_listener=-1;unlink(sdk_path);return NULL;
 }
@@ -970,12 +1014,19 @@ __attribute__((constructor))static void sdk_init(void){
 #endif
  char parentdir[108];strcpy(parentdir,path);char*slash=strrchr(parentdir,'/');if(!slash||slash==parentdir)return;*slash=0;
  struct stat st;if(lstat(parentdir,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=geteuid()||(st.st_mode&0777)!=0700)return;
- sdk_listener=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(sdk_listener<0)return;
- struct sockaddr_un sa={.sun_family=AF_UNIX};strcpy(sa.sun_path,path);strcpy(sdk_path,path);
- if(bind(sdk_listener,(struct sockaddr*)&sa,sizeof(sa))||chmod(path,0600)||listen(sdk_listener,4)){close(sdk_listener);sdk_listener=-1;return;}
+ strcpy(sdk_path,path);
+ sdk_listener=sdk_listen(sdk_path);if(sdk_listener<0)return;
  sdk_download_hook_ready=sdk_install_image_context_capture();
 #ifndef SDK_FIXTURE
  sdk_quote_ready=sdk_download_hook_ready;
 #endif
  pthread_t worker;if(pthread_create(&worker,NULL,sdk_serve,NULL)){close(sdk_listener);sdk_listener=-1;unlink(path);return;}pthread_detach(worker);
+ int length=snprintf(sdk_health_path,sizeof(sdk_health_path),"%s/health",parentdir);
+ if(length>0&&(size_t)length<sizeof(sdk_health_path)&&strcmp(sdk_health_path,sdk_path)){
+  int health=sdk_listen(sdk_health_path);
+  if(health>=0){
+   if(pthread_create(&worker,NULL,sdk_serve_health,(void*)(intptr_t)health)){close(health);unlink(sdk_health_path);}
+   else pthread_detach(worker);
+  }
+ }
 }

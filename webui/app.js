@@ -125,6 +125,20 @@ function renderState() {
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
   document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  if(isLinux){
+    const recoveryForm=$('#linux-recovery-form');
+    const canEdit=!!config?.account&&config.account===state?.account&&!running&&!busy&&serviceAvailable;
+    recoveryForm.elements.linux_auto_recovery.disabled=!canEdit;
+    $('.primary',recoveryForm).disabled=!canEdit;
+    $('#linux-recovery-status').textContent=({
+      restarting:'正在重启当前账号的微信。',
+      waiting_login:'微信已重新启动，正在等待登录。',
+      restarted:'微信已重新登录。',
+      limited:'已达到自动重启限制，持续卡住时请手动重启微信。',
+      failed:'自动恢复未完成，请检查当前微信会话。',
+      robot_failed:'微信已恢复，机器人需要手动启动。'
+    })[state?.recovery_status]||'';
+  }
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderEmoticonExport();
@@ -280,6 +294,7 @@ async function loadConfig() {
     $('.key-state',form).textContent = config[name]?.api_key_configured ? '已配置' : '尚未配置';
   }
   fill($('#delay-form'), config.text_send_delay);
+  if(isLinux)fill($('#linux-recovery-form'),{linux_auto_recovery:config.linux_auto_recovery!==false});
 }
 const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
 function renderGroupNames() {
@@ -1027,6 +1042,13 @@ function renderLinuxState(){
 }
 if(isLinux){
   document.body.dataset.platform='linux';
+  const recoveryForm=$('#linux-recovery-form');
+  recoveryForm.classList.remove('hidden');
+  recoveryForm.onsubmit=event=>{
+    event.preventDefault();
+    if(!$('.primary',recoveryForm).disabled)
+      action(()=>save({linux_auto_recovery:recoveryForm.elements.linux_auto_recovery.checked},'自动恢复设置已保存'));
+  };
   $('.account-picker').classList.remove('hidden');$('#linux-session').classList.add('hidden');
   $('#accounts-heading').firstChild.textContent='微信会话 ';
   $('#login-wechat').textContent='登录微信';

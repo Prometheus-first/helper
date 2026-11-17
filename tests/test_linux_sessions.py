@@ -3,11 +3,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from wxbot_framework.linux_sessions import LinuxSessionController, ManagedLinuxBackend
 from wxbot_framework.panel_common import PanelError
@@ -88,6 +90,94 @@ class LinuxSessionTests(unittest.TestCase):
         lease.stop()
         with self.assertRaises(RuntimeError):
             ctx.fetch_image(request_id)
+
+    def test_recovery_is_enabled_by_default_and_config_is_per_account(self):
+        first, second = self.sessions
+        self.assertTrue(first.configuration()['linux_auto_recovery'])
+        self.assertTrue(second.configuration()['linux_auto_recovery'])
+        self.assertEqual(first._recovery_account(first.backend, first.capture_stop), first.expected_account)
+        first.save_configuration({'linux_auto_recovery': False})
+        self.assertFalse(first.configuration()['linux_auto_recovery'])
+        self.assertEqual(first._recovery_account(first.backend, first.capture_stop), '')
+        self.assertTrue(second.configuration()['linux_auto_recovery'])
+        with self.assertRaises(PanelError):
+            first.save_configuration({'linux_auto_recovery': 'true'})
+
+    def test_recovery_terminates_only_the_stalled_process_and_keeps_original_result(self):
+        first, second = self.sessions
+        old_backend, panel, capture_stop = first.backend, first.panel, first.capture_stop
+        old_backend.execution_health = Mock(return_value=(11, 95000))
+        panel.state = 'running'
+        panel.start = Mock()
+        request_id = 'synthetic-recovery-request'
+        job = panel.send_jobs[request_id] = {
+            'request_id':request_id, 'session_id':'old-lease', 'status':'sending', 'error':'',
+        }
+        replacement = Backend(first.expected_account)
+        replacement.start = Mock()
+        login = threading.Event()
+        replacement.read_profile = lambda: {'logged_in':login.is_set(), 'wxid':replacement.account}
+        first.backend_factory = Mock(return_value=replacement)
+
+        def terminate(process, *, force=False):
+            self.assertIs(process, old_backend.process)
+            self.assertTrue(force)
+            self.assertTrue(second.backend.process.running)
+            process.running = False
+
+        with (patch.object(first, '_terminate_wechat', side_effect=terminate) as terminate_target,
+              patch.object(capture_stop, 'wait', side_effect=[False, True])):
+            first._watch_recovery(old_backend, capture_stop)
+        terminate_target.assert_called_once_with(old_backend.process, force=True)
+        self.assertIs(first.panel, panel)
+        self.assertEqual(panel.send_status(request_id)['status'], 'unknown')
+        panel._finish_send_job(job, 'sent')
+        self.assertEqual(panel.send_status(request_id)['status'], 'unknown')
+        panel.start.assert_not_called()
+        login.set()
+        self.wait_for(lambda: first.recovery_status == 'restarted')
+        self.assertEqual(replacement.bound, old_backend.account)
+        panel.start.assert_called_once_with()
+        self.assertEqual(old_backend.calls, [])
+        self.assertEqual(replacement.calls, [])
+        self.assertTrue(second.backend.process.running)
+        first.close_wechat()
+
+    def test_recovery_requires_the_same_stalled_operation_and_respects_limits(self):
+        first = self.sessions[0]
+        backend, token = first.backend, first.capture_stop
+        backend.execution_health = Mock(return_value=(12, 95000))
+        with patch.object(first, '_terminate_wechat') as terminate:
+            self.assertFalse(first._recover_stalled(backend, token, 11))
+            self.assertFalse(first._recover_stalled(backend, threading.Event(), 12))
+            backend.execution_health.return_value = (12, 2000)
+            self.assertFalse(first._recover_stalled(backend, token, 12))
+            backend.execution_health.return_value = (12, 95000)
+            now = time.monotonic()
+            first._recovery_attempts[first.expected_account] = [now]
+            self.assertFalse(first._recover_stalled(backend, token, 12))
+            self.assertEqual(first.recovery_status, 'limited')
+            first._recovery_attempts[first.expected_account] = [now - 2400, now - 1800, now - 1200]
+            self.assertFalse(first._recover_stalled(backend, token, 12))
+            first.save_configuration({'linux_auto_recovery':False})
+            first._recovery_attempts.clear()
+            self.assertFalse(first._recover_stalled(backend, token, 12))
+        terminate.assert_not_called()
+
+    def test_forced_recovery_escalates_on_the_same_verified_pidfd(self):
+        owner = self.sessions[0]
+        process = Mock(pid=99999)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired('fixture', 8), 0]
+        with (patch('wxbot_framework.linux_sessions.os.pidfd_open', return_value=17) as open_fd,
+              patch('wxbot_framework.linux_sessions.os.readlink', return_value=str(owner.wechat_path)),
+              patch('wxbot_framework.linux_sessions.signal.pidfd_send_signal') as send_signal,
+              patch('wxbot_framework.linux_sessions.os.close') as close_fd):
+            owner._terminate_wechat(process, force=True)
+        open_fd.assert_called_once_with(process.pid)
+        self.assertEqual(send_signal.call_args_list, [call(17, signal.SIGTERM), call(17, signal.SIGKILL)])
+        self.assertEqual(process.wait.call_args_list, [call(timeout=8), call(timeout=5)])
+        close_fd.assert_called_once_with(17)
 
     def test_upload_snapshots_are_cleaned_only_after_managed_wechat_exits(self):
         owner = self.sessions[0]
