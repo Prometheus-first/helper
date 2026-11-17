@@ -38,6 +38,7 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         cls.events_fixture = cls.directory / "events-fixture"
         cls.cli_fixture = cls.directory / "cli-fixture"
         cls.test_bridge = cls.directory / "fixture-bridge.so"
+        cls.short_io_bridge = cls.directory / "short-io-bridge.so"
         cls.production_bridge = cls.directory / "production-bridge.so"
         cls.failed_bridge = cls.directory / "failed-bridge.so"
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.fixture), str(FIXTURE)], check=True)
@@ -48,6 +49,8 @@ class LinuxNativeBridgeTests(unittest.TestCase):
         subprocess.run(["gcc", "-O2", "-rdynamic", "-fno-builtin", "-o", str(cls.events_fixture), str(ROOT / "tests" / "fixtures" / "linux_events_fixture.c")], check=True)
         common = ["gcc", "-O2", "-fPIC", "-shared", "-pthread"]
         subprocess.run(common + ["-DHELPER_FIXTURE_TEST", "-o", str(cls.test_bridge), str(SOURCE), "-ldl"], check=True)
+        subprocess.run(common + ["-DHELPER_FIXTURE_TEST", "-DHELPER_FIXTURE_IO_WAIT_MS=300",
+                                 "-o", str(cls.short_io_bridge), str(SOURCE), "-ldl"], check=True)
         subprocess.run(common + ["-o", str(cls.production_bridge), str(SOURCE), "-ldl"], check=True)
         subprocess.run(common + ["-DHELPER_FIXTURE_TEST", "-DHELPER_FIXTURE_FAIL_RESTORE", "-o", str(cls.failed_bridge), str(SOURCE), "-ldl"], check=True)
 
@@ -142,6 +145,23 @@ class LinuxNativeBridgeTests(unittest.TestCase):
             out, err = child.communicate(timeout=5)
             self.assertEqual(child.returncode, 0, err)
             self.assertIn("fixture_ok", out)
+    def test_partial_ack_timeout_reconnects_and_retries_same_sequence(self):
+        with LocalEventListener() as listener:
+            child = self._spawn(listener, self.short_io_bridge)
+            with listener.accept(timeout=4) as first:
+                first.settimeout(4)
+                read_bridge_ready(first)
+                event = read_text_event(first)
+                first.sendall(b"\x00")
+                with listener.accept(timeout=4) as second:
+                    second.settimeout(4)
+                    read_bridge_ready(second)
+                    self.assertEqual(read_text_event(second), event)
+                    acknowledge_text_event(second, event["sequence"])
+                self.assertEqual(first.recv(1), b"")
+            _, error = child.communicate(timeout=5)
+            self.assertEqual(child.returncode, 0, error)
+
     def test_stop_ack_disables_further_capture(self):
         with LocalEventListener() as listener:
             child = self._spawn(listener, self.test_bridge, fixture=self.two_fixture)

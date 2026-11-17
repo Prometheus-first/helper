@@ -24,14 +24,66 @@ void fixture_sdk_string(struct str*out,const char*data,size_t n){memset(out,0,24
 void fixture_sdk_delete(void*p){free(p);}
 static const char*raw(const struct str*s){if(s->b[0]&1){char*p;memcpy(&p,s->b+16,8);return p;}return (char*)s->b+1;}
 struct task{struct cb*c;int send;int delay_us;};
-static void*run(void*arg){struct task*t=arg;usleep(t->delay_us);struct str a={0},b={0};const char*reply=t->send==2?"{\"success\":false,\"error_message\":\"fixture rejected\"}":t->send?"{\"success\":true}":"";const char*error=t->send?"":"Parameter 'chat_id' is required and must be a string";fixture_sdk_string(&a,reply,strlen(reply));fixture_sdk_string(&b,error,strlen(error));t->c->invoke(t->c,&a,&b);if(a.b[0]&1)free((void*)raw(&a));if(b.b[0]&1)free((void*)raw(&b));if(atomic_fetch_sub(&t->c->refs,1)==1)t->c->destroy(t->c);free(t);return NULL;}
-void fixture_sdk_send(void*x,const struct str*j,const struct str*r,struct cb**c){(void)x;if(!in_context)abort();if(strcmp(raw(r),"helper-linux-test"))abort();struct task*t=calloc(1,sizeof(*t));if(strstr(raw(j),"FORCE_EOF"))_exit(0);t->send=strstr(raw(j),"NATIVE_REJECT")?2:(strstr(raw(j),"\"chat_id\"")&&(strstr(raw(j),"\"content\"")||strstr(raw(j),"\"content_xml\"")))!=0;t->delay_us=(strstr(raw(j),"CALLBACK_DELAY")||strstr(raw(j),"LATE_CALLBACK_FIXTURE"))?180000:10000;t->c=*c;*c=NULL;atomic_fetch_add(&requests,1);pthread_t p;if(pthread_create(&p,NULL,run,t))abort();pthread_detach(p);}
+static _Atomic(struct cb*) held_callback;
+static void complete_callback(struct cb*c,int send){
+ struct str a={0},b={0};
+ const char*reply=send==2?"{\"success\":false,\"error_message\":\"fixture rejected\"}":send?"{\"success\":true}":"";
+ const char*error=send?"":"Parameter 'chat_id' is required and must be a string";
+ fixture_sdk_string(&a,reply,strlen(reply));fixture_sdk_string(&b,error,strlen(error));
+ c->invoke(c,&a,&b);
+ if(a.b[0]&1)free((void*)raw(&a));
+ if(b.b[0]&1)free((void*)raw(&b));
+ if(atomic_fetch_sub(&c->refs,1)==1)c->destroy(c);
+}
+static void*run(void*arg){
+ struct task*t=arg;usleep(t->delay_us);complete_callback(t->c,t->send);free(t);return NULL;
+}
+void fixture_sdk_send(void*x,const struct str*j,const struct str*r,struct cb**c){
+ (void)x;
+ if(!in_context||strcmp(raw(r),"helper-linux-test"))abort();
+ const char*body=raw(j);
+ atomic_fetch_add(&requests,1);
+ if(strstr(body,"FORCE_EOF"))_exit(0);
+ if(strstr(body,"EXPIRED_QUEUED_FIXTURE")||strstr(body,"MUST_NOT_BE_SUBMITTED"))abort();
+ if(strstr(body,"NEVER_CALLBACK_FIXTURE")){
+  static atomic_int never_callback_calls;
+  if(atomic_fetch_add(&never_callback_calls,1))abort();
+  return;
+ }
+ if(strstr(body,"HOLD_CALLBACK_FIXTURE")){
+  if(atomic_exchange(&held_callback,*c))abort();
+  *c=NULL;return;
+ }
+ if(strstr(body,"RELEASE_CALLBACK_FIXTURE")){
+  struct cb*late=atomic_exchange(&held_callback,NULL);
+  if(!late)abort();
+  complete_callback(late,1);
+ }
+ if(strstr(body,"BLOCK_NATIVE_FIXTURE"))usleep(900000);
+ struct task*t=calloc(1,sizeof(*t));
+ if(!t)abort();
+ t->send=strstr(body,"NATIVE_REJECT")?2:(strstr(body,"\"chat_id\"")&&(strstr(body,"\"content\"")||strstr(body,"\"content_xml\"")))!=0;
+ t->delay_us=(strstr(body,"CALLBACK_DELAY")||strstr(body,"LATE_CALLBACK_FIXTURE"))?180000:10000;
+ t->c=*c;*c=NULL;
+ pthread_t p;if(pthread_create(&p,NULL,run,t))abort();pthread_detach(p);
+}
 void fixture_sdk_send_generic(void*x,const struct str*j,const struct str*r,struct cb**c){if(!strstr(raw(j),"message_type"))abort();fixture_sdk_send(x,j,r,c);}
 struct function{_Alignas(16) unsigned char storage[32];void*callable;};
 struct callable{void**v;char operation;};
 struct shared{void*a,*b;};
 static void*dispatch_run(void*p){struct callable*c=p;in_context=1;((void(*)(void*))c->v[6])(c);in_context=0;((void(*)(void*))c->v[5])(c);return NULL;}
-void fixture_sdk_dispatch(struct shared*out,void*queue,const void*source,struct function*fn,int kind){(void)queue;(void)source;if(kind!=1)abort();struct callable*c=fn->callable;struct callable*copy=((struct callable*(*)(void*))c->v[2])(c);fn->callable=NULL;((void(*)(void*))c->v[5])(c);out->a=NULL;out->b=NULL;pthread_t t;if(pthread_create(&t,NULL,dispatch_run,copy))abort();pthread_detach(t);}
+static void*dispatch_deferred(void*p){usleep(900000);return dispatch_run(p);}
+void fixture_sdk_dispatch(struct shared*out,void*queue,const void*source,struct function*fn,int kind){
+ (void)queue;(void)source;if(kind!=1)abort();
+ struct callable*c=fn->callable;
+ struct callable*copy=((struct callable*(*)(void*))c->v[2])(c);
+ fn->callable=NULL;((void(*)(void*))c->v[5])(c);out->a=NULL;out->b=NULL;
+ void*(*invoke)(void*)=dispatch_run;
+ static atomic_int dispatches;
+ if(getenv("HELPER_FIXTURE_DEFER_SECOND_DISPATCH")&&atomic_fetch_add(&dispatches,1)==1)
+  invoke=dispatch_deferred;
+ pthread_t t;if(pthread_create(&t,NULL,invoke,copy))abort();pthread_detach(t);
+}
 int fixture_sdk_media(char type,const char*target,const char*path){
  if(!in_context)abort();
  if(type!='I'&&type!='F'&&type!='O')return 0;

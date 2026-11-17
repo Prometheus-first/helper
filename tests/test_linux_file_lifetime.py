@@ -88,6 +88,13 @@ class LinuxFileLifetimeTests(unittest.TestCase):
         self.assertTrue(pending[0].exists())
         self.assertEqual(len(list(self.sender._directory.glob('file-*/*'))), 2)
 
+    def test_native_busy_does_not_count_unsubmitted_snapshot(self):
+        with patch.object(self.sender, '_request', return_value={'attempted': False, 'error': 'native busy'}):
+            with self.assertRaisesRegex(LinuxSendError, 'native busy'):
+                self.sender.send_file('123@chatroom', self.source)
+        self.assertEqual(self.sender._retained_files, {})
+        self.assertEqual(list(self.sender._directory.glob('file-*')), [])
+
     def test_close_does_not_remove_input_until_native_process_is_gone(self):
         with patch.object(self.sender, '_request', return_value=self.response()):
             self.sender.send_file('123@chatroom', self.source)

@@ -9,6 +9,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -367,6 +368,30 @@ class PanelTests(unittest.TestCase):
         self.assertTrue(config['llm']['api_key_configured'])
         self.assertNotIn('fixture-secret-value', json.dumps(config))
 
+    def test_send_worker_start_failure_releases_job(self):
+        self.start_identified()
+        first = dict(chat_id='wxid_friend_fixture', content='fixture text',
+                     session_id='linux-fixture-session', request_id='fixture-thread-send-01')
+        with patch('wxbot_framework.web_panel.threading.Thread.start', side_effect=RuntimeError):
+            result = self.controller.send_text(first)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(self.instances[0].calls, [])
+        second = dict(first, request_id='fixture-thread-send-02')
+        self.controller.send_text(second)
+        wait_for(lambda: self.controller.send_status(second['request_id'])['status'] == 'sent')
+
+    def test_old_connection_send_cannot_block_or_resolve_new_job(self):
+        self.start_identified()
+        old = dict(request_id='fixture-old-connection', session_id='previous-session',
+                   status='sending', error='')
+        self.controller.send_jobs[old['request_id']] = old
+        new = dict(chat_id='wxid_friend_fixture', content='fixture text',
+                   session_id='linux-fixture-session', request_id='fixture-new-connection')
+        self.controller.send_text(new)
+        wait_for(lambda: self.controller.send_status(new['request_id'])['status'] == 'sent')
+        self.controller._finish_send_job(old, 'sent')
+        self.assertEqual(self.controller.send_status(old['request_id'])['status'], 'unknown')
+
     def test_file_send_is_deduplicated_and_stale_session_rejected(self):
         self.start_identified()
         path = self.root / 'file.txt'
@@ -670,6 +695,16 @@ class PanelTests(unittest.TestCase):
         result = self.controller.emoticon_export_status(data['request_id'])
         self.assertEqual(result['status'], 'cancelled')
         self.assertNotIn('result', result)
+
+    def test_export_worker_start_failure_releases_job(self):
+        _, calls, data = self.prepare_emoticon_export()
+        with patch('wxbot_framework.linux_panel.threading.Thread.start', side_effect=RuntimeError):
+            result = self.controller.export_emoticons(data)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(calls, [])
+        next_data = dict(data, request_id='fixture-emoticon-export-02')
+        self.controller.export_emoticons(next_data)
+        wait_for(lambda: self.controller.emoticon_export_status(next_data['request_id'])['status'] == 'done')
 
     def test_emoticon_export_never_returns_exception_secrets(self):
         def failure():

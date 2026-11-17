@@ -1,14 +1,16 @@
 """定时任务的持久化、账号隔离和不补发行为。"""
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from wxbot_framework.panel_common import PanelError
 from wxbot_framework.scheduled_tasks import ScheduledTasks, next_time
 from wxbot_framework.scheduled_actions import BUILTIN, actions_from_manifest
-from wxbot_framework.web_panel import atomic_json, read_json
+from wxbot_framework.web_panel import PanelController, atomic_json, read_json
 
 
 class Store:
@@ -56,6 +58,18 @@ class ScheduledTests(unittest.TestCase):
         row = self.scheduler.list()['tasks'][0]
         self.assertEqual((row['last_status'], row['next_run']), ('已发送', 1600))
         self.assertEqual(read_json(self.scheduler.path)['tasks'][0]['next_run'], 1600)
+
+    def test_worker_start_failure_releases_claim_and_slot(self):
+        task = self.create()
+        with patch('wxbot_framework.scheduled_tasks.time.time', return_value=1300), \
+                patch('wxbot_framework.scheduled_tasks.threading.Thread.start', side_effect=RuntimeError):
+            self.scheduler.tick()
+        row, = self.scheduler.list()['tasks']
+        self.assertNotIn('claim', row)
+        self.assertNotIn(task['id'], self.scheduler.inflight)
+        self.assertIn('任务线程未能启动', row['last_status'])
+        self.scheduler.tick(1600)
+        self.assertEqual(len(self.controller.sent), 1)
 
     def test_late_or_disconnected_does_not_catch_up(self):
         self.create()
@@ -120,6 +134,34 @@ class ScheduledTests(unittest.TestCase):
         self.controller.scheduled_action_types = lambda: {'actions':[BUILTIN]}
         self.scheduler.toggle({'id':task['id'], 'enabled':False})
         self.assertFalse(self.scheduler.list()['tasks'][0]['enabled'])
+
+    def test_scheduled_delivery_guard_does_not_take_panel_lock(self):
+        panel = PanelController.__new__(PanelController)
+        panel.lock, panel.state = threading.RLock(), 'running'
+        entered, proceed, completed = (threading.Event() for _ in range(3))
+        result = []
+
+        def execute(_id, _params, _session, _allowed, valid):
+            entered.set()
+            if proceed.wait(2):
+                result.append(valid())
+            completed.set()
+
+        panel.app = SimpleNamespace(_connection_ready=True, config={'wechat_account': 'wxid_test'},
+            stop_event=threading.Event(), backend=SimpleNamespace(session_id='fixture'),
+            plugins=SimpleNamespace(run_scheduled=execute))
+        worker = threading.Thread(target=panel.execute_scheduled_plugin,
+            args=('plugin.fixture.action', {}, 'fixture', 'wxid_test', lambda: True), daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            with panel.lock:
+                proceed.set()
+                self.assertTrue(completed.wait(2))
+            self.assertEqual(result, [True])
+        finally:
+            proceed.set()
+            worker.join(3)
 
     def test_running_task_never_overlaps_itself(self):
         task = self.create()

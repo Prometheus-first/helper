@@ -49,7 +49,14 @@ static int main_build(struct dl_phdr_info *info,size_t size,void *data){
 }
 
 struct sdk_string { unsigned char bytes[24]; };
-struct sdk_callback { atomic_int refs; uint32_t pad; void (*invoke)(struct sdk_callback*,const struct sdk_string*,const struct sdk_string*); void (*destroy)(struct sdk_callback*); int (*check)(void*,int); };
+struct sdk_callback {
+ atomic_int refs;
+ uint32_t pad;
+ void (*invoke)(struct sdk_callback*,const struct sdk_string*,const struct sdk_string*);
+ void (*destroy)(struct sdk_callback*);
+ int (*check)(void*,int);
+ uint64_t request_id; /* Stored after the native callback fields. */
+};
 _Static_assert(offsetof(struct sdk_callback,invoke)==8,"invoke ABI");
 _Static_assert(offsetof(struct sdk_callback,destroy)==16,"destroy ABI");
 _Static_assert(sizeof(struct sdk_string)==24,"string ABI");
@@ -60,7 +67,15 @@ static atomic_int sdk_context_verified;
 static int sdk_listener=-1;static pid_t sdk_parent;
 static pthread_mutex_t sdk_mutex=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t sdk_cond=PTHREAD_COND_INITIALIZER;
-static int sdk_done,sdk_running;static char sdk_result[8192],sdk_error[2048],sdk_path[108];
+/* The socket waits for one request. A running native task remains serialized
+ * even after its caller's deadline; a completed task does not hold that slot. */
+enum sdk_task_state { SDK_IDLE, SDK_QUEUED, SDK_EXECUTING, SDK_RETURNED };
+static enum sdk_task_state sdk_state;
+static uint64_t sdk_request_sequence,sdk_waiting_request;
+static int sdk_done;
+static char sdk_result[8192],sdk_error[2048],sdk_path[108];
+static const char sdk_busy_response[]=
+ "{\"attempted\":false,\"error\":\"previous native operation still executing\"}\n";
 static size_t sdk_copy(char*out,size_t cap,const struct sdk_string*s){
  unsigned char h[24];if(!s||!rd(h,s,sizeof(h)))return 0;
  size_t n;uintptr_t p;if(h[0]&1){memcpy(&n,h+8,8);memcpy(&p,h+16,8);}else{n=h[0]>>1;p=(uintptr_t)s+1;if(n>22)return 0;}
@@ -70,9 +85,14 @@ static size_t sdk_copy(char*out,size_t cap,const struct sdk_string*s){
 static void sdk_cb_destroy(struct sdk_callback*c){free(c);}
 static int sdk_cb_check(void*x,int v){(void)x;return v!=0;}
 static void sdk_cb_invoke(struct sdk_callback*c,const struct sdk_string*a,const struct sdk_string*b){
- (void)c;pthread_mutex_lock(&sdk_mutex);
- sdk_copy(sdk_result,sizeof(sdk_result),a);sdk_copy(sdk_error,sizeof(sdk_error),b);sdk_done=1;
- pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
+ pthread_mutex_lock(&sdk_mutex);
+ if(c->request_id==sdk_waiting_request&&!sdk_done){
+  sdk_copy(sdk_result,sizeof(sdk_result),a);
+  sdk_copy(sdk_error,sizeof(sdk_error),b);
+  sdk_done=1;
+  pthread_cond_broadcast(&sdk_cond);
+ }
+ pthread_mutex_unlock(&sdk_mutex);
 }
 #ifndef SDK_FIXTURE
 static uintptr_t sdk_base;
@@ -106,13 +126,23 @@ static void sdk_string_destroy(struct sdk_string*s){if(s->bytes[0]&1){void*p=NUL
 static void sdk_write(int fd,const char*s){size_t n=strlen(s);while(n){ssize_t k=send(fd,s,n,MSG_NOSIGNAL);if(k<0){if(errno==EINTR)continue;break;}if(!k)break;s+=k;n-=k;}}
 static void sdk_escape(char*out,size_t cap,const char*s){size_t n=0;for(;*s&&n+7<cap;s++){unsigned char c=(unsigned char)*s;if(c=='"'||c=='\\'){out[n++]='\\';out[n++]=(char)c;}else if(c<32){int k=snprintf(out+n,cap-n,"\\u%04x",c);n+=(size_t)k;}else out[n++]=(char)c;}out[n]=0;}
 struct sdk_function { _Alignas(16) unsigned char storage[32]; void *callable; };
-struct sdk_payload { atomic_uint refs; char operation; char *json; };
+struct sdk_payload { atomic_uint refs; char operation; char *json; uint64_t request_id; };
 struct sdk_callable { void **vtable; struct sdk_payload *payload; };
 struct sdk_source { const char *file; const char *function; uint32_t line,pad; const void *pc; };
 struct sdk_shared { void *object; void *control; };
-static void sdk_finish_error(const char*msg){
- pthread_mutex_lock(&sdk_mutex);snprintf(sdk_error,sizeof(sdk_error),"%s",msg);sdk_result[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
+/* Synchronous completions belong to the currently executing task, or to
+ * the socket thread if scheduling failed. Neither can overlap a new waiter. */
+static void sdk_finish(const char*result,const char*error){
+ pthread_mutex_lock(&sdk_mutex);
+ if(sdk_waiting_request&&!sdk_done){
+  snprintf(sdk_result,sizeof(sdk_result),"%s",result);
+  snprintf(sdk_error,sizeof(sdk_error),"%s",error);
+  sdk_done=1;
+  pthread_cond_broadcast(&sdk_cond);
+ }
+ pthread_mutex_unlock(&sdk_mutex);
 }
+static void sdk_finish_error(const char*msg){sdk_finish("",msg);}
 static int sdk_has_coroutine(void){
 #ifdef SDK_FIXTURE
  int(*check)(void)=(int(*)(void))dlsym(RTLD_DEFAULT,"fixture_sdk_context");return check&&check();
@@ -122,7 +152,7 @@ static int sdk_has_coroutine(void){
 #endif
 }
 static void sdk_release(struct sdk_shared*s);
-static void sdk_finish_success(void){pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);}
+static void sdk_finish_success(void){sdk_finish("{\"success\":true}","");}
 struct native_media_status {uint32_t error_type,error_code;struct sdk_string error;void *object,*control;};
 _Static_assert(sizeof(struct native_media_status)==48,"send result ABI");
 static int unhex(char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;return -1;}
@@ -641,8 +671,9 @@ static int sdk_scope_target(const char*value){
  const char*at=strchr(value,'@');return !at||(at!=value&&!strcmp(at,"@chatroom"));
 }
 static void sdk_scope_success(uint64_t generation){
- pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"scope_generation\":%"PRIu64"}",generation);
- sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
+ char result[96];
+ snprintf(result,sizeof(result),"{\"success\":true,\"scope_generation\":%"PRIu64"}",generation);
+ sdk_finish(result,"");
 }
 static void sdk_perform_image_scope(const char*payload,int voice_test,int multi){
  if(!sdk_download_hook_ready){sdk_finish_error("native image context capture unavailable");return;}
@@ -733,9 +764,9 @@ static void sdk_perform_message_download(const char*payload,int voice_test){
  if(!ok){char error[160];snprintf(error,sizeof(error),"native message image download failed: type=%u code=%d",errors[0],(int32_t)errors[1]);sdk_finish_error(error);return;}
 #endif
  if(!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed during download");return;}
- pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_completed\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);
+ sdk_finish("{\"success\":true,\"native_completed\":true}","");
 }
-static void sdk_perform(char operation,const char *json_body){
+static void sdk_perform(char operation,const char *json_body,uint64_t request_id){
  if((operation=='M'||operation=='O'||operation=='W'||operation=='R')&&!sdk_expected_account[0]){sdk_finish_error("bind the logged-in account before mention, emoticon, voice or video send");return;}
  if((operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R')&&sdk_expected_account[0]){
   char account[128],name[512];if(!sdk_profile(account,name)||strcmp(account,sdk_expected_account)){
@@ -750,7 +781,8 @@ static void sdk_perform(char operation,const char *json_body){
  if(operation=='R'){sdk_perform_video(json_body);return;}
  if(operation=='T'){
   pthread_mutex_lock(&sdk_image_mutex);int available=atomic_load(&sdk_voice_capture_enabled)&&sdk_voice_context.object;pthread_mutex_unlock(&sdk_image_mutex);
-  pthread_mutex_lock(&sdk_mutex);snprintf(sdk_result,sizeof(sdk_result),"{\"success\":true,\"available\":%s}",available?"true":"false");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
+  sdk_finish(available?"{\"success\":true,\"available\":true}":"{\"success\":true,\"available\":false}","");
+  return;
  }
  if(operation=='A'||operation=='B'||operation=='C'){sdk_perform_image_scope(json_body,operation=='B',operation=='C');return;}
  if(operation=='K'){
@@ -761,12 +793,14 @@ static void sdk_perform(char operation,const char *json_body){
   int available=active&&sdk_get_image_context(md5,generation,NULL);
   if(active&&!sdk_image_scope_current(generation)){sdk_finish_error("image scope or account changed");return;}
   snprintf(result,sizeof(result),"{\"success\":true,\"available\":%s,\"scoped_seen\":%u,\"cached\":%u}",available?"true":"false",atomic_load(&sdk_image_scoped_seen),atomic_load(&sdk_image_cached_total));
-  pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,result);sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
+  sdk_finish(result,"");return;
  }
  if(operation=='D'||operation=='U'){sdk_perform_message_download(json_body,operation=='U');return;}
  if(operation=='I'||operation=='F'||operation=='O'){sdk_perform_media(operation,json_body);return;}
  if(operation=='N'){
-  atomic_store(&sdk_context_verified,1);pthread_mutex_lock(&sdk_mutex);strcpy(sdk_result,"{\"success\":true,\"native_coroutine\":true}");sdk_error[0]=0;sdk_done=1;pthread_cond_broadcast(&sdk_cond);pthread_mutex_unlock(&sdk_mutex);return;
+  atomic_store(&sdk_context_verified,1);
+  sdk_finish("{\"success\":true,\"native_coroutine\":true}","");
+  return;
  }
  struct sdk_string json={0},request={0};
  const char*body=operation=='V'?"{}":json_body;
@@ -774,6 +808,7 @@ static void sdk_perform(char operation,const char *json_body){
  struct sdk_callback*cb=calloc(1,sizeof(*cb));
  if(!cb){sdk_string_destroy(&json);sdk_string_destroy(&request);sdk_finish_error("allocation failed");return;}
  atomic_init(&cb->refs,1);cb->invoke=sdk_cb_invoke;cb->destroy=sdk_cb_destroy;cb->check=sdk_cb_check;
+ cb->request_id=request_id;
  (operation=='G'?sdk_send_generic:sdk_send)(NULL,&json,&request,&cb);
  if(cb&&atomic_fetch_sub(&cb->refs,1)==1)cb->destroy(cb);
  sdk_string_destroy(&json);sdk_string_destroy(&request);
@@ -782,7 +817,21 @@ static void sdk_task_destroy(struct sdk_callable*t){if(t->payload&&atomic_fetch_
 static void sdk_task_delete(struct sdk_callable*t){sdk_task_destroy(t);free(t);}
 static struct sdk_callable*sdk_task_clone(struct sdk_callable*t){struct sdk_callable*n=malloc(sizeof(*n));if(n){*n=*t;if(n->payload)atomic_fetch_add(&n->payload->refs,1);}return n;}
 static void sdk_task_clone_into(struct sdk_callable*t,void*dst){memcpy(dst,t,sizeof(*t));if(t->payload)atomic_fetch_add(&t->payload->refs,1);}
-static void sdk_task_invoke(struct sdk_callable*t){sdk_perform(t->payload->operation,t->payload->json);}
+static void sdk_task_invoke(struct sdk_callable*t){
+ struct sdk_payload*payload=t->payload;
+ pthread_mutex_lock(&sdk_mutex);
+ if(payload->request_id!=sdk_waiting_request||sdk_state!=SDK_QUEUED||sdk_done){
+  pthread_mutex_unlock(&sdk_mutex);
+  return;
+ }
+ sdk_state=SDK_EXECUTING;
+ pthread_mutex_unlock(&sdk_mutex);
+ sdk_perform(payload->operation,payload->json,payload->request_id);
+ pthread_mutex_lock(&sdk_mutex);
+ sdk_state=sdk_waiting_request==payload->request_id?SDK_RETURNED:SDK_IDLE;
+ pthread_cond_broadcast(&sdk_cond);
+ pthread_mutex_unlock(&sdk_mutex);
+}
 static void*sdk_task_target(struct sdk_callable*t,const void*type){(void)t;(void)type;return NULL;}
 static const void*sdk_task_type(struct sdk_callable*t){(void)t;return NULL;}
 static void*sdk_task_vtable[]={sdk_task_destroy,sdk_task_delete,sdk_task_clone,sdk_task_clone_into,sdk_task_destroy,sdk_task_delete,sdk_task_invoke,sdk_task_target,sdk_task_type};
@@ -795,10 +844,11 @@ static void sdk_release(struct sdk_shared*s){
 #endif
 }}memset(s,0,sizeof(*s));
 }
-static void sdk_schedule(char operation,const char *json){
+static void sdk_schedule(char operation,const char *json,uint64_t request_id){
  struct sdk_callable*t=calloc(1,sizeof(*t));if(!t){sdk_finish_error("allocation failed");return;}t->vtable=sdk_task_vtable;t->payload=calloc(1,sizeof(*t->payload));
  if(!t->payload){free(t);sdk_finish_error("allocation failed");return;}
  atomic_init(&t->payload->refs,1);t->payload->operation=operation;t->payload->json=strdup(json?json:"{}");
+ t->payload->request_id=request_id;
  if(!t->payload->json){free(t->payload);free(t);sdk_finish_error("allocation failed");return;}
  struct sdk_function fn={0};fn.callable=t;
  struct sdk_source source={"helper_linux_native.c","sdk_schedule",1,0,sdk_schedule};
@@ -821,21 +871,42 @@ static void sdk_handle(int client,char operation,const char *json){
  if(operation!='Y'&&operation!='V'&&operation!='W'&&operation!='R'&&operation!='M'&&operation!='S'&&operation!='N'&&operation!='G'&&operation!='I'&&operation!='F'&&operation!='O'&&operation!='D'&&operation!='A'&&operation!='B'&&operation!='C'&&operation!='T'&&operation!='U'&&operation!='K'){sdk_write(client,"{\"error\":\"unsupported command\"}\n");return;}
  if((operation=='Y'||operation=='S'||operation=='M'||operation=='G'||operation=='I'||operation=='F'||operation=='O'||operation=='W'||operation=='R'||operation=='D'||operation=='U')&&!atomic_load(&sdk_context_verified)){sdk_write(client,"{\"error\":\"native context has not passed the dry run\"}\n");return;}
  pthread_mutex_lock(&sdk_mutex);
- /* A timed-out caller does not retry; a completed late callback must not block later work. */
- if(sdk_running&&sdk_done)sdk_running=0;
- if(sdk_running){pthread_mutex_unlock(&sdk_mutex);sdk_write(client,"{\"error\":\"previous callback pending\"}\n");return;}
- sdk_done=0;sdk_running=1;sdk_result[0]=0;sdk_error[0]=0;pthread_mutex_unlock(&sdk_mutex);
- sdk_schedule(operation,json);
+ if(sdk_state==SDK_EXECUTING){
+  pthread_mutex_unlock(&sdk_mutex);
+  sdk_write(client,sdk_busy_response);
+  return;
+ }
+ uint64_t request_id=++sdk_request_sequence;
+ if(!request_id)request_id=++sdk_request_sequence;
+ sdk_waiting_request=request_id;
+ sdk_state=SDK_QUEUED;sdk_done=0;sdk_result[0]=sdk_error[0]=0;
+ pthread_mutex_unlock(&sdk_mutex);
+ sdk_schedule(operation,json,request_id);
  pthread_mutex_lock(&sdk_mutex);
- struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
+ struct timespec until;clock_gettime(CLOCK_MONOTONIC,&until);
 #ifdef HELPER_FIXTURE_WAIT_MS
  until.tv_sec+=HELPER_FIXTURE_WAIT_MS/1000;until.tv_nsec+=(HELPER_FIXTURE_WAIT_MS%1000)*1000000L;
  if(until.tv_nsec>=1000000000L){until.tv_sec++;until.tv_nsec-=1000000000L;}
 #else
  until.tv_sec+=45;
 #endif
- while(!sdk_done){int rc=pthread_cond_timedwait(&sdk_cond,&sdk_mutex,&until);if(rc==ETIMEDOUT)break;}
- char result[50000];if(sdk_done){char a[32768],b[8192];sdk_escape(a,sizeof(a),sdk_result);sdk_escape(b,sizeof(b),sdk_error);snprintf(result,sizeof(result),"{\"callback\":true,\"result\":\"%s\",\"error\":\"%s\"}\n",a,b);sdk_running=0;}else snprintf(result,sizeof(result),"{\"callback\":false,\"pending\":true}\n");
+ while(!sdk_done||sdk_state==SDK_EXECUTING){
+  if(pthread_cond_clockwait(&sdk_cond,&sdk_mutex,CLOCK_MONOTONIC,&until))break;
+ }
+ char result[50000];
+ if(sdk_done){
+  char a[32768],b[8192];
+  sdk_escape(a,sizeof(a),sdk_result);sdk_escape(b,sizeof(b),sdk_error);
+  snprintf(result,sizeof(result),"{\"callback\":true,\"result\":\"%s\",\"error\":\"%s\"}\n",a,b);
+ }else if(sdk_state==SDK_QUEUED){
+  strcpy(result,"{\"attempted\":false,\"error\":\"native operation expired before dispatch\"}\n");
+ }else{
+  strcpy(result,"{\"callback\":false,\"pending\":true}\n");
+ }
+ /* Retire the waiter before accepting another request. Late callbacks and
+  * tasks that never started are tied to this retired request ID. */
+ sdk_waiting_request=0;
+ if(sdk_state!=SDK_EXECUTING)sdk_state=SDK_IDLE;
  pthread_mutex_unlock(&sdk_mutex);sdk_write(client,result);
 }
 static int sdk_read(int fd,void*out,size_t n){unsigned char*p=out;while(n){ssize_t k=recv(fd,p,n,0);if(k<=0){if(k<0&&errno==EINTR)continue;return 0;}p+=k;n-=(size_t)k;}return 1;}
@@ -848,6 +919,7 @@ static void*sdk_serve(void*unused){
   struct ucred peer={0};socklen_t size=sizeof(peer);
   if(getsockopt(c,SOL_SOCKET,SO_PEERCRED,&peer,&size)||peer.pid!=sdk_parent||peer.uid!=geteuid()){close(c);continue;}
   struct timeval timeout={5,0};setsockopt(c,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+  setsockopt(c,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
   char op=0;if(recv(c,&op,1,0)==1){
    if(op=='Q'){sdk_clear_image_scope(0,1);sdk_write(c,"{\"stopped\":true}\n");close(c);break;}
    if(op=='P'){
@@ -865,10 +937,10 @@ static void*sdk_serve(void*unused){
      }else if(op=='E'){
       char account[128],name[512];
       if(n<128&&sdk_profile(account,name)&&!strcmp(account,body)){
-       pthread_mutex_lock(&sdk_mutex);int busy=sdk_running&&!sdk_done;
+       pthread_mutex_lock(&sdk_mutex);int busy=sdk_state==SDK_EXECUTING;
        if(!busy)memcpy(sdk_expected_account,body,n+1);
        pthread_mutex_unlock(&sdk_mutex);
-       if(busy)sdk_write(c,"{\"error\":\"previous callback pending\"}\n");else sdk_write(c,"{\"callback\":true,\"result\":\"{\\\"success\\\":true}\",\"error\":\"\"}\n");
+       if(busy)sdk_write(c,sdk_busy_response);else sdk_write(c,"{\"callback\":true,\"result\":\"{\\\"success\\\":true}\",\"error\":\"\"}\n");
       }else sdk_write(c,"{\"error\":\"account is not logged in\"}\n");
      }else sdk_handle(c,op,body);
     }else sdk_write(c,"{\"error\":\"NUL in JSON request\"}\n");}}}

@@ -25,6 +25,7 @@ class LinuxSenderTests(unittest.TestCase):
         cls.fixture = cls.dir / "fixture"
         cls.bridge = cls.dir / "send.so"
         cls.production = cls.dir / "production.so"
+        cls.short_wait_bridge = cls.dir / "short_wait.so"
         cls.recv = cls.dir / "receive.so"
         cls.combined = cls.dir / "combined"
         source = ROOT / "native/linux/send_bridge.c"
@@ -34,6 +35,8 @@ class LinuxSenderTests(unittest.TestCase):
         shared = flags + ["-fPIC", "-shared", "-pthread"]
         subprocess.run(shared + ["-DSDK_FIXTURE", "-Wno-unused-function", str(source), "-ldl", "-o", str(cls.bridge)], check=True)
         subprocess.run(shared + [str(source), "-ldl", "-o", str(cls.production)], check=True)
+        subprocess.run(shared + ["-DSDK_FIXTURE", "-DHELPER_FIXTURE_WAIT_MS=200",
+                        "-Wno-unused-function", str(source), "-ldl", "-o", str(cls.short_wait_bridge)], check=True)
         subprocess.run(["gcc", "-O2", "-fPIC", "-shared", "-pthread", "-DHELPER_FIXTURE_TEST",
                         str(ROOT / "native/linux/text_bridge.c"), "-ldl", "-o", str(cls.recv)], check=True)
         obj = cls.dir / "send_fixture.o"
@@ -190,6 +193,58 @@ class LinuxSenderTests(unittest.TestCase):
             sender.send_text("filehelper", "CALLBACK_DELAY")
         time.sleep(0.15)
         self.assertIsNone(child.poll())
+
+    def test_missing_native_callback_releases_slot_without_retry(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge)
+        sender.wait_ready(process=child)
+        sender.ensure_context()
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_text("filehelper", "NEVER_CALLBACK_FIXTURE")
+        self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
+        self.assertIsNone(child.poll())
+
+    def test_late_callback_does_not_complete_the_next_send(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge)
+        sender.wait_ready(process=child)
+        sender.ensure_context()
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_text("filehelper", "HOLD_CALLBACK_FIXTURE")
+        with self.assertRaisesRegex(LinuxSendError, "fixture rejected") as error:
+            sender.send_text("filehelper", "RELEASE_CALLBACK_FIXTURE NATIVE_REJECT")
+        self.assertNotIsInstance(error.exception, LinuxSendIndeterminate)
+        self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
+
+    def test_expired_queued_task_is_not_executed_later(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge,
+                                   extra_env={"HELPER_FIXTURE_DEFER_SECOND_DISPATCH": "1"})
+        sender.wait_ready(process=child)
+        sender.ensure_context()
+        with self.assertRaisesRegex(LinuxSendError, "expired before dispatch") as error:
+            sender.send_text("filehelper", "EXPIRED_QUEUED_FIXTURE")
+        self.assertNotIsInstance(error.exception, LinuxSendIndeterminate)
+        self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
+        time.sleep(.9)
+        self.assertIsNone(child.poll())
+
+    def test_timeout_does_not_start_another_call_while_native_code_is_running(self):
+        sender, child = self.spawn(bridge=self.short_wait_bridge)
+        sender.wait_ready(process=child)
+        sender.ensure_context()
+        with self.assertRaises(LinuxSendIndeterminate):
+            sender.send_text("filehelper", "BLOCK_NATIVE_FIXTURE")
+        with self.assertRaisesRegex(LinuxSendError, "previous native operation") as error:
+            sender.send_text("filehelper", "MUST_NOT_BE_SUBMITTED")
+        self.assertNotIsInstance(error.exception, LinuxSendIndeterminate)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                sender.ensure_context()
+                break
+            except LinuxSendError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(.02)
+        self.assertTrue(sender.send_text("filehelper", "NEXT_REQUEST"))
 
     def test_close_disables_sender_and_keeps_client_running(self):
         sender, child = self.spawn()

@@ -152,21 +152,27 @@ class LinuxVoiceSendTests(unittest.TestCase):
             sender.send_voice('123@chatroom', self.voice)
         self.assertFalse(report.exists())
 
-    def test_indeterminate_retains_snapshot_and_blocks_retry(self):
+    def test_indeterminate_retains_snapshot_and_allows_other_chat(self):
         sender, _, report = self.spawn(mode='delay', timeout=.03)
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_voice('123@chatroom', self.voice)
-        self.assertEqual(sender._pending_voice.read_bytes(), self.data)
+        snapshot, = sender._retained_files
+        self.assertEqual(snapshot.read_bytes(), self.data)
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_voice('123@chatroom', self.voice)
         time.sleep(.25)
         self.assertEqual(report.read_bytes(), b'123@chatroom\n40\n' + self.data)
+        sender.allowed_targets |= {'456@chatroom'}
+        sender.timeout = 2
+        self.assertTrue(sender.send_voice('456@chatroom', self.voice))
+        self.assertEqual(report.read_bytes(), b'456@chatroom\n40\n' + self.data)
+        self.assertEqual(snapshot.read_bytes(), self.data)
 
     def test_reject_does_not_report_success(self):
         sender, _, _ = self.spawn(mode='reject')
         with self.assertRaisesRegex(LinuxSendError, 'rejected'):
             sender.send_voice('123@chatroom', self.voice)
-        self.assertIsNone(sender._pending_voice)
+        self.assertEqual(sender._retained_files, {})
         self.assertEqual(list(sender._directory.glob('voice-*')), [])
 
     def test_native_dry_run_guard(self):

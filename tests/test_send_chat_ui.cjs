@@ -326,3 +326,35 @@ test('Linux 表情导出失败与空缓存结果在刷新按钮状态后仍可�
   scope.resetEmoticonExport();scope.renderEmoticonExport();
   assert.match($('#emoticon-export-status').textContent,/仅导出已缓存/);
 });
+
+test('发送记录消失时退出等待，保留正文且不重新提交', async () => {
+  let attempts=0;
+  const {scope,$}=fixture(async endpoint=>{
+    attempts++;
+    assert.match(endpoint,/^send-status/);
+    const error=new Error('发送记录已失效');error.status=404;throw error;
+  },true);
+  scope.pendingSend={id:'fixture-send-123',robot:'a',accepted:true,lastConfirmed:Date.now()};
+  $('#send-content').value='先在微信核对的正文';
+  await scope.pollSendStatus();
+  assert.equal(scope.pendingSend,null);
+  assert.equal($('#send-content').value,'先在微信核对的正文');
+  assert.match($('#send-status').textContent,/不会自动重发/);
+  await scope.pollSendStatus();
+  assert.equal(attempts,1);
+});
+
+test('短时网络错误保留查询，持续失联后释放发送表单', async () => {
+  let now=1000;
+  const {scope,$}=fixture(async()=>{throw Error('offline');},true);
+  scope.Date={now:()=>now};
+  scope.pendingSend={id:'fixture-send-456',robot:'a',lastConfirmed:1000};
+  $('#send-chat').value='wxid_fixture';$('#send-content').value='正文';
+  $('#linux-send-kind').value='text';scope.sendSession='fixture-session';
+  await scope.pollSendStatus();
+  assert.ok(scope.pendingSend);
+  now=32000;
+  await scope.pollSendStatus();
+  assert.equal(scope.pendingSend,null);
+  assert.equal($('#send-text').disabled,false);
+});

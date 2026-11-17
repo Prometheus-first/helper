@@ -76,7 +76,8 @@ class LinuxEmoticonTests(unittest.TestCase):
             if command == b'O':
                 path = Path(os.fsdecode(bytes.fromhex(body.split(b'\n')[1].decode())))
                 seen.append(path)
-                self.assertEqual(path.parent, sender._directory)
+                self.assertEqual(path.parent.parent, sender._directory)
+                self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
                 self.assertNotEqual(path, self.gif)
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(path.read_bytes(), original)
@@ -108,7 +109,7 @@ class LinuxEmoticonTests(unittest.TestCase):
         with self.assertRaisesRegex(LinuxSendError, 'account changed'):
             sender.send_emoticon('123@chatroom', self.gif)
         self.assertFalse(report.exists())
-        self.assertEqual(list(sender._directory.glob('*.gif')), [])
+        self.assertEqual(list(sender._directory.glob('emoticon-*')), [])
 
     def test_invalid_gif_symlinks_and_hardlinks_rejected(self):
         sender, _, _, report = self.spawn()
@@ -145,27 +146,35 @@ class LinuxEmoticonTests(unittest.TestCase):
         with self.assertRaisesRegex(LinuxSendError, 'rejected'):
             sender.send_emoticon('123@chatroom', self.gif)
         self.assertTrue(report.exists())
-        self.assertEqual(list(sender._directory.glob('*.gif')), [])
-        self.assertIsNone(sender._pending_emoticon)
+        self.assertEqual(list(sender._directory.glob('emoticon-*')), [])
+        self.assertEqual(sender._retained_files, {})
 
-    def test_lost_reply_retains_one_snapshot_and_prevents_retry(self):
+    def test_lost_reply_preserves_input_and_allows_other_chat(self):
         sender, _, _, report = self.spawn(mode='delay', timeout=.03)
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_emoticon('123@chatroom', self.gif)
-        snapshot = sender._pending_emoticon
+        snapshot, = sender._retained_files
         self.assertTrue(snapshot.is_file())
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_emoticon('123@chatroom', self.gif)
         time.sleep(.25)
         self.assertEqual(report.read_text().splitlines(), ['O', '123@chatroom', str(snapshot)])
+        sender.allowed_targets |= {'456@chatroom'}
+        sender.timeout = 2
+        self.assertTrue(sender.send_emoticon('456@chatroom', self.gif))
+        self.assertEqual(report.read_text().splitlines()[3:5], ['O', '456@chatroom'])
         sender.close()
         self.assertTrue(snapshot.is_file())
+        with patch('wxbot_framework.linux_sender.os.kill', side_effect=ProcessLookupError):
+            self.assertTrue(sender.cleanup_retained_files())
+        self.assertFalse(snapshot.exists())
 
     def test_transport_eof_does_not_retry_or_delete_uncertain_snapshot(self):
         sender, _, _, _ = self.spawn(mode='eof')
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_emoticon('123@chatroom', self.gif)
-        self.assertTrue(sender._pending_emoticon.is_file())
+        snapshot, = sender._retained_files
+        self.assertTrue(snapshot.is_file())
         with self.assertRaises(LinuxSendIndeterminate):
             sender.send_emoticon('123@chatroom', self.gif)
 
@@ -184,4 +193,4 @@ class LinuxEmoticonTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sender.send_emoticon('123@chatroom', self.gif)
         self.assertFalse(report.exists())
-        self.assertEqual(list(sender._directory.glob('*.gif')), [])
+        self.assertEqual(list(sender._directory.glob('emoticon-*')), [])

@@ -1,6 +1,7 @@
 """Linux 实验性原生发送；文本及本地图片、文件已完成受控实机验证。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -47,8 +48,7 @@ class LinuxNativeSender:
         self.image_scope_generation = None
         self.image_context_status = {}
         self._bound_account = None
-        self._pending_emoticon = None
-        self._pending_voice = None
+        self._uncertain_media = set()
         self._retained_files = {}
         self._retained_file_bytes = 0
         self.timeout = max(0.1, float(timeout))
@@ -68,6 +68,7 @@ class LinuxNativeSender:
         if self._closed or self.expected_pid is None:
             raise LinuxSendError("Linux 原生发送连接未运行")
         attempted = False
+        deadline = time.monotonic() + self.timeout
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
                 conn.settimeout(self.timeout)
@@ -80,6 +81,10 @@ class LinuxNativeSender:
                 chunks = []
                 count = 0
                 while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("原生请求等待超时")
+                    conn.settimeout(remaining)
                     part = conn.recv(4096)
                     if not part:
                         raise EOFError("原生发送回调连接中断")
@@ -117,6 +122,8 @@ class LinuxNativeSender:
 
     @staticmethod
     def _result(response, *, sending=False):
+        if response.get("attempted") is False:
+            raise LinuxSendError(response.get("error") or "原生发送暂不可用，请稍后检查")
         error_type = LinuxSendIndeterminate if sending else LinuxSendError
         if response.get("pending") or response.get("callback") is not True:
             raise error_type(response.get("error") or "原生回调未完成；不会自动重试")
@@ -307,12 +314,13 @@ class LinuxNativeSender:
                     self.ensure_context()
                 # Even a failed manager stage does not prove that every native
                 # file task has released its path. Once submitted, retain it.
+                prefix = f'{chat_id}\n{seconds}\n' if video else f'{chat_id}\n'
+                payload = (prefix + os.fsencode(snapshot).hex()).encode('ascii')
                 keep = True
-                if video:
-                    payload = (chat_id + '\n' + str(seconds) + '\n' + os.fsencode(snapshot).hex()).encode('ascii')
-                    self._result(self._request(b'R', payload), sending=True)
-                    return True
-                return self._send_media(b'F', chat_id, snapshot)
+                response = self._request(b'R' if video else b'F', payload)
+                keep = response.get('attempted') is not False
+                self._result(response, sending=True)
+                return True
             finally:
                 if keep:
                     self._retained_files[snapshot] = len(body)
@@ -353,14 +361,29 @@ class LinuxNativeSender:
             self._directory.rmdir()
         except OSError:
             pass
+        if not self._retained_files:
+            self._uncertain_media.clear()
         return not self._retained_files
+
+    def _media_snapshot_key(self, kind, chat_id, body):
+        key = (kind, chat_id, hashlib.sha256(body).digest())
+        if key in self._uncertain_media:
+            raise LinuxSendIndeterminate('相同会话的这份媒体发送结果待核对，请先在微信确认')
+        if (len(self._retained_files) >= MAX_RETAINED_FILE_COUNT or
+                self._retained_file_bytes + len(body) > MAX_RETAINED_FILE_BYTES):
+            raise LinuxSendError('发送快照预算已满')
+        return key
+
+    def _retain_uncertain_media(self, key, snapshot, size):
+        self._uncertain_media.add(key)
+        self._retained_files[snapshot] = size
+        self._retained_file_bytes += size
 
     def send_emoticon(self, chat_id, path):
         """Send a bounded GIF as native type 47, preserving its original bytes.
 
-        The native operation waits for the message-manager future. If its reply
-        is lost, keep one private snapshot and refuse more stickers on this
-        sender: neither retry nor unlink a file the coroutine may still use.
+        Keep uncertain input within the shared snapshot budget until WeChat exits.
+        A lost reply blocks an identical submission in the same chat.
         """
         from .emoticons import MAX_EMOTICON_BYTES, _read_bounded, validate_emoticon_path
         from .text import validate_target
@@ -374,14 +397,14 @@ class LinuxNativeSender:
                 raise LinuxSendError("该表情会话未获授权")
             if not self._bound_account:
                 raise LinuxSendError("发送表情前必须绑定当前登录账号")
-            if self._pending_emoticon is not None:
-                raise LinuxSendIndeterminate("上次表情发送结果未知；本会话不会重试或继续发送表情")
             source = validate_emoticon_path(path)
             data = _read_bounded(source, MAX_EMOTICON_BYTES)
-            fd, name = tempfile.mkstemp(prefix="emoticon-", suffix=".gif", dir=self._directory)
-            snapshot = Path(name)
+            key = self._media_snapshot_key('emoticon', chat_id, data)
+            directory = Path(tempfile.mkdtemp(prefix='emoticon-', dir=self._directory))
+            snapshot = directory / 'sticker.gif'
             keep = False
             try:
+                fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(data)
                 # Validate the exact immutable copy sent, even if source changed.
@@ -392,13 +415,14 @@ class LinuxNativeSender:
                 try:
                     self._result(self._request(b"O", body), sending=True)
                 except LinuxSendIndeterminate:
-                    self._pending_emoticon = snapshot
+                    self._retain_uncertain_media(key, snapshot, len(data))
                     keep = True
                     raise
                 return True
             finally:
                 if not keep:
                     snapshot.unlink(missing_ok=True)
+                    directory.rmdir()
 
     def send_voice(self, chat_id, path):
         from .emoticons import _read_bounded
@@ -411,11 +435,6 @@ class LinuxNativeSender:
                 raise LinuxSendError('当前 Linux 桥接不支持语音发送，请更新并重启微信')
             if chat_id not in self.allowed_targets or not self._bound_account:
                 raise LinuxSendError('语音发送需要已绑定账号和明确会话授权')
-            if self._pending_voice is not None:
-                raise LinuxSendIndeterminate('上次语音发送结果未知，本连接不会重试或继续发送语音')
-            if (len(self._retained_files) >= MAX_RETAINED_FILE_COUNT or
-                    self._retained_file_bytes + MAX_RECEIVED_VOICE_BYTES > MAX_RETAINED_FILE_BYTES):
-                raise LinuxSendError('发送快照预算已满')
             directory = Path(tempfile.mkdtemp(prefix='voice-', dir=self._directory))
             snapshot = directory / 'audio.silk'
             keep = False
@@ -423,6 +442,7 @@ class LinuxNativeSender:
                 with prepare_voice(path, directory) as prepared:
                     data = _read_bounded(prepared.path, MAX_RECEIVED_VOICE_BYTES)
                 parsed = _inspect_silk(data)
+                key = self._media_snapshot_key('voice', chat_id, data)
                 fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, 'wb') as stream:
                     stream.write(data)
@@ -432,9 +452,7 @@ class LinuxNativeSender:
                 try:
                     self._result(self._request(b'W', body), sending=True)
                 except LinuxSendIndeterminate:
-                    self._pending_voice = snapshot
-                    self._retained_files[snapshot] = len(data)
-                    self._retained_file_bytes += len(data)
+                    self._retain_uncertain_media(key, snapshot, len(data))
                     keep = True
                     raise
                 return True

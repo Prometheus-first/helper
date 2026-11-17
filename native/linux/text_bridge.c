@@ -148,17 +148,48 @@ static uintptr_t replacement(void *a,void *b,void *c){
  if(atomic_load(&running)&&atomic_load(&accepting))capture(b);
  atomic_fetch_sub(&callbacks,1);return original(a,b,c);
 }
-static int waitfd(int fd,short events){struct pollfd p={fd,events,0};while(atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}int n=poll(&p,1,100);if(n>0)return (p.revents&events)!=0;if(n<0&&errno!=EINTR)return 0;}return 0;}
+#ifndef HELPER_FIXTURE_IO_WAIT_MS
+#define HELPER_FIXTURE_IO_WAIT_MS 10000
+#endif
+static int64_t monotonic_ms(void){
+ struct timespec now;
+ clock_gettime(CLOCK_MONOTONIC,&now);
+ return (int64_t)now.tv_sec*1000+now.tv_nsec/1000000;
+}
+static int waitfd(int fd,short events,int64_t deadline){
+ struct pollfd p={fd,events,0};
+ while(atomic_load(&running)){
+  if(stop_requested()){atomic_store(&accepting,0);return 0;}
+  int64_t left=deadline-monotonic_ms();
+  if(left<=0)return 0;
+  int n=poll(&p,1,left<100?(int)left:100);
+  if(n>0)return (p.revents&events)!=0;
+  if(n<0&&errno!=EINTR)return 0;
+ }
+ return 0;
+}
 static int connect_socket(void){
  int fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK,0);if(fd<0)return -1;
  struct sockaddr_un a={.sun_family=AF_UNIX};memcpy(a.sun_path,socket_path,strlen(socket_path)+1);
- if(connect(fd,(struct sockaddr*)&a,sizeof(a))<0){if(errno!=EINPROGRESS||!waitfd(fd,POLLOUT)){close(fd);return -1;}int err=0;socklen_t n=sizeof(err);if(getsockopt(fd,SOL_SOCKET,SO_ERROR,&err,&n)<0||err){close(fd);return -1;}}
+ if(connect(fd,(struct sockaddr*)&a,sizeof(a))<0){if(errno!=EINPROGRESS||!waitfd(fd,POLLOUT,monotonic_ms()+HELPER_FIXTURE_IO_WAIT_MS)){close(fd);return -1;}int err=0;socklen_t n=sizeof(err);if(getsockopt(fd,SOL_SOCKET,SO_ERROR,&err,&n)<0||err){close(fd);return -1;}}
  struct ucred cred;socklen_t credlen=sizeof(cred);
  if(getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&cred,&credlen)<0 || cred.pid!=controller_pid || cred.uid!=geteuid()){close(fd);return -1;}
  return fd;
 }
-static int send_all(int fd,const void *data,size_t n){const unsigned char *p=data;while(n&&atomic_load(&running)){if(stop_requested()){atomic_store(&accepting,0);return 0;}ssize_t m=send(fd,p,n,MSG_NOSIGNAL);if(m>0){p+=m;n-=(size_t)m;}else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT))return 0;}else if(m<0&&errno==EINTR)continue;else return 0;}return n==0;}
+static int send_all(int fd,const void *data,size_t n,int64_t deadline){
+ const unsigned char *p=data;
+ while(n&&atomic_load(&running)&&monotonic_ms()<deadline){
+  if(stop_requested()){atomic_store(&accepting,0);return 0;}
+  ssize_t m=send(fd,p,n,MSG_NOSIGNAL);
+  if(m>0){p+=m;n-=(size_t)m;}
+  else if(m<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLOUT,deadline))return 0;}
+  else if(m<0&&errno==EINTR)continue;
+  else return 0;
+ }
+ return n==0;
+}
 static int send_event(int fd,const struct event *e){
+ int64_t deadline=monotonic_ms()+HELPER_FIXTURE_IO_WAIT_MS;
  unsigned char h[40];int has_source=e->type==1&&e->lengths[3],voice=e->type==34;
  int extended=voice||e->native_id||e->type==37||e->type==43||e->type==47||e->type==10000||e->type==10002;
  size_t header_size=extended?40:e->type==1?(has_source?28:24):28;
@@ -167,13 +198,13 @@ static int send_event(int fd,const struct event *e){
  if(extended){uint32_t type=htonl(e->type),n=htonl((has_source||voice)?e->lengths[3]:0);uint64_t id=htobe64(e->native_id);memcpy(h+24,&type,4);memcpy(h+28,&id,8);memcpy(h+36,&n,4);}
  else if(e->type!=1){uint32_t type=htonl(e->type);memcpy(h+24,&type,4);}
  else if(has_source){uint32_t n=htonl(e->lengths[3]);memcpy(h+24,&n,4);}
- if(!send_all(fd,h,header_size))return 0;
- for(int i=0;i<((has_source||voice)?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i]))return 0;
+ if(!send_all(fd,h,header_size,deadline))return 0;
+ for(int i=0;i<((has_source||voice)?4:3);i++)if(!send_all(fd,e->fields[i],e->lengths[i],deadline))return 0;
  unsigned char ack[8];size_t have=0;
- while(have<sizeof(ack)&&atomic_load(&running)){
+ while(have<sizeof(ack)&&atomic_load(&running)&&monotonic_ms()<deadline){
   ssize_t n=recv(fd,ack+have,sizeof(ack)-have,0);
   if(n>0)have+=(size_t)n;
-  else if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLIN))return 0;}
+  else if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if(!waitfd(fd,POLLIN,deadline))return 0;}
   else if(n<0&&errno==EINTR)continue;
   else return 0;
  }
@@ -190,7 +221,7 @@ static void *run_worker(void *unused){
   if(!atomic_load(&installed)){nanosleep(&delay,NULL);continue;}
   if(fd<0){
    fd=connect_socket();if(fd<0){nanosleep(&delay,NULL);continue;}
-   if(!send_all(fd,"HLR1",4)){close(fd);fd=-1;nanosleep(&delay,NULL);continue;}
+   if(!send_all(fd,"HLR1",4,monotonic_ms()+HELPER_FIXTURE_IO_WAIT_MS)){close(fd);fd=-1;nanosleep(&delay,NULL);continue;}
   }
   pthread_mutex_lock(&qlock);
   while(!qcount&&atomic_load(&running)&&atomic_load(&accepting)){
@@ -206,7 +237,7 @@ static void *run_worker(void *unused){
    if(getppid()!=controller_pid||stop_requested()){atomic_store(&accepting,0);break;}
    if(fd<0){
     fd=connect_socket();if(fd<0){nanosleep(&delay,NULL);continue;}
-    if(!send_all(fd,"HLR1",4)){close(fd);fd=-1;nanosleep(&delay,NULL);continue;}
+    if(!send_all(fd,"HLR1",4,monotonic_ms()+HELPER_FIXTURE_IO_WAIT_MS)){close(fd);fd=-1;nanosleep(&delay,NULL);continue;}
    }
    if(send_event(fd,e))break;
    close(fd);fd=-1;nanosleep(&delay,NULL);

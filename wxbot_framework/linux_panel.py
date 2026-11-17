@@ -94,8 +94,10 @@ class LinuxPanelController(PanelController):
         if session != self.send_connection()['session_id']:
             raise PanelError('微信连接已变化，请刷新页面', 409)
         with self.lock:
-            app, backend = self.app, self.app.backend
-            account = app.config.get('wechat_account')
+            app = self.app
+            if app is None or not app._connection_ready or self.state == 'stopping':
+                raise PanelError('微信连接已变化，请刷新页面', 409)
+            backend, account = app.backend, app.config.get('wechat_account')
             if backend is None or 'emoticon.extract' not in getattr(backend, 'capabilities', ()):
                 raise PanelError('当前 Linux 微信连接尚未开放表情导出', 409)
             identity = (app, backend, session, account)
@@ -107,9 +109,13 @@ class LinuxPanelController(PanelController):
                 if previous['payload'] != payload:
                     raise PanelError('导出编号已使用，请重新提交', 409)
                 return self.emoticon_export_status(identifier)
-            if any(job['status'] == 'exporting' for job in self.emoticon_jobs.values()):
-                raise PanelError('上一项表情导出仍在处理，请等待完成', 409)
-            self.emoticon_jobs[identifier] = dict(request_id=identifier, payload=payload,
+            for existing in self.emoticon_jobs.values():
+                if existing['status'] != 'exporting':
+                    continue
+                if existing['identity'] == identity:
+                    raise PanelError('上一项表情导出仍在处理，请等待完成', 409)
+                existing.update(status='cancelled', error='微信连接已变化', result=None)
+            job = self.emoticon_jobs[identifier] = dict(request_id=identifier, payload=payload,
                 identity=identity, status='exporting', error='', result=None)
             while len(self.emoticon_jobs) > 16:
                 del self.emoticon_jobs[next(iter(self.emoticon_jobs))]
@@ -139,14 +145,19 @@ class LinuxPanelController(PanelController):
             except Exception:
                 failed = True
             with self.lock:
-                job = self.emoticon_jobs[identifier]
+                if job['status'] != 'exporting':
+                    return
                 if not self._emoticon_current(*identity):
                     job.update(status='cancelled', error='微信连接已变化，已隐藏旧账号的导出结果', result=None)
                 elif failed:
                     job.update(status='failed', error='表情导出未完成，请检查本地缓存和当前微信连接', result=None)
                 else:
                     job.update(status='done', result=result)
-        threading.Thread(target=export, name='LinuxEmoticonExport', daemon=True).start()
+        try:
+            threading.Thread(target=export, name='LinuxEmoticonExport', daemon=True).start()
+        except RuntimeError:
+            with self.lock:
+                job.update(status='failed', error='表情导出任务未能启动')
         return self.emoticon_export_status(identifier)
 
     def _application(self, root, store):
@@ -288,20 +299,23 @@ class LinuxPanelController(PanelController):
                 if previous['payload'] != payload:
                     raise PanelError('发送编号已使用，请重新提交', 409)
                 return self.send_status(identifier)
-            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
-                raise PanelError('上一条消息仍在发送，请等待结果', 409)
             app = self.app
+            backend = getattr(app, 'backend', None)
+            if (app is None or not app._connection_ready or self.state == 'stopping' or
+                    backend is None or backend.session_id != session):
+                raise PanelError('微信连接已变化，请刷新会话', 409)
+            if self._send_busy(session):
+                raise PanelError('上一条消息仍在发送，请等待结果', 409)
             if kind in ('voice', 'video'):
-                backend = getattr(app, 'backend', None)
-                if backend is None or backend.session_id != session:
-                    raise PanelError('微信连接已变化，请刷新会话', 409)
                 if kind + '.send' not in getattr(backend, 'capabilities', ()):
                     label = '语音' if kind == 'voice' else '视频'
                     raise PanelError(f'当前 Linux 微信连接尚未开放{label}发送，请更新桥接并重新登录', 409)
             allowed = app.config.get('chat_allowlist', [])
             if allowed and target not in allowed:
                 raise PanelError('该会话不在收发白名单中')
-            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload, 'status': 'sending', 'error': ''}
+            self._retire_old_send_jobs(session)
+            job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
+                                                    session_id=session, status='sending', error='')
             while len(self.send_jobs) > 64:
                 del self.send_jobs[next(iter(self.send_jobs))]
         def deliver():
@@ -309,11 +323,8 @@ class LinuxPanelController(PanelController):
                 result = getattr(app.service, 'send_' + kind)(target, path, expected_session=session)
                 if result is False:
                     raise RuntimeError('微信未确认发送')
-            except Exception:
-                with self.lock:
-                    self.send_jobs[identifier].update(status='failed', error='发送未完成，请核对微信后再决定是否重发')
+            except Exception as error:
+                self._finish_send_job(job, *self._send_failure(error))
             else:
-                with self.lock:
-                    self.send_jobs[identifier].update(status='sent')
-        threading.Thread(target=deliver, name='LinuxPanelMedia', daemon=True).start()
-        return self.send_status(identifier)
+                self._finish_send_job(job, 'sent')
+        return self._start_send_job(job, deliver, 'LinuxPanelMedia')
