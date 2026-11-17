@@ -640,6 +640,7 @@ dialog .form-footer { justify-content: flex-end; }
 .contact-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-4); }
 .contact-pagination .count { margin: 0; }
 .contact-pagination > div { display: flex; gap: var(--space-2); }
+.contact-heading-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 @media (max-width: 600px) {
   .member-table td, .member-table th { padding: 8px; }
   .member-table th:last-child { width: 90px; }

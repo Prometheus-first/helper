@@ -313,6 +313,30 @@ def read_contact_directory(read_memory, core_base, *, expected_account):
         return None
 
 
+def is_cached_friend(read_memory, core_base, wxid, *, expected_account):
+    """仅在当前账号的联系人缓存明确将目标列为好友时返回 True。"""
+    validate_account(wxid)
+    validate_account(expected_account)
+    if wxid == expected_account or read_current_account(read_memory, core_base) != expected_account:
+        return False
+    profile = select_memory_profile(read_memory, core_base)
+    if profile is None or profile.version not in _DIRECTORY_LAYOUTS:
+        return False
+    reader = _DirectoryReader(read_memory)
+    try:
+        _, cache = _directory_cache(reader, core_base, profile.rva)
+        for key, record in _directory_records(reader, cache):
+            if key == wxid:
+                deleted, flags = struct.unpack('<II', reader.read(record + 0x68, 8))
+                if deleted or not flags & 1:
+                    return False
+                reader.verify()
+                return read_current_account(read_memory, core_base) == expected_account
+    except (OSError, ValueError, struct.error):
+        return False
+    return False
+
+
 def _read_friend_cache_name(read_memory, core_base, wxid, *, expected_account=None):
     """按实际成员 ID 读取微信名。缺失、切换、重建缓存时返回 None，不猜名字。
 

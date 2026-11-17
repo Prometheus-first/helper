@@ -688,6 +688,8 @@ class PanelController:
             result = dict(snapshot, session_id=session)
             if 'friend.delete' in getattr(backend, 'capabilities', ()):
                 result['can_delete'] = True
+            if 'friend.relation.check' in getattr(backend, 'capabilities', ()):
+                result['can_scan_relations'] = True
             return result
         return self._call(query)
 
@@ -887,13 +889,20 @@ class PanelController:
         return self.scheduled_tasks.toggle(data)
 
     def _send_busy(self, session):
-        return any(job['status'] == 'sending' and job['session_id'] == session
+        return any(job['status'] == 'sending' and job['session_id'] == session and 'scan' not in job
                    for job in self.send_jobs.values())
 
     def _retire_old_send_jobs(self, session):
         for job in self.send_jobs.values():
             if job['status'] == 'sending' and job['session_id'] != session:
                 job.update(status='unknown', error='原发送连接已结束，请在微信核对结果')
+
+    def _trim_send_jobs(self):
+        while len(self.send_jobs) > 64:
+            expired = next((key for key, item in self.send_jobs.items() if item['status'] != 'sending'), None)
+            if expired is None:
+                return
+            del self.send_jobs[expired]
 
     def _finish_send_job(self, job, status, error=''):
         with self.lock:
@@ -912,7 +921,10 @@ class PanelController:
             job = self.send_jobs.get(identifier)
             if job is None:
                 raise PanelError('发送记录已失效，请查看消息监控确认结果', 404)
-            return {key: job[key] for key in ('request_id', 'status', 'error')}
+            result = {key: job[key] for key in ('request_id', 'status', 'error')}
+            if 'scan' in job:
+                result['scan'] = {**job['scan'], 'rows': list(job['scan']['rows'])}
+            return result
 
     def send_text(self, data):
         """立即返回发送单号，等待节奏和原生回调在独立线程完成，HTTP 不重试发送。"""
@@ -952,8 +964,7 @@ class PanelController:
             self._retire_old_send_jobs(session)
             job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
                                                     session_id=session, status='sending', error='')
-            while len(self.send_jobs) > 64:
-                del self.send_jobs[next(iter(self.send_jobs))]
+            self._trim_send_jobs()
 
         def deliver():
             try:
@@ -1010,8 +1021,7 @@ class PanelController:
             self._retire_old_send_jobs(session)
             job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
                                                     session_id=session, status='sending', error='')
-            while len(self.send_jobs) > 64:
-                del self.send_jobs[next(iter(self.send_jobs))]
+            self._trim_send_jobs()
         def deliver():
             try:
                 if app.service.send_friend_request(wxid, message, room=room, expected_session=session) is not True:
@@ -1063,8 +1073,7 @@ class PanelController:
             self._retire_old_send_jobs(session)
             job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
                                                     session_id=session, status='sending', error='')
-            while len(self.send_jobs) > 64:
-                del self.send_jobs[next(iter(self.send_jobs))]
+            self._trim_send_jobs()
 
         def deliver():
             status = 'unknown'
@@ -1082,6 +1091,83 @@ class PanelController:
             self._finish_send_job(job, status, error)
 
         return self._start_send_job(job, deliver, 'PanelFriendDelete')
+
+    def scan_friend_relations(self, data):
+        from .account import validate_account
+
+        account = validate_account(data.get('account'))
+        identifier, session = data.get('request_id'), data.get('session_id')
+        if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
+            raise PanelError('扫描请求编号无效')
+        if not isinstance(session, str) or not session or len(session) > 80:
+            raise PanelError('请重新扫描联系人', 409)
+        if data.get('confirm_wechat_effects') is not True:
+            raise PanelError('请确认微信可能生成系统提示或更新好友关系')
+        payload = ('friend_relations', account, session)
+        with self.lock:
+            previous = self.send_jobs.get(identifier)
+            if previous is not None:
+                if previous['payload'] != payload:
+                    raise PanelError('该请求编号已被使用', 409)
+                return self.send_status(identifier)
+            if any('scan' in job and job['status'] == 'sending' and job['session_id'] == session
+                   for job in self.send_jobs.values()):
+                raise PanelError('当前账号已有好友关系扫描在运行', 409)
+            app = self.app
+            if (app is None or not app._connection_ready or self.state != 'running' or
+                    app.config.get('wechat_account') != account or not app.service.session_is_current(session)):
+                raise PanelError('微信账号或连接已变化，请重新扫描联系人', 409)
+            if 'friend.relation.check' not in getattr(app.backend, 'capabilities', ()):
+                raise PanelError('仅微信 4.2.0.12 支持扫描好友关系', 409)
+            self._retire_old_send_jobs(session)
+            job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload, session_id=session,
+                status='sending', error='', scan={'total': None, 'checked': 0, 'unknown': 0, 'rows': []})
+            self._trim_send_jobs()
+
+        return self._start_send_job(job, lambda: self._scan_friend_relations(app, job, account, session),
+                                    'PanelFriendRelations')
+
+    def _scan_friend_relations(self, app, job, account, session):
+        def current():
+            return (job['status'] == 'sending' and self.app is app and self.state == 'running' and
+                    not self.stop_event.is_set() and app._connection_ready and
+                    getattr(app.backend, 'session_id', None) == session)
+
+        scan = job['scan']
+        try:
+            snapshot = app.service.contacts(expected_session=session)
+            if not snapshot or snapshot.get('account') != account or snapshot.get('session_id') != session:
+                raise RuntimeError('联系人缓存不可用')
+            contacts = snapshot['contacts']
+            with self.lock:
+                scan['total'] = len(contacts)
+            for index, contact in enumerate(contacts):
+                if index:
+                    time.sleep(0.8)
+                with self.lock:
+                    if not current():
+                        raise RuntimeError('微信连接已结束')
+                try:
+                    status = app.service.check_friend_relation(contact['wxid'], expected_session=session)
+                except ValueError:
+                    status = 'unknown'
+                except (RuntimeError, OSError):
+                    with self.lock:
+                        scan['checked'] += 1
+                        scan['unknown'] += 1
+                    raise
+                with self.lock:
+                    if not current():
+                        raise RuntimeError('微信连接已结束')
+                    scan['checked'] += 1
+                    if status == 'verification_required':
+                        scan['rows'].append({key: contact[key] for key in ('wxid', 'nickname', 'remark')})
+                    elif status != 'accepted':
+                        scan['unknown'] += 1
+        except Exception:
+            self._finish_send_job(job, 'unknown', '扫描提前结束。已确认的结果保留，未检查的好友请稍后核对。')
+        else:
+            self._finish_send_job(job, 'scanned')
 
     def send_connection(self):
         def query(app):

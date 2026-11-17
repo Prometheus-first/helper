@@ -61,6 +61,34 @@ test('删除好友绑定当前账号和连接，确认后刷新，缓存模式�
   assert.match($('#contact-status').textContent,/微信已确认删除好友/);
 });
 
+test('好友关系检测从当前账号启动并只渲染疑似名单', async () => {
+  const calls=[];
+  const {scope,$}=fixture(async (route,body,robot)=>{
+    calls.push([route,body,robot]);
+    if(route==='directory-cache')return directory();
+    if(route==='friend-relations')return {status:'sending'};
+    if(route.startsWith('send-status?'))return {status:'scanned',scan:{total:3,checked:3,unknown:1,
+      rows:[{wxid:'wxid_demo_match',nickname:'<示例>'}]}};
+  });
+  await scope.restoreDirectoryCache();
+  scope.state.connected=true;scope.renderContacts();
+  assert.equal($('#scan-friend-relations').disabled,true);
+  Object.assign(scope.contactData,{cached:false,can_scan_relations:true,session_id:'session-a'});
+  scope.contactIdentity=scope.contactConnectionIdentity();scope.renderContacts();
+  scope.confirm=()=>false;await scope.scanFriendRelations();
+  assert.equal(calls.length,1);
+  scope.confirm=()=>true;await scope.scanFriendRelations();
+  const scans=calls.filter(([route])=>route==='friend-relations');
+  assert.equal(scans.length,1);
+  assert.equal(scans[0][2],'a');
+  assert.equal(scans[0][1].account,'wxid_demo_a');
+  assert.equal(scans[0][1].session_id,'session-a');
+  assert.equal(scans[0][1].confirm_wechat_effects,true);
+  assert.match($('#friend-relations-status').textContent,/疑似 1 位 · 待核对 1 位/);
+  assert.match($('#friend-relations-list').innerHTML,/&lt;示例>/);
+  assert.doesNotMatch($('#friend-relations-list').innerHTML,/演示好友/);
+});
+
 test('未启动机器人即可恢复联系人和群，搜索可用，扫描仍禁用，读取会去重', async () => {
   const calls=[];
   const {scope,$}=fixture(async route=>{calls.push(route);return directory();});

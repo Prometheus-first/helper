@@ -381,6 +381,10 @@ class ServiceFacade:
         from .friend_add import validate_friend_wxid
         return self._manage("delete_friend", validate_friend_wxid(wxid), expected_session=expected_session)
 
+    def check_friend_relation(self, wxid, *, expected_session):
+        from .friend_add import validate_friend_wxid
+        return self._manage("check_friend_relation", validate_friend_wxid(wxid), expected_session=expected_session)
+
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
 

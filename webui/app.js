@@ -861,6 +861,63 @@ function renderContactDetails(row,index,canDelete) {
   const button=canDelete?`<button type="button" class="secondary small" data-friend-delete="${escape(row.wxid)}"${contactDeleteJob?' disabled':''}>删除好友</button>`:'';
   return `<tr class="contact-detail"><td colspan="4"><dl id="contact-detail-${index}" class="contact-details" aria-label="${escape(row.remark||row.nickname||row.wxid)} 的资料">${fields.filter(([,value])=>value).map(([label,value,mono])=>`<div><dt>${label}</dt><dd${mono?' class="contact-id"':''}>${escape(value)}</dd></div>`).join('')}</dl>${button}</td></tr>`;
 }
+const contactRelationJobs=new Map();
+let displayedRelationRows=null;
+function renderFriendRelations(ready) {
+  const saved=contactRelationJobs.get(robot);
+  const job=saved?.account===directoryAccount()?saved:null;
+  const running=job?.status==='sending';
+  const button=$('#scan-friend-relations');
+  button.disabled=!ready||busy||contactLoading||!!contactDeleteJob||running||
+    contactData?.can_scan_relations!==true||contactData.cached||!contactData.session_id;
+  button.textContent=running?'正在检测…':'检测单向删除';
+  $('#friend-relations-results').classList.toggle('hidden',!job);
+  if(!job)return;
+  const {total,checked,unknown,rows}=job.scan;
+  const progress=total===null?'正在读取当前账号的好友…':`已检测 ${checked} / ${total} 位 · 疑似 ${rows.length} 位 · 待核对 ${unknown} 位`;
+  const feedback=job.error?`${job.error} ${progress}`:progress;
+  if($('#friend-relations-status').textContent!==feedback)$('#friend-relations-status').textContent=feedback;
+  $('#friend-relations-status').classList.toggle('error',!!job.error);
+  $('#friend-relations-table').classList.toggle('hidden',!rows.length);
+  if(displayedRelationRows!==rows){
+    $('#friend-relations-list').innerHTML=rows.map(row=>`<tr><td><span class="contact-name">${escape(row.remark||row.nickname||row.wxid)}</span></td><td><span class="contact-id">${escape(row.wxid)}</span></td></tr>`).join('');
+    displayedRelationRows=rows;
+  }
+}
+
+async function scanFriendRelations() {
+  if($('#scan-friend-relations').disabled)return;
+  const requested=robot,{account,session_id}=contactData;
+  if(!confirm(`检测账号 ${account} 的好友关系？微信可能生成“你已添加了对方”提示，部分好友关系也可能更新。`))return;
+  const job={id:crypto.randomUUID(),account,status:'sending',error:'',
+    scan:{total:null,checked:0,unknown:0,rows:[]}};
+  contactRelationJobs.set(requested,job);renderContacts();
+  const readStatus=()=>api('send-status?id='+encodeURIComponent(job.id),undefined,requested,{timeoutMs:8000});
+  try {
+    let result;
+    try{
+      result=await api('friend-relations',{request_id:job.id,account,session_id,confirm_wechat_effects:true},
+        requested,{timeoutMs:8000});
+    }catch(error){
+      if(error.status)throw error;
+      // Recover the original job ID after a lost HTTP reply without submitting again.
+      result=await readStatus();
+    }
+    for(;;){
+      job.status=result.status;job.error=result.error||'';job.scan=result.scan||job.scan;
+      if(robot===requested)renderContacts();
+      if(job.status!=='sending')break;
+      await new Promise(resolve=>setTimeout(resolve,1500));
+      result=await readStatus();
+    }
+  }catch(error){
+    job.status='unknown';
+    job.error=error.status&&error.status!==404?error.message:'暂时无法读取检测状态，请在微信核对。';
+  }finally{
+    if(robot===requested)renderContacts();
+  }
+}
+
 function renderContacts() {
   if(contactData&&contactData.account!==directoryAccount()) {
     resetContacts();return;
@@ -871,6 +928,7 @@ function renderContacts() {
   const ready=serviceAvailable&&!!state?.connected;
   $('#scan-contacts').disabled=!ready||busy||contactLoading||!!contactDeleteJob;
   $('#scan-contacts').textContent=contactLoading?'正在扫描…':'扫描联系人';
+  renderFriendRelations(ready);
   $('#contact-search').disabled=!contactData;
   $('#contact-tag').disabled=!contactData;
   const query=$('#contact-search').value.trim().toLowerCase(),tag=$('#contact-tag').value;
@@ -966,6 +1024,7 @@ async function validateContactSession(requested,generation) {
   }
 }
 $('#scan-contacts').onclick=scanContacts;
+$('#scan-friend-relations').onclick=scanFriendRelations;
 $('#contact-search').oninput=()=>{contactPage=0;contactDetail='';renderContacts();};
 $('#contact-tag').onchange=()=>{contactPage=0;contactDetail='';renderContacts();};
 $('#contact-list').onclick=event=>{

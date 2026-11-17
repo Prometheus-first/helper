@@ -695,6 +695,32 @@ class NativeTextService(NativeFileHelperService):
                 raise RuntimeError("联系人所属的微信连接已结束")
             return self.last_result.get("delete_status", "unknown")
 
+    def check_friend_relation(self, wxid):
+        from wxbot_framework.contacts import is_cached_friend
+        from wxbot_framework.friend_add import validate_friend_wxid
+        wxid = validate_friend_wxid(wxid)
+        with self._calls:
+            if self.wechat_version != '4.2.0.12' or not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError('好友关系扫描需要已连接的微信 4.2.0.12')
+            self._check_account(force=True)
+            account, session = self.self_wxid, self._friend_session_id
+            if not is_cached_friend(self._channel.read_memory, self._channel.core_base, wxid,
+                                    expected_account=account):
+                return 'unknown'
+            if self._stop.is_set():
+                raise RuntimeError('微信连接已结束')
+            outcome = self._run('--check-friend-relation', pid=self.pid, keep_loaded=True,
+                                preserve_report=False, account=account, target=wxid)
+            self._check_account(force=True)
+            if account != self.self_wxid or session != self._friend_session_id:
+                raise RuntimeError('联系人所属的微信连接已结束')
+            status = outcome.get('relation_status', 'unknown')
+            report = outcome.get('report')
+            if status == 'unknown' and (outcome.get('cleanup_code') != 0 or
+                    outcome.get('code') != 0 or not isinstance(report, dict) or report.get('complete') is not True):
+                raise RuntimeError('好友关系请求未返回完整结果')
+            return status
+
     def invite_group_members(self, room, members):
         from wxbot_framework.group_management import validate_group_id, validate_group_members
         room = validate_group_id(room)

@@ -151,6 +151,7 @@ class RobotProxy:
     def send_text(self, data): return self.request('send-text', data)
     def send_friend_request(self, data): return self.request('friend-request-send', data)
     def delete_friend(self, data): return self.request('friend-delete', data)
+    def scan_friend_relations(self, data): return self.request('friend-relations', data)
     def list_scheduled_tasks(self): return self.request('scheduled-tasks')
     def save_scheduled_task(self, data): return self.request('scheduled-tasks', data)
     def delete_scheduled_task(self, data): return self.request('scheduled-tasks/delete', data)

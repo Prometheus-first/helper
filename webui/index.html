@@ -107,12 +107,17 @@
     <section class="section" aria-labelledby="task-list-heading"><div class="section-heading"><h2 id="task-list-heading">任务列表</h2><button id="task-refresh" class="secondary small" type="button">刷新</button></div><p id="task-status" class="account-error" role="status" aria-live="polite"></p><div class="table-container"><table class="task-table"><thead><tr><th>任务与会话</th><th>执行时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="task-list"><tr><td colspan="4" class="table-empty">暂无任务。</td></tr></tbody></table></div></section>
   </section>
   <section class="page hidden" id="page-contacts" aria-labelledby="contacts-heading">
-    <div class="page-heading"><h1 id="contacts-heading">联系人 <span id="contact-count" class="count"></span></h1><button id="scan-contacts" class="primary" type="button" disabled>扫描联系人</button></div>
+    <div class="page-heading"><h1 id="contacts-heading">联系人 <span id="contact-count" class="count"></span></h1><div class="contact-heading-actions"><button id="scan-friend-relations" class="secondary" type="button" disabled>检测单向删除</button><button id="scan-contacts" class="primary" type="button" disabled>扫描联系人</button></div></div>
     <div class="contact-filters">
       <label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 4.5 4.5"/></svg><input id="contact-search" type="search" placeholder="搜索昵称、备注、微信号、wxid 或标签" aria-label="搜索联系人" autocomplete="off" disabled></label>
       <label class="contact-filter"><span class="sr-only">筛选好友标签</span><select id="contact-tag" aria-label="筛选好友标签" disabled><option value="">全部标签</option></select></label>
     </div>
     <p id="contact-status" class="contact-status" role="status" aria-live="polite">请先启动并连接当前账号。</p>
+    <section id="friend-relations-results" class="section hidden" aria-labelledby="friend-relations-heading">
+      <div class="section-heading"><h2 id="friend-relations-heading">疑似被单向删除</h2></div>
+      <p id="friend-relations-status" class="contact-status" role="status" aria-live="polite"></p>
+      <div id="friend-relations-table" class="table-container hidden"><table><thead><tr><th scope="col">联系人</th><th scope="col">微信 ID</th></tr></thead><tbody id="friend-relations-list"></tbody></table></div>
+    </section>
     <div class="table-container"><table class="contact-table"><thead><tr><th scope="col">联系人</th><th scope="col">微信号</th><th scope="col">好友标签</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="contact-list"><tr><td colspan="4" class="table-empty">连接后点击“扫描联系人”。</td></tr></tbody></table></div>
     <div id="contact-pagination" class="contact-pagination hidden"><span id="contact-page" class="count"></span><div><button id="contact-previous" class="secondary small" type="button">上一页</button><button id="contact-next" class="secondary small" type="button">下一页</button></div></div>
   </section>
