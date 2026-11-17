@@ -49,6 +49,12 @@
       <p id="account-error" class="account-error hidden" role="status"></p>
       <div id="batch-result" class="batch-result hidden" role="status" aria-live="polite"></div>
     </section>
+    <form id="windows-recovery-form" class="settings-section">
+      <h2>微信自动恢复</h2>
+      <label class="inline"><input name="windows_auto_recovery" type="checkbox" checked>原生操作卡死时重启当前账号的微信</label>
+      <p id="windows-recovery-status" class="count" role="status"></p>
+      <div class="form-footer"><span class="save-hint">停止后保存</span><button class="primary" type="submit">保存自动恢复设置</button></div>
+    </form>
     <section class="section message-monitor" aria-labelledby="messages-heading">
       <div class="section-heading"><h2 id="messages-heading">消息监控 <span id="message-count" class="count">0 条</span></h2><div class="message-actions"><button id="open-message-export" class="secondary small" type="button">归档与导出</button><button id="pause-messages" class="secondary small">暂停滚动</button><button id="clear-messages" class="text-button small">清空视图</button></div></div>
       <label class="sr-only" for="message-search">搜索消息</label><input id="message-search" class="message-search" type="search" placeholder="搜索 ID、昵称或内容" autocomplete="off">

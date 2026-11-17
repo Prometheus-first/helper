@@ -123,6 +123,20 @@ function renderState() {
   renderRobotOptions();renderAccounts();renderMessages();
   const running=!!state&&activeStates.includes(state.state);
   document.querySelectorAll('form:not(#send-form):not(#friend-add-form):not(#plugin-form):not(#moments-form):not(#articles-form):not(#task-form) .primary').forEach(node=>node.disabled=unavailable||!state||running||busy);
+  const recoveryForm=$('#windows-recovery-form');
+  const canEditRecovery=!!config?.account&&config.account===state?.account&&!running&&!busy&&!unavailable;
+  recoveryForm.elements.windows_auto_recovery.disabled=!canEditRecovery;
+  $('.primary',recoveryForm).disabled=!canEditRecovery;
+  $('#windows-recovery-status').textContent=({
+    restarting:'正在重启当前账号的微信。',
+    waiting_login:'请在新微信窗口登录原账号。',
+    waiting_cleanup:'原账号已登录，正在等待旧机器人清理。',
+    restarted:'原账号已登录，正在恢复机器人连接。',
+    limited:'已达到自动重启限制，请检查当前微信。',
+    failed:'自动恢复未完成，请检查当前微信。',
+    manual_login:'未能确认新微信实例，请手动登录并启动机器人。',
+    wrong_account:'新实例登录了其他账号，请手动启动对应机器人。'
+  })[state?.recovery_status]||'';
   $('#task-save').disabled=unavailable||!state||busy;
   renderSendState();
   renderContacts();
@@ -301,6 +315,7 @@ async function loadConfig() {
     $('.key-state',form).textContent = config[name]?.api_key_configured ? '已配置' : '尚未配置';
   }
   fill($('#delay-form'), config.text_send_delay);
+  fill($('#windows-recovery-form'), {windows_auto_recovery:config.windows_auto_recovery!==false});
 }
 const lines = value => [...new Set(value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
 function renderGroupNames() {
@@ -324,6 +339,13 @@ $('#group-name-list').addEventListener('input', event => {
   if (input) groupNameDraft.set(input.dataset.groupName, input.value);
 });
 async function save(data, message) { await api('config',data); await loadConfig(); toast(message||'配置已保存，下次启动生效'); }
+$('#windows-recovery-form').onsubmit=event=>{
+  event.preventDefault();
+  const form=event.currentTarget;
+  if(!$('.primary',form).disabled)
+    action(()=>save({windows_auto_recovery:form.elements.windows_auto_recovery.checked,
+      expected_account:config.account},'自动恢复设置已保存'));
+};
 $('#start-selected').onclick = () => action(()=>launchAccounts(loggedAccounts.filter(row=>selectedAccounts.has(accountKey(row))&&row.selectable&&!activeStates.includes(row.state))));
 $('#refresh-accounts').onclick=()=>loadAccounts();
 $('#account-list').onchange=event=>{

@@ -109,6 +109,8 @@ class PanelController:
         self.messages = MessageBuffer(sanitize=redact_full, archive=self.chat_archive)
         self.directory_cache = DirectoryCache(self.workspace)
         self.send_jobs = {}
+        from .windows_recovery import WindowsRecovery
+        self.recovery = WindowsRecovery(self)
         self.scheduled_tasks = ScheduledTasks(self, atomic_json, read_json)
         self.articles = Articles(self.workspace)
         self.article_sync = OfficialAccountSync()
@@ -166,12 +168,14 @@ class PanelController:
             config = self.store.load()
             changed_account = config.get('wechat_account') != wxid
             config.update(wechat_account=wxid, wechat_pid=None)
+            if changed_account:
+                config.pop('windows_auto_recovery', None)
             self._save_many({self.store.path: config})
             if changed_account:
                 self.messages.reset()
                 self.article_sync.clear()
 
-    def start(self):
+    def start(self, *, _replacement=None):
         with self.actions, self.lock:
             self._idle()
             lease = self.lock_factory(self.workspace / '.runtime/bot.lock')
@@ -186,8 +190,17 @@ class PanelController:
                     if not any(row['wxid'] == rows[0]['wxid'] and row['pid'] == rows[0]['pid'] for row in confirmed):
                         raise PanelError('账号状态已变化，请刷新后选择账号', 409)
                     config = self.store.bind_account(rows[0]['wxid'])
+                process = None
+                if _replacement is not None:
+                    if config.get('windows_auto_recovery', True) is not True:
+                        raise PanelError('该账号已关闭自动恢复', 409)
+                    process = self.recovery.validate_replacement(_replacement, config.get('wechat_account'))
                 app = self.factory(self.root, self.store)
                 app.config['console'] = False
+                if process is not None:
+                    account = config['wechat_account']
+                    app.config['wechat_pid'] = process.pid
+                    app._replacement_guard = lambda: self.recovery.matches_replacement(process, account)
                 def observe(message):
                     name = message.data.get('sender_wechat_name', '')
                     members = getattr(app, 'members', None)
@@ -226,6 +239,10 @@ class PanelController:
                 self.worker.start()
                 self.state = 'running'
                 try:
+                    self.recovery.arm(app, restored=process is not None)
+                except RuntimeError:
+                    self.recovery.status = 'failed'
+                try:
                     self.scheduled_tasks.start()
                 except Exception:
                     logging.getLogger('WebPanel').exception('定时任务启动失败')
@@ -235,6 +252,7 @@ class PanelController:
 
     def stop(self):
         with self.lock:
+            self.recovery.cancel()
             if self.app is not None:
                 self.state = 'stopping'
                 self.app.stop_event.set()
@@ -256,10 +274,11 @@ class PanelController:
         self.start()
 
     def close(self):
+        self.stop_event.set()
+        self.recovery.cancel()
         self.scheduled_tasks.close()
         self.moments.close()
         self.moments_interactions.close()
-        self.stop_event.set()
         self.article_sync.clear()
         self.stop()
         if self.worker is not None:
@@ -306,6 +325,7 @@ class PanelController:
                     'pid': getattr(getattr(self.app, 'backend', None), 'pid', None),
                     'started_at': self.started, 'error': self.error,
                     'connection_error': redact(self.app._last_connection_error) if self.app else '',
+                    'recovery_status': self.recovery.status,
                     'plugins': self.plugin_rows()}
 
     def configuration(self):
@@ -314,6 +334,7 @@ class PanelController:
         result = {'account': config.get('wechat_account') or '',
             'chat_allowlist': config.get('chat_allowlist', []),
             'text_send_delay': config.get('text_send_delay', {}),
+            'windows_auto_recovery': config.get('windows_auto_recovery', True),
             'plugins': config.get('plugins', {})}
         for name, path in paths.items():
             value = deepcopy(read_json(path))
@@ -418,6 +439,13 @@ class PanelController:
         with self.actions, self.lock, self._editing():
             config = self.store.load()
             paths, changes = self._paths(config), {}
+            if 'windows_auto_recovery' in data:
+                account = config.get('wechat_account')
+                if account_is_unbound(account) or data.get('expected_account') != account:
+                    raise PanelError('自动恢复设置的账号已变化，请刷新后再保存', 409)
+                if type(data['windows_auto_recovery']) is not bool:
+                    raise PanelError('自动恢复开关必须为布尔值')
+                config['windows_auto_recovery'] = data['windows_auto_recovery']
             if 'chat_allowlist' in data:
                 values = data['chat_allowlist']
                 if not isinstance(values, list) or len(values) > 1000:

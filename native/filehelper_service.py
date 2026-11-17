@@ -107,6 +107,9 @@ class ReceiveChannel:
             pe.close()
             raise RuntimeError("当前桥接缺少所需接收接口，请停止机器人并更新桥接 DLL")
         self.address = loaded[0] + export
+        execution = next((item.address for item in pe.DIRECTORY_ENTRY_EXPORT.symbols
+                          if item.name == b"WxNativeExecutionSlots" and not item.forwarder), None)
+        self.execution_address = loaded[0] + execution if execution is not None else None
         pe.close()
         self.core_base = loaded_modules["weixin.dll"][0]
         self.process = check(K.OpenProcess(0x43a, False, pid), "打开接收通道")

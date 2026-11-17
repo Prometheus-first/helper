@@ -41,6 +41,40 @@ static volatile LONG live_completions = 0;
 static volatile LONG live_tasks = 0;
 static constexpr ULONGLONG text_reply_timeout_ms = 15000;
 
+// Observed with ReadProcessMemory, so a stuck native task need not run a probe.
+struct NativeExecutionSlot { volatile LONG64 id, started; };
+static_assert(sizeof(NativeExecutionSlot) == 16);
+extern "C" {
+__declspec(dllexport) NativeExecutionSlot WxNativeExecutionSlots[16]{};
+}
+static volatile LONG64 native_execution_sequence;
+
+static NativeExecutionSlot* begin_native_execution() {
+    ULONGLONG ticks = 0;
+    if (!QueryUnbiasedInterruptTime(&ticks)) return nullptr;
+    for (auto& slot : WxNativeExecutionSlots) {
+        if (InterlockedCompareExchange64(&slot.id, -1, 0) != 0) continue;
+        InterlockedExchange64(&slot.started, static_cast<LONG64>(ticks / 10000));
+        InterlockedExchange64(&slot.id, InterlockedIncrement64(&native_execution_sequence));
+        return &slot;
+    }
+    return nullptr;
+}
+
+static void end_native_execution(NativeExecutionSlot* slot) {
+    if (slot) InterlockedExchange64(&slot->id, 0);
+}
+
+static void invoke_native_task(std::function<void()>* task) {
+    auto* slot = begin_native_execution();
+    __try { (*task)(); }
+    __finally { end_native_execution(slot); }
+}
+
+static std::function<void()> tracked_native_task(std::function<void()> task) {
+    return [task = std::move(task)]() mutable { invoke_native_task(&task); };
+}
+
 // Report admission and native object ownership are separate. Weixin may
 // release a completion later than it invokes it, or never invoke it at all.
 class CompletionReplySlot {
@@ -537,13 +571,14 @@ struct TaskLease {
     ~TaskLease() { _InterlockedDecrement(&live_tasks); }
 };
 
-static DWORD schedule_task(const TestConfig& config, std::function<void()>* callable) {
+static DWORD dispatch_native_task(const TestConfig& config, std::function<void()>* callable) {
     static_assert(sizeof(std::function<void()>) == 64, "Unexpected function ABI");
     struct Location { const char* function; const char* file; uint32_t line; uint32_t pad; void* caller; };
     static_assert(sizeof(Location) == 32, "Unexpected source location ABI");
     Location location{"wxbot.selftest", "selftest_bridge.cpp", 1, 0, nullptr};
     SharedMessage scheduler{}, future{};
     TestResult error{};
+    auto* execution = begin_native_execution();
     __try {
         __try {
             // 0x45d10 reads the process-wide application pointer; 0x47310 copies
@@ -557,8 +592,10 @@ static DWORD schedule_task(const TestConfig& config, std::function<void()>* call
             using Schedule = SharedMessage* (__fastcall*)(void*, SharedMessage*, Location*, std::function<void()>*, uint32_t);
             reinterpret_cast<Schedule>(core_address(core_base, 0x2fb010))(scheduler.object, &future, &location, callable, 1);
         } __finally {
-            guarded_release_shared(&future, &error);
-            guarded_release_shared(&scheduler, &error);
+            __try {
+                guarded_release_shared(&future, &error);
+                guarded_release_shared(&scheduler, &error);
+            } __finally { end_native_execution(execution); }
         }
     } __except (record_exception(GetExceptionInformation(), &error)) {
     }
@@ -567,6 +604,15 @@ static DWORD schedule_task(const TestConfig& config, std::function<void()>* call
         return 5;
     }
     return 0;
+}
+
+static DWORD schedule_task(const TestConfig& config, std::function<void()>* callable) {
+    try {
+        auto task = tracked_native_task(std::move(*callable));
+        return dispatch_native_task(config, &task);
+    } catch (const std::bad_alloc&) {
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxDispatchSelfTest(void* parameter) {

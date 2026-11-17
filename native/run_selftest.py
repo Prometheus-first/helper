@@ -458,7 +458,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
     if not encoded or len(encoded) > 1023 or b"\0" in encoded:
         raise ValueError("文本或图片路径应为 1–1023 个 UTF-8 字节，且不能包含 NUL")
     pid = pid or find_wechat()
-    process = check(K.OpenProcess(0x43a, False, pid), "打开已验证的微信进程")
+    process = check(K.OpenProcess(0x10043a, False, pid), "打开已验证的微信进程")
     allocations = []
     pending_thread = False
     try:
@@ -614,7 +614,10 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         if mode in ("--dispatch", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend", "--delete-friend"):
             deadline = time.monotonic() + (30 if deleting_friend else 120 if downloading or downloading_file or managing_group or accepting_friend or adding_friend or emoticon_path is not None or voice_path is not None or file_path is not None else 15)
             while exit_code == 0 and not report_path.exists() and time.monotonic() < deadline:
-                time.sleep(0.05)
+                if K.WaitForSingleObject(process, 50) == 0:
+                    raise TimeoutError("微信进程在回包前退出，原操作结果未知")
+            if K.WaitForSingleObject(process, 0) == 0:
+                raise TimeoutError("微信进程在确认回包前退出，原操作结果未知")
             if report_path.exists():
                 # The completion closes the file before its callback lease is
                 # released. Cleanup below waits for that lease before unload.

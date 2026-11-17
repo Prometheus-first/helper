@@ -428,7 +428,7 @@ static DWORD start_impl(void* parameter) {
     DWORD status = ERROR_GEN_FAILURE;
     try {
         auto marker = ticket->marker;
-        std::function<void()> task = [lease, marker] { (void)marker; on_start(lease); };
+        auto task = tracked_native_task([lease, marker] { (void)marker; on_start(lease); });
         status = sns_task_lifetime::schedule(ticket.get(), &task);
     } catch (...) {
         set_state(lease.get(), QUARANTINED);
@@ -459,7 +459,7 @@ static DWORD poll_impl(void* parameter) {
         DWORD status = ERROR_GEN_FAILURE;
         try {
             auto marker = ticket->marker;
-            std::function<void()> task = [lease, marker] { (void)marker; on_check(lease); };
+            auto task = tracked_native_task([lease, marker] { (void)marker; on_check(lease); });
             status = sns_task_lifetime::schedule(ticket.get(), &task);
         } catch (...) {
             set_state(lease.get(), QUARANTINED);

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 
 static std::string field(const std::string& value) {
     std::string encoded(1, '\x0a');
@@ -148,7 +149,27 @@ static void test_text_reply_timeout() {
     assert(!text_reply_pending() && live_completions == 0);
 }
 
+static void test_native_execution_is_visible_only_while_running() {
+    std::atomic<bool> entered{false}, release{false};
+    auto task = tracked_native_task([&] {
+        entered.store(true);
+        while (!release.load()) std::this_thread::yield();
+    });
+    assert(WxNativeExecutionSlots[0].id == 0);
+    std::thread worker(std::move(task));
+    while (!entered.load()) std::this_thread::yield();
+    const auto request = InterlockedCompareExchange64(&WxNativeExecutionSlots[0].id, 0, 0);
+    auto* other = begin_native_execution();
+    assert(request > 0 && other && other->id > request);
+    end_native_execution(other);
+    assert(WxNativeExecutionSlots[0].id == request);
+    release.store(true);
+    worker.join();
+    assert(WxNativeExecutionSlots[0].id == 0);
+}
+
 int main() {
+    test_native_execution_is_visible_only_while_running();
     test_text_reply_timeout();
     using namespace friend_delete_reply;
     const std::string target = "wxid_test_peer";
