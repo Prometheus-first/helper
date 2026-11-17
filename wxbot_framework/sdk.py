@@ -44,6 +44,10 @@ class Message:
     def file_path(self):
         return self.data.get("file_path") or ""
 
+    @property
+    def video_path(self):
+        return self.data.get("video_path") or ""
+
     @classmethod
     def from_native(cls, protocol, data, session_id):
         snapshot = copy.deepcopy(data)
@@ -52,7 +56,10 @@ class Message:
         if type(msg_type) is not int or msg_type <= 0:
             raise ValueError("微信消息类型必须是正整数")
         text = snapshot.get("msg") or snapshot.get("content") or ""
-        if msg_type in (3, 34, 37, 43, 47, 49, 62, 10000, 10002):
+        quoted = msg_type == 49 and snapshot.get('app_type') == 57 and isinstance(snapshot.get('quoted_message'), dict)
+        if quoted:
+            text = snapshot.get('quoted_text', '')
+        elif msg_type in (3, 34, 37, 43, 47, 49, 62, 10000, 10002):
             snapshot.setdefault("raw_content", text)
             text = ""
         # 群图片可能暂时没有作者；显式空作者不能回退成群 ID。
@@ -160,7 +167,6 @@ class ServiceFacade:
 
     def reply_quote(self, message, content, *, delivery_guard=None):
         from .quoted import QuotedContent, QuotedMessage, validate_quote_id
-
         validate_target(message.chat_id)
         if message.type != 1:
             raise ValueError("原生引用回复目前只支持引用普通文字")
@@ -186,6 +192,8 @@ class ServiceFacade:
                 with delivery_guard() if delivery_guard is not None else nullcontext():
                     self._check_pending(backend, cancel)
                     result = backend.send_quote_text(message.chat_id, original_id, content)
+                    if result is False:
+                        return False
                     author = message.data.get('sender_wechat_name') or ''
                     quote = QuotedMessage(content, QuotedContent(author, 'text', message.text, True))
                     return self._sent(result, backend, message.chat_id, 49, text=content, quote=quote)
@@ -319,6 +327,20 @@ class ServiceFacade:
                 self._check_pending(backend, cancel)
                 return result
 
+    def fetch_image(self, request_id, *, expected_session=None):
+        with self._lock:
+            backend, cancel = self._backend, self._cancel
+            if (backend is None or not self._available or
+                    (expected_session is not None and backend.session_id != expected_session)):
+                raise RuntimeError("图片所属的微信连接已结束")
+            if "image.fetch" not in getattr(backend, "capabilities", ()):
+                raise CapabilityError("当前后端尚未开放按需取图")
+        body = backend.fetch_image(request_id)
+        with self._lock:
+            if self._backend is not backend or not self._available or cancel.is_set():
+                raise RuntimeError("图片所属的微信连接已结束")
+            return body
+
     def _manage(self, operation, *arguments, expected_session=None):
         """将账号管理操作与发送、切号和卸载串行化，不使用文本等待。"""
         with self._lock:
@@ -334,6 +356,11 @@ class ServiceFacade:
             with self._lock:
                 self._check_pending(backend, cancel)
                 return method(*arguments)
+
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        from .friend_add import validate_friend_add
+        wxid, room, message = validate_friend_add(wxid, room, message, allow_auto=True)
+        return self._manage("send_friend_request", wxid, room, message, expected_session=expected_session)
 
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
@@ -585,6 +612,11 @@ class PluginContext:
     def send_image(self, chat_id, path):
         return self._service.send_image(chat_id, path)
 
+    def fetch_image(self, request_id, *, expected_session=None):
+        if "image.fetch" not in self.capabilities:
+            raise CapabilityError("当前插件缺少按需取图能力")
+        return self._service.fetch_image(request_id, expected_session=expected_session)
+
     def send_file(self, chat_id, path, *, expected_session=None, delivery_guard=None):
         return self._service.send_file(chat_id, path, expected_session=expected_session,
                                        delivery_guard=delivery_guard)
@@ -595,6 +627,11 @@ class PluginContext:
 
     def accept_friend(self, request_id, *, expected_session=None):
         return self._service.accept_friend(request_id, expected_session=expected_session)
+
+    def send_friend_request(self, wxid, message, *, room="", expected_session=None):
+        if "friend.request.send" not in self.capabilities:
+            raise CapabilityError("当前插件缺少主动发送好友申请的能力")
+        return self._service.send_friend_request(wxid, message, room=room, expected_session=expected_session)
 
     def group_members(self, room, *, expected_session=None):
         return self._service.group_members(room, expected_session=expected_session)
@@ -652,6 +689,7 @@ class PluginContext:
                                        delivery_guard=delivery_guard)
 
     def reply_quote(self, message, text, *, delivery_guard=None):
+        """在原会话中发送一条微信原生引用回复。"""
         return self._service.reply_quote(message, text, delivery_guard=delivery_guard)
 
     def reply_image(self, message, path, *, delivery_guard=None):

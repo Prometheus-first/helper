@@ -10,7 +10,8 @@ import stat
 import tempfile
 import threading
 
-from .image_metadata import ImageMetadata, ImageMetadataError, ImageStore, parse_image_metadata
+from .image_metadata import (ImageMetadata, ImageMetadataError, ImageStore,
+                             parse_image_metadata, select_image_download)
 from .images import MAX_IMAGE_BYTES
 
 
@@ -91,9 +92,7 @@ class ImageReceiver:
             self._failed(snapshot, "图片元数据无效")
             return False
         snapshot["image_metadata"] = {name: getattr(metadata, name) for name in _PUBLIC_FIELDS}
-        snapshot["image_quality"] = ("standard" if metadata.cdnmidimgurl or metadata.filekey else
-                                     "original" if metadata.cdnbigimgurl else
-                                     "thumbnail" if metadata.cdnthumburl else "unknown")
+        snapshot["image_quality"] = select_image_download(metadata)[3]
         full = False
         with self._enqueue_lock:
             if self._stop.is_set():
@@ -180,7 +179,9 @@ class ImageReceiver:
                 self._remove_saved(path)
         except Exception:
             # 下载器和文件系统异常可能包含 CDN URL、密钥或 XML，不能直接转发。
-            self._failed(data, "图片下载或保存失败")
+            reason = ("原图下载或保存失败，未自动切换普通图"
+                      if data.get("image_quality") == "original" else "图片下载或保存失败")
+            self._failed(data, reason)
 
     def _run(self):
         while not self._stop.is_set():

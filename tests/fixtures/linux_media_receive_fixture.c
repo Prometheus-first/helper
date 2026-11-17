@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 struct Buffer {uint64_t reserved;void *text;};
@@ -9,12 +10,19 @@ __attribute__((naked,noinline,visibility("default"))) uintptr_t fixture_hook_tar
 }
 static void cxx(unsigned char out[24],const char*s){size_t n=strlen(s);if(n<23){out[0]=(unsigned char)(n*2);memcpy(out+1,s,n);}else{out[0]=1;uint64_t z=n;memcpy(out+8,&z,8);memcpy(out+16,&s,8);}}
 static void emit(int type,const char*peer,const char*text){
+ const char *override=getenv("HELPER_FIXTURE_MEDIA_PEER");if(override&&!strcmp(peer,"wxid_friend_fixture"))peer=override;
  unsigned char from[24]={0},to[24]={0},body[24]={0};cxx(from,peer);cxx(to,"wxid_self_fixture");cxx(body,text);
  struct Buffer a={0,from},b={0,to},c={0,body};struct Msg m={.sender=&a,.type=(uint32_t)type,.receiver=&b,.content=&c};
  if(fixture_hook_target(NULL,&m,NULL)!=7)_exit(10);usleep(60000);
 }
 int main(void){
  usleep(200000);
+ if(getenv("HELPER_FIXTURE_MEDIA_PEER")){
+ emit(1,"filehelper","WX_LINUX_MEDIA_ARM_11");
+ emit(1,"gh_fixture","WX_LINUX_MEDIA_ARM_11");
+ emit(1,"123@chatroom","WX_LINUX_MEDIA_ARM_11");
+ emit(1,"bad peer","WX_LINUX_MEDIA_ARM_11");
+ }
  emit(3,"wxid_friend_fixture","<msg><img filekey=\"fixture-before-arm\"/></msg>");
  emit(1,"wxid_friend_fixture","WX_LINUX_MEDIA_ARM_11");
  emit(3,"wxid_other_fixture","<msg><img filekey=\"wrong-peer\"/></msg>");

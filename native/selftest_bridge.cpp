@@ -41,6 +41,9 @@ static volatile LONG live_completions = 0;
 static volatile LONG live_tasks = 0;
 static bool hook_created = false;
 static bool factory_hook_created = false;
+#ifdef WXBOT_QUOTE_SEND
+static bool quote_manager_hook_created = false;
+#endif
 static bool image_download_factory_hook_created = false;
 static DWORD factory_tls = TLS_OUT_OF_INDEXES;
 using ReceiveFunction = uintptr_t (__fastcall*)(void*, const uintptr_t*, uint8_t, uint8_t);
@@ -666,6 +669,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_DisableHook(factory_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
+#ifdef WXBOT_QUOTE_SEND
+    auto quote_manager_target = quote_manager_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x6f4d90)) : nullptr;
+    if (quote_manager_hook_created) {
+        status = MH_DisableHook(quote_manager_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+#endif
     void* image_factory_target = reinterpret_cast<void*>(core_address(core_base, 0x5240720));
     if (image_download_factory_hook_created) {
         status = MH_DisableHook(image_factory_target);
@@ -680,6 +691,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
 #endif
 #ifdef WXBOT_FRIEND_RECEIVE
     hooks_present = hooks_present || friend_receive_hook_created;
+#endif
+#ifdef WXBOT_QUOTE_SEND
+    hooks_present = hooks_present || quote_manager_hook_created;
 #endif
     if (!hooks_present) return 0;
     if (hook_created) {
@@ -710,10 +724,19 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_RemoveHook(image_factory_target);
         if (status != MH_OK) return 600 + status;
     }
+#ifdef WXBOT_QUOTE_SEND
+    if (quote_manager_hook_created) {
+        status = MH_RemoveHook(quote_manager_target);
+        if (status != MH_OK) return 600 + status;
+    }
+#endif
     status = MH_Uninitialize();
     if (status == MH_OK) {
         hook_created = false; receive_hook_created = false; factory_hook_created = false;
         image_download_factory_hook_created = false;
+#ifdef WXBOT_QUOTE_SEND
+        quote_manager_hook_created = false;
+#endif
 #ifdef WXBOT_RECALL_RECEIVE
         recall_receive_hook_created = false;
 #endif

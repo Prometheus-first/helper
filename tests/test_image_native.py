@@ -129,6 +129,18 @@ class NativeImageServiceTests(unittest.TestCase):
                 self.assertTrue(self.service._download_image(metadata, Path("unused")))
                 self.assertEqual(self.service._run.call_args.kwargs["download_image"]["image_type"], kind)
 
+    def test_original_reference_takes_priority_without_automatic_retry(self):
+        metadata = parse_image_metadata('<msg><img aeskey="' + 'a' * 32 +
+            '" cdnbigimgurl="original-reference" cdnmidimgurl="standard-reference" /></msg>')
+        path = ROOT / ".runtime/tests/not-created-image.bin"
+        self.assertTrue(self.service._download_image(metadata, path))
+        download = self.service._run.call_args.kwargs["download_image"]
+        self.assertEqual((download["filekey"], download["image_type"]), ("original-reference", 1))
+        self.service._run.reset_mock()
+        self.service._run.return_value = {"success": False}
+        self.assertFalse(self.service._download_image(metadata, path))
+        self.service._run.assert_called_once()
+
     def test_image_send_rejects_another_login_before_native_call(self):
         scratch = ROOT / ".runtime/tests"
         scratch.mkdir(parents=True, exist_ok=True)

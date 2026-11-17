@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "personal_account.h"
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -123,8 +124,8 @@ static void capture(const void *obj){
  if(panel_media&&type!=1)include=1;
  if(media_test){
   if(type==1&&e->lengths[2]==strlen(media_arm)&&!memcmp(e->fields[2],media_arm,e->lengths[2])&&
-     e->lengths[0]>5&&e->lengths[1]>5&&!memcmp(e->fields[0],"wxid_",5)&&!memcmp(e->fields[1],"wxid_",5)){
-   int same=!media_peer[0]||(strlen(media_peer)==e->lengths[0]&&!memcmp(media_peer,e->fields[0],e->lengths[0]));
+     helper_personal_account(e->fields[0],e->lengths[0])&&helper_personal_account(e->fields[1],e->lengths[1])){
+   int same=!media_peer[0]||(strlen(media_peer)==e->lengths[0]&&!memcmp(media_peer,e->fields[0],e->lengths[0])&&strlen(media_self)==e->lengths[1]&&!memcmp(media_self,e->fields[1],e->lengths[1]));
    if(same){memcpy(media_peer,e->fields[0],e->lengths[0]);media_peer[e->lengths[0]]=0;memcpy(media_self,e->fields[1],e->lengths[1]);media_self[e->lengths[1]]=0;media_images=1;media_files=1;media_voices=voice_test?1:0;include=1;}
   }else if(type!=1&&media_peer[0]&&strlen(media_peer)==e->lengths[0]&&strlen(media_self)==e->lengths[1]&&
            !memcmp(media_peer,e->fields[0],e->lengths[0])&&!memcmp(media_self,e->fields[1],e->lengths[1])){

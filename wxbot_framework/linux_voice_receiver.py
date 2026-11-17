@@ -17,7 +17,7 @@ from .account import validate_account
 from .recall import message_id
 from .sdk import Message
 from .text import validate_target
-from .voice_receiver import MAX_RECEIVED_VOICE_BYTES, MAX_VOICE_XML_BYTES, _voice_data
+from .voice_receiver import MAX_RECEIVED_VOICE_BYTES, MAX_VOICE_XML_BYTES, _voice_data, parse_voice_xml
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,21 +128,30 @@ class LinuxVoiceReceiver:
             if not clean.data['native_message_id']:
                 raise ValueError('缺少消息编号')
             payload = message.data.get('_linux_voice')
-            if payload is None or (self._source is None and isinstance(payload, LinuxVoicePayload) and
-                                   isinstance(payload.body, bytes) and not payload.body):
-                return self._status(clean, 'unavailable', error='消息未携带完整语音，不能恢复原音频')
-            if (not isinstance(payload, LinuxVoicePayload) or not isinstance(payload.body, bytes) or
-                    (payload.body and not 12 < len(payload.body) <= min(MAX_RECEIVED_VOICE_BYTES, self.max_cache_bytes)) or
-                    not isinstance(payload.xml, str) or '\0' in payload.xml or
-                    len(payload.xml.encode('utf-8')) > MAX_VOICE_XML_BYTES):
-                raise ValueError('缺少完整音频')
-            # 前缀只接受已路由的本条作者；不让共享解析器接受另一个作者的 XML。
+            if payload is None:
+                return self._status(clean, 'unavailable', error='消息未携带语音元数据')
+            if (not isinstance(payload, LinuxVoicePayload) or not isinstance(payload.xml, str) or
+                    '\0' in payload.xml or len(payload.xml.encode('utf-8')) > MAX_VOICE_XML_BYTES):
+                raise ValueError('语音元数据无效')
+            # 群消息前缀只能是本条消息的真实作者。
             xml = payload.xml.strip()
             if not xml.startswith('<'):
                 prefix = message.sender_id + ':\n'
                 if not message.is_group or not message.sender_id or not xml.startswith(prefix):
                     raise ValueError('语音作者前缀无效')
                 xml = xml[len(prefix):]
+            try:
+                xml, _ = parse_voice_xml(xml)
+            except ValueError:
+                # 无效 XML 仍由原有缓存任务给出失败状态。
+                pass
+            else:
+                clean = replace(clean, data=dict(clean.data, voice_xml=xml, raw_content=xml))
+            if self._source is None and isinstance(payload.body, bytes) and not payload.body:
+                return self._status(clean, 'unavailable', error='消息未携带完整语音，不能恢复原音频')
+            if (not isinstance(payload.body, bytes) or
+                    (payload.body and not 12 < len(payload.body) <= min(MAX_RECEIVED_VOICE_BYTES, self.max_cache_bytes))):
+                raise ValueError('缺少完整音频')
             payload = LinuxVoicePayload(xml, payload.body)
         except (ValueError, TypeError, UnicodeError):
             return self._status(clean, 'failed', error='语音音频或元数据不可用，不能完整补发')

@@ -38,10 +38,8 @@ def _safe_directory(path):
             raise ValueError('语音缓存目录不能使用链接')
 
 
-def _voice_data(payload, xml):
-    if (not isinstance(payload, bytes) or not 12 < len(payload) <= MAX_RECEIVED_VOICE_BYTES or
-            not payload.startswith((TENCENT_SILK_HEADER, STANDARD_SILK_HEADER))):
-        raise ValueError('完整 SILK 音频不可用')
+def parse_voice_xml(xml):
+    """校验并保留语音 XML 原文，只去掉群消息的路由前缀。"""
     if not isinstance(xml, str) or '\0' in xml or len(xml.encode('utf-8')) > MAX_VOICE_XML_BYTES:
         raise ValueError('语音元数据无效')
     # 群消息的作者前缀属于消息路由，不属于 XML。
@@ -69,6 +67,14 @@ def _voice_data(payload, xml):
     node = nodes[0]
     if len(node) or len(node.attrib) > 64:
         raise ValueError('语音元数据结构无效')
+    return content, node
+
+
+def _voice_data(payload, xml):
+    if (not isinstance(payload, bytes) or not 12 < len(payload) <= MAX_RECEIVED_VOICE_BYTES or
+            not payload.startswith((TENCENT_SILK_HEADER, STANDARD_SILK_HEADER))):
+        raise ValueError('完整 SILK 音频不可用')
+    _, node = parse_voice_xml(xml)
     if node.get('endflag', '1') != '1' or node.get('cancelflag', '0') != '0':
         raise ValueError('语音尚未接收完整')
     duration = node.get('voicelength', '')
@@ -142,7 +148,7 @@ class VoiceReceiver:
 
     def _failed(self, data, reason):
         data.update(voice_status='failed', voice_path='', voice_duration_ms=0,
-                    voice_size=0, voice_error=reason)
+                    voice_size=0, voice_error=reason, voice_xml_only=bool(data.get('voice_xml')))
         self._deliver(data)
 
     def submit(self, data: dict, payload: bytes) -> bool:
@@ -157,11 +163,12 @@ class VoiceReceiver:
             identifier = message_id(data.get('native_message_id'))
             if not identifier or data.get('self_wxid', self.account) != self.account:
                 raise ValueError('语音所属账号或消息编号无效')
-            if data.get('wx_type', 34) != 34 or not isinstance(payload, bytes) or not 12 < len(payload) <= MAX_RECEIVED_VOICE_BYTES:
+            if data.get('wx_type', 34) != 34:
+                raise ValueError('语音消息类型无效')
+            xml, _ = parse_voice_xml(data.get('raw_content'))
+            snapshot.update(voice_xml=xml, raw_content=xml)
+            if not isinstance(payload, bytes) or not 12 < len(payload) <= MAX_RECEIVED_VOICE_BYTES:
                 raise ValueError('语音音频缺失或过长')
-            xml = data.get('raw_content')
-            if not isinstance(xml, str) or len(xml.encode('utf-8')) > MAX_VOICE_XML_BYTES:
-                raise ValueError('语音元数据缺失或过长')
         except (ValueError, TypeError, UnicodeError):
             self._failed(snapshot, '语音音频或元数据不可用，不能完整补发')
             return False

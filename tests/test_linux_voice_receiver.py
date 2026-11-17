@@ -60,9 +60,13 @@ class LinuxVoiceReceiverTests(unittest.TestCase):
         self.fail('offline voice worker did not finish')
 
     def assert_clean(self, message):
-        public = repr(message) + json.dumps(message.data)
+        visible = {key: value for key, value in message.data.items()
+                   if key not in ('voice_xml', 'raw_content')}
+        public = repr(message) + json.dumps(visible)
         for token in ('_linux_voice', 'private-key', 'private-client', 'private-raw', 'bytearray', 'raw_content'):
             self.assertNotIn(token, public)
+        if message.data.get('voice_xml'):
+            self.assertEqual(message.data['raw_content'], message.data['voice_xml'])
         self.assertEqual(message.text, '')
         self.assertTrue(message.data['monitor_only'])
         self.assertTrue(message.data['media_cache_only'])
@@ -137,6 +141,19 @@ class LinuxVoiceReceiverTests(unittest.TestCase):
         self.assertFalse(receiver.is_alive)
         self.assertFalse(path.exists())
 
+    def test_complete_xml_is_preserved_on_ready_and_without_inline_audio(self):
+        receiver = self.receiver()
+        metadata = xml(voiceurl='fixture-cdn-token', voiceformat='4', extra='preserved &amp; exact')
+        pending = receiver.submit(original(metadata=metadata))
+        self.assertEqual(pending.data['voice_xml'], metadata)
+        self.wait(lambda: bool(self.rows))
+        self.assertEqual(self.rows[0].data['voice_xml'], metadata)
+        self.assertEqual(self.rows[0].data['raw_content'], metadata)
+        unavailable = receiver.submit(original(identifier='82', metadata=metadata, body=b''))
+        self.assertEqual(unavailable.data['voice_status'], 'unavailable')
+        self.assertEqual(unavailable.data['voice_xml'], metadata)
+        self.assertEqual(unavailable.data['raw_content'], metadata)
+
     def test_standard_silk_normalizes_and_own_group_sync_can_be_cached(self):
         receiver = self.receiver(allowed_targets=[ROOM])
         source = STANDARD_SILK_HEADER + b'\x03\0abc' * 50 + b'\xff\xff'
@@ -187,7 +204,7 @@ class LinuxVoiceReceiverTests(unittest.TestCase):
         self.wait(lambda: bool(self.rows))
         self.assertEqual(self.rows[0].data['voice_status'], 'ready')
 
-    def test_missing_audio_is_unavailable_without_xml_or_credentials(self):
+    def test_missing_audio_is_unavailable_and_preserves_valid_xml(self):
         receiver = self.receiver()
         for message in (original(body=b''), original(data={'_linux_voice': None})):
             result = receiver.submit(message)

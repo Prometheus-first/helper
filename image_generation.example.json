@@ -1,0 +1,6 @@
+{
+  "base_urls": ["https://image-api.example.com/v1"],
+  "api_key": "YOUR_API_KEY",
+  "model": "YOUR_IMAGE_MODEL",
+  "timeout_seconds": 180
+}

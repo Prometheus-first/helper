@@ -56,6 +56,10 @@ class AtTextConfig(TextConfig):
     _fields_ = [("members", c.c_char * 1024)]
 
 
+class QuoteTextConfig(TextConfig):
+    _fields_ = [("original_id", c.c_uint64), ("account", c.c_char * 128)]
+
+
 class EmoticonConfig(TextConfig):
     _fields_ = [("account", c.c_char * 128), ("send", c.c_uint32), ("reserved", c.c_uint32)]
 
@@ -78,6 +82,11 @@ class FriendRequestConfig(TextConfig):
                 ("v4", c.c_char * 8192), ("scene", c.c_uint32), ("reserved", c.c_uint32)]
 
 
+class FriendAddConfig(TextConfig):
+    _fields_ = [("account", c.c_char * 128), ("room", c.c_char * 128),
+                ("execute", c.c_uint32), ("reserved", c.c_uint32)]
+
+
 class ImageDownloadConfig(Config):
     _fields_ = [("filekey", c.c_char * 1024), ("aeskey", c.c_char * 65),
                 ("image_type", c.c_uint32)]
@@ -89,6 +98,8 @@ class FileDownloadConfig(Config):
 
 
 assert c.sizeof(Config) == 1560 and c.sizeof(TextConfig) == 1688 and c.sizeof(AtTextConfig) == 2712
+assert c.sizeof(QuoteTextConfig) == 1824 and QuoteTextConfig.account.offset == 1696
+assert c.sizeof(FriendAddConfig) == 1952
 assert c.sizeof(ImageDownloadConfig) == 2656
 assert c.sizeof(EmoticonConfig) == 1824 and EmoticonConfig.account.offset == 1688
 assert EmoticonConfig.send.offset == 1816 and EmoticonConfig.reserved.offset == 1820
@@ -206,12 +217,37 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         download_image=None, emoticon_path=None, emoticon_probe=False, account=None,
         voice_path=None, voice_duration_ms=None, voice_probe=False,
         file_path=None, file_probe=False, download_file=None,
+        video_path=None, video_duration_seconds=None, video_probe=False,
         group_operation=None, group_members=None, group_probe=False,
-        friend_request=None, friend_probe=False):
+        friend_request=None, friend_probe=False, friend_add=None, friend_add_probe=False, quote_id=None):
     dll = Path(bridge_path or DLL).resolve()
     if dll not in (DLL.resolve(), TEXT_DLL.resolve()):
         raise ValueError("不支持的桥接 DLL 路径")
     generic = dll == TEXT_DLL.resolve()
+    if quote_id is not None:
+        if (not generic or mode != "--dispatch" or
+                any(value is not None for value in (mentions, image_path, download_image,
+                    emoticon_path, voice_path, voice_duration_ms, file_path, download_file,
+                    video_path, video_duration_seconds, group_operation, group_members,
+                    friend_request, friend_add)) or
+                any((image_probe, emoticon_probe, voice_probe, file_probe, video_probe,
+                     group_probe, friend_probe, friend_add_probe))):
+            raise ValueError("引用回复需要通用文本发送，不能与其他发送参数混用")
+        from wxbot_framework.account import validate_account
+        from wxbot_framework.quoted import validate_quote_id
+        quote_id = validate_quote_id(quote_id)
+        account = validate_account(account)
+    is_video = video_path is not None
+    if is_video:
+        if file_path is not None or file_probe or type(video_probe) is not bool:
+            raise ValueError("视频参数不能与文件参数混用")
+        from wxbot_framework.videos import inspect_video
+        video = inspect_video(video_path)
+        if type(video_duration_seconds) is not int or video_duration_seconds != video.duration_seconds:
+            raise ValueError("视频时长必须与 MP4 内容一致")
+        file_path, file_probe = str(video.path), video_probe
+    elif video_probe or video_duration_seconds is not None:
+        raise ValueError("视频检查和时长需要视频路径")
     accepting_friend = mode == "--accept-friend"
     if accepting_friend:
         if (not generic or type(friend_probe) is not bool or
@@ -237,6 +273,20 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         target, text = "", "wxbot.friend.accept"
     elif friend_request is not None or friend_probe:
         raise ValueError("好友申请参数仅用于好友申请操作")
+    adding_friend = mode == "--add-friend"
+    if adding_friend:
+        if (not generic or not isinstance(friend_add, dict) or type(friend_add_probe) is not bool or
+                any(value is not None for value in (image_path, download_image, file_path, download_file,
+                    voice_path, voice_duration_ms, emoticon_path, mentions, group_operation, group_members, friend_request)) or
+                image_probe or file_probe or voice_probe or emoticon_probe or group_probe or friend_probe):
+            raise ValueError("主动加好友不能与其他操作混用")
+        from wxbot_framework.account import validate_account
+        from wxbot_framework.friend_add import validate_friend_add
+        account = validate_account(account)
+        target, friend_room, text = validate_friend_add(friend_add.get("wxid"), friend_add.get("room"),
+                                                        friend_add.get("message"), self_wxid=account)
+    elif friend_add is not None or friend_add_probe:
+        raise ValueError("主动加好友参数仅用于好友申请操作")
     managing_group = mode == "--manage-group"
     if managing_group:
         if (not generic or group_operation not in ("invite", "create") or type(group_probe) is not bool or
@@ -309,7 +359,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                 any(ch not in "0123456789abcdefABCDEF" for ch in aeskey)):
             raise ValueError("图片 CDN AES 参数无效")
         image_type = download_image.get("image_type", 2)
-        if type(image_type) is not int or image_type not in (1, 2, 3):
+        if type(image_type) is not int or image_type not in (1, 2, 3, 4):
             raise ValueError("图片下载类型无效")
         text = str(destination)
     elif download_image is not None:
@@ -344,7 +394,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         from wxbot_framework.emoticons import validate_emoticon_path
         text = str(validate_emoticon_path(emoticon_path))
     elif emoticon_probe or (account is not None and voice_path is None and file_path is None and
-                           not downloading_file and not managing_group and not accepting_friend):
+                           not downloading_file and not managing_group and not accepting_friend and not adding_friend and quote_id is None):
         raise ValueError("表情路径检查和账号参数需要 emoticon_path")
     if image_path is not None:
         if not generic or mode != "--dispatch" or mentions is not None:
@@ -353,11 +403,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         text = str(validate_image_path(image_path))
     elif image_probe:
         raise ValueError("图片路径检查需要 image_path")
-    if generic and mode not in ("--dispatch", "--listen", "--remove", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend"):
+    if generic and mode not in ("--dispatch", "--listen", "--remove", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend"):
         raise ValueError("通用桥接只支持文本、图片与表情、监听和卸载")
     if not generic and target != "filehelper":
         raise ValueError("旧自测桥接仅支持文件传输助手")
-    if generic and not managing_group and not accepting_friend:
+    if generic and not managing_group and not accepting_friend and not adding_friend:
         from wxbot_framework.text import validate_target
         validate_target(target)
     if mentions is not None:
@@ -365,11 +415,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             raise ValueError("艾特成员列表仅用于通用文本发送")
         from wxbot_framework.text import validate_mentions
         mentions = validate_mentions(target, mentions)
-    if mode not in ("--arm", "--dispatch", "--receive", "--listen", "--remove", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend"):
+    if mode not in ("--arm", "--dispatch", "--receive", "--listen", "--remove", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend"):
         raise RuntimeError("不支持的原生桥接操作")
     if mode == "--probe-at" and not generic:
         raise ValueError("艾特探针仅用于通用桥接")
-    if keep_loaded and mode not in ("--dispatch", "--download-image", "--download-file", "--manage-group", "--accept-friend"):
+    if keep_loaded and mode not in ("--dispatch", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend"):
         raise ValueError("keep_loaded 只用于接收服务内的发送")
     if c.sizeof(PTR) != 8: raise RuntimeError("需要 64 位 Python")
     encoded = text.encode("utf-8")
@@ -399,13 +449,21 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         build = compatible_core(core[1], baseline)
         if build is None:
             raise RuntimeError("微信核心 DLL 指纹不匹配，拒绝加载")
+        if quote_id is not None and build.get('wechat_version') != '4.2.0.12':
+            raise RuntimeError("当前微信版本未适配原生引用回复")
+        if downloading and image_type == 4 and build.get('wechat_version') != '4.2.0.12':
+            raise RuntimeError('视频 CDN 下载仅适配微信 4.2.0.12')
+        if adding_friend and build.get('wechat_version') != '4.2.0.12':
+            raise RuntimeError('主动添加好友仅适配微信 4.2.0.12')
         if build.get('wechat_version') == '4.2.0.12':
-            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend') or
+            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend', '--add-friend') or
                 any(value is not None for value in (emoticon_path, group_operation)))
             if unsupported:
                 raise RuntimeError('微信 4.2.0.12 此功能尚未适配')
+        elif is_video:
+            raise RuntimeError('原生视频发送仅适配微信 4.2.0.12')
         if build.get('wechat_version') == '4.2.0.11':
-            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend') or
+            unsupported = (mode not in ('--listen', '--remove', '--dispatch', '--download-image', '--download-file', '--accept-friend', '--add-friend') or
                 any(value is not None for value in (emoticon_path, group_operation)))
             if unsupported:
                 raise RuntimeError('微信 4.2.0.11 此功能尚未适配')
@@ -417,17 +475,19 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         pe = pefile.PE(str(dll))
         name = b"WxInspectFriendRequest" if accepting_friend else b"WxInspectGroupManagement" if managing_group else b"WxDownloadFile" if downloading_file else b"WxDownloadImage" if downloading else b"WxArmMentionProbe" if mode == "--probe-at" else {
             "--arm":b"WxArmSelfTest", "--dispatch":b"WxDispatchSelfTest", "--receive":b"WxArmReceiveTest",
-            "--listen":b"WxStartFileHelperReceiver", "--remove":b"WxRemoveSelfTest"}[mode]
+            "--listen":b"WxStartFileHelperReceiver", "--remove":b"WxRemoveSelfTest", "--add-friend":b"WxSendFriendRequest"}[mode]
         if generic:
             name = {"--dispatch": b"WxSendText", "--listen": b"WxStartTextReceiver",
                     "--remove": b"WxRemoveSelfTest", "--probe-at": b"WxArmMentionProbe",
                     "--download-image": b"WxDownloadImage", "--download-file": b"WxDownloadFile",
-                    "--manage-group": b"WxInspectGroupManagement", "--accept-friend": b"WxInspectFriendRequest"}[mode]
+                    "--manage-group": b"WxInspectGroupManagement", "--accept-friend": b"WxInspectFriendRequest", "--add-friend": b"WxSendFriendRequest"}[mode]
             if accepting_friend:
                 name = b"WxInspectFriendRequest" if friend_probe else b"WxAcceptFriendRequest"
             if managing_group:
                 name = (b"WxInspectGroupManagement" if group_probe else
                         b"WxInviteGroupMembers" if group_operation == "invite" else b"WxCreateGroup")
+            if quote_id is not None:
+                name = b"WxSendQuoteText"
             if mentions is not None:
                 name = b"WxSendAtText"
             if image_path is not None:
@@ -437,7 +497,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             if voice_path is not None:
                 name = b"WxInspectVoicePath" if voice_probe else b"WxSendVoice"
             if file_path is not None:
-                name = b"WxInspectFilePath" if file_probe else b"WxSendFile"
+                name = ((b"WxInspectVideoPath" if file_probe else b"WxSendVideo") if is_video else
+                        (b"WxInspectFilePath" if file_probe else b"WxSendFile"))
         export = next(item.address for item in pe.DIRECTORY_ENTRY_EXPORT.symbols if item.name == name)
 
         def allocate(data):
@@ -448,7 +509,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             if written.value != len(data): raise RuntimeError("参数写入不完整")
             return pointer
 
-        if mode in ("--arm", "--dispatch", "--receive", "--listen", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend"):
+        if mode in ("--arm", "--dispatch", "--receive", "--listen", "--probe-at", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend"):
             existing = dll.name.lower() in loaded_modules
             if existing and not keep_loaded: raise RuntimeError("桥接 DLL 已加载，请先清理")
             if not existing:
@@ -460,8 +521,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         report_path = ROOT / f".runtime/native_requests/{uuid.uuid4().hex}.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         if len(str(report_path)) >= 260: raise RuntimeError("报告路径超过原生接口长度")
-        config = (FriendRequestConfig() if accepting_friend else GroupManagementConfig() if managing_group else FileDownloadConfig() if downloading_file else FileConfig() if file_path is not None else VoiceConfig() if voice_path is not None else EmoticonConfig() if emoticon_path is not None else ImageDownloadConfig() if downloading else
-                  AtTextConfig() if mentions is not None else TextConfig() if generic else Config())
+        config = (FriendAddConfig() if adding_friend else FriendRequestConfig() if accepting_friend else GroupManagementConfig() if managing_group else FileDownloadConfig() if downloading_file else FileConfig() if file_path is not None else VoiceConfig() if voice_path is not None else EmoticonConfig() if emoticon_path is not None else ImageDownloadConfig() if downloading else
+                  QuoteTextConfig() if quote_id is not None else AtTextConfig() if mentions is not None else TextConfig() if generic else Config())
         config.size, config.pid, config.manager = c.sizeof(config), pid, 0
         config.log_path, config.text = str(report_path), encoded
         if generic and not downloading and not downloading_file:
@@ -475,6 +536,10 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             config.aeskey = aeskey.encode("ascii")
             config.expected_size = expected_size
             config.account = account.encode("ascii")
+        if adding_friend:
+            config.account = account.encode("ascii")
+            config.room = friend_room.encode("ascii")
+            config.execute = 0 if friend_add_probe else 1
         if managing_group:
             config.account = account.encode("ascii")
             config.members = ",".join(group_members).encode("ascii")
@@ -484,6 +549,9 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             config.v3 = friend_request.encrypted_username.encode("utf-8")
             config.v4 = friend_request.ticket.encode("utf-8")
             config.scene = friend_request.scene
+        if quote_id is not None:
+            config.account = account.encode("ascii")
+            config.original_id = quote_id
         if mentions is not None:
             config.members = ",".join(mentions).encode("ascii")
         if emoticon_path is not None:
@@ -496,6 +564,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         if file_path is not None:
             config.account = account.encode("ascii")
             config.send = 0 if file_probe else 1
+            if is_video:
+                config.reserved = video_duration_seconds
         config_parameter = allocate(bytes(config))
         exit_code = remote_call(process, loaded[0] + export, config_parameter)
         if mode == "--remove" and exit_code == 0:
@@ -505,8 +575,8 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
         result = {"mode":mode,"pid":pid,"code":exit_code,"target":target,"report_path":str(report_path)}
         if mode == "--remove":
             result["dll_unloaded"] = dll.name.lower() not in modules(pid)
-        if mode in ("--dispatch", "--download-image", "--download-file", "--manage-group", "--accept-friend"):
-            deadline = time.monotonic() + (120 if downloading or downloading_file or managing_group or accepting_friend or emoticon_path is not None or voice_path is not None or file_path is not None else 15)
+        if mode in ("--dispatch", "--download-image", "--download-file", "--manage-group", "--accept-friend", "--add-friend"):
+            deadline = time.monotonic() + (120 if downloading or downloading_file or managing_group or accepting_friend or adding_friend or emoticon_path is not None or voice_path is not None or file_path is not None else 15)
             while exit_code == 0 and not report_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             if report_path.exists():
@@ -527,10 +597,13 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
             else:
                 result["dll_unloaded"] = False
             result["success"] = (exit_code == 0 and result.get("report", {}).get("completion_success") is True
-                                 and (True if managing_group or accepting_friend else (result["report"].get("file_path") == text) if downloading_file else
+                                 and (True if managing_group or accepting_friend or adding_friend else (result["report"].get("file_path") == text) if downloading_file else
                                       (result["report"].get("image_path") == text) if downloading else
                                       (result["report"].get("target") == target and result["report"].get("text") == text))
                                  and cleanup_code == 0 and (keep_loaded or result.get("dll_unloaded") is True))
+            if quote_id is not None:
+                report = result.get("report", {})
+                result["success"] = result["success"] and (report.get("message_type"), report.get("app_type")) == (49, 57)
             if emoticon_path is not None:
                 report = result.get("report", {})
                 result["success"] = (result["success"] and report.get("message_type") == 47 and
@@ -544,10 +617,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                     report.get("operation") == ("voice_probe" if voice_probe else "voice_send"))
             if file_path is not None:
                 report = result.get("report", {})
-                result["success"] = (result["success"] and report.get("message_type") == 49 and
-                    report.get("app_type") == 6 and report.get("file_path") == text and
+                result["success"] = (result["success"] and report.get("message_type") == (43 if is_video else 49) and
+                    report.get("app_type") == (0 if is_video else 6) and report.get("file_path") == text and
                     report.get("sent") is (not file_probe) and
-                    report.get("operation") == ("file_probe" if file_probe else "file_send"))
+                    report.get("operation") == (("video_probe" if file_probe else "video_send") if is_video else
+                                                ("file_probe" if file_probe else "file_send")))
             if downloading_file:
                 report = result.get("report", {})
                 result["success"] = (result["success"] and report.get("operation") == "file_download" and
@@ -565,6 +639,11 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                         validate_group_id(report.get("room_id"))
                     except ValueError:
                         result["success"] = False
+            if adding_friend:
+                report = result.get("report", {})
+                result["success"] = (exit_code == 0 and report.get("operation") == "friend_add" and
+                    report.get("success") is True and report.get("executed") is (not friend_add_probe) and
+                    cleanup_code == 0 and (keep_loaded or result.get("dll_unloaded") is True))
             if accepting_friend:
                 report = result.get("report", {})
                 result["success"] = (result["success"] and
@@ -573,7 +652,7 @@ def run(mode, *, pid=None, text="WXNATIVE_TEST_3", keep_loaded=False, preserve_r
                     report.get("sent") is (not friend_probe) and report.get("scene") == friend_request.scene)
             if mentions is not None:
                 result["success"] = result["success"] and result["report"].get("at_members") == ",".join(mentions)
-            if not preserve_report and result["success"]:
+            if not preserve_report and (result["success"] or quote_id is not None):
                 # 长期运行只保留内存中的完成结果；删除本次已结束的临时报告。
                 try:
                     report_path.unlink(missing_ok=True)

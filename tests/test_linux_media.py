@@ -239,10 +239,17 @@ class NativeMediaTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def test_receive_arms_one_peer_limits_samples_and_allows_explicit_rearm(self):
+        self.check_receive_scope("wxid_friend_fixture")
+
+    def test_receive_arms_legacy_personal_identifier(self):
+        self.check_receive_scope("legacy.friend-01")
+
+    def check_receive_scope(self, peer):
         with LocalEventListener() as listener:
             env=os.environ.copy();env.update(LD_PRELOAD=str(self.receiver_bridge),HELPER_LINUX_EVENT_SOCKET=str(listener.path),
                 HELPER_LINUX_CONTROLLER_PID=str(os.getpid()),HELPER_LINUX_TEST_MARKERS="1",
-                HELPER_LINUX_TEST_MEDIA="1",HELPER_LINUX_MEDIA_ARM_TEXT="WX_LINUX_MEDIA_ARM_11")
+                HELPER_LINUX_TEST_MEDIA="1",HELPER_LINUX_MEDIA_ARM_TEXT="WX_LINUX_MEDIA_ARM_11",
+                HELPER_FIXTURE_MEDIA_PEER=peer)
             child=subprocess.Popen([str(self.receiver)],env=env)
             listener.bind_pid(child.pid)
             try:
@@ -251,7 +258,7 @@ class NativeMediaTests(unittest.TestCase):
                     for _ in range(5):
                         message=read_message_event(conn);events.append(message);acknowledge_text_event(conn,message["sequence"])
                     self.assertEqual([m["type"] for m in events],[1,3,49,1,3])
-                    self.assertTrue(all(m["sender"]=="wxid_friend_fixture" for m in events))
+                    self.assertTrue(all(m["sender"]==peer for m in events))
                     self.assertIn("fixture-image-second-round",events[-1]["text"])
                     self.assertNotIn("wrong-peer",str(events))
                     self.assertNotIn("quota-",str(events))
@@ -317,6 +324,12 @@ class NativeMediaTests(unittest.TestCase):
             if child.poll() is None:child.terminate();child.wait(timeout=3)
 
     def test_message_download_uses_scoped_retained_context_and_coroutine(self):
+        self.check_message_download_scope("wxid_friend_fixture")
+
+    def test_message_download_accepts_legacy_personal_identifier(self):
+        self.check_message_download_scope("legacy.friend-01")
+
+    def check_message_download_scope(self, peer):
         sender=LinuxNativeSender();env=os.environ.copy();env.update(sender.environment(),LD_PRELOAD=str(self.sender_bridge))
         profile=self.work/'image-profile.txt';profile.write_text('wxid_self_fixture');env['HELPER_FIXTURE_PROFILE_FILE']=str(profile)
         child=subprocess.Popen([str(self.sender)],env=env);sender.bind_pid(child.pid)
@@ -324,9 +337,14 @@ class NativeMediaTests(unittest.TestCase):
             sender.wait_ready(process=child)
             self.assertIn("image_context",sender.features)
             self.assertFalse(sender.image_context_available("a"*32))
-            self.assertTrue(sender.bind_image_scope("wxid_friend_fixture","wxid_self_fixture"))
+            for invalid in ("filehelper", "gh_fixture", "123@chatroom", "weixin", "bad peer"):
+                with self.assertRaises(LinuxSendError):
+                    sender._result(sender._request(b"A", (invalid + "\nwxid_self_fixture").encode()))
+            with self.assertRaises(LinuxSendError):sender.bind_image_scope(peer,"wxid_wrong_account")
+            self.assertTrue(sender.bind_image_scope(peer,"wxid_self_fixture"))
             self.assertTrue(sender.image_context_available("a"*32))
             self.assertFalse(sender.image_context_available("b"*32))
+            self.assertFalse(sender.image_context_available("c"*32))
             self.assertTrue(sender.download_message_image("a"*32))
             with self.assertRaises(LinuxSendError):sender.download_message_image("b"*32)
             with self.assertRaises(ValueError):sender.image_context_available("not-a-checksum")

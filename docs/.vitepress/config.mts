@@ -33,6 +33,7 @@ export default defineConfig({
         { text: '图片收发', link: '/messages/images' },
         { text: '图库图片', link: '/messages/gallery' },
         { text: '文件收发', link: '/messages/files' },
+        { text: '视频收发', link: '/messages/videos' },
         { text: '合并转发解析', link: '/messages/forwarded' },
         { text: '防撤回与补发', link: '/messages/recall' },
         { text: '表情提取与发送', link: '/messages/emoticons' },

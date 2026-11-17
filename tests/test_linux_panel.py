@@ -129,8 +129,9 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(msg.data['monitor_only'])
         self.assertNotIn('991122', repr(msg.data))
         self.assertNotIn('<msg>', repr(msg.data))
-        monitor = MessageBuffer(); monitor.append(msg)
-        self.assertIn('[引用] 新的回复', json.dumps(monitor.tail(0), ensure_ascii=False))
+        monitor = MessageBuffer()
+        monitor.append(msg)
+        self.assertEqual(monitor.tail(0)['rows'][0]['content'], '新的回复\n引用 测试者：原文字')
         with self.assertRaises(RuntimeError):
             self.backend.convert_event(self.event(xml, kind=49, receiver='wxid_other'))
         own = self.backend.convert_event(self.event(xml, kind=49, sender='wxid_self_fixture', receiver='filehelper'))

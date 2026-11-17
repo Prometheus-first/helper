@@ -1,5 +1,11 @@
 # 常见问题
 
+## 如何保护微信 4.2.0.12 不自动更新？
+
+可选插件 `wechat_update_guard` 默认关闭，仅适用于核验通过的 Windows 微信 4.2.0.12 构建。在启动微信前，在项目目录执行 `python tools/wechat_update_guard.py --protect`；工具会重命名已核验的更新程序，并备份已发现的 4.2.0.13 更新缓存。运行前请确认愿意暂停微信自动更新。
+
+插件在机器人启动后才运行，不能保证赶在微信启动时触发的更新之前；也不能保证拦住所有更新途径。不同构建、安装布局或权限不匹配时会停止并报告。恢复更新程序可执行 `python tools/wechat_update_guard.py --restore`；关闭插件不会自动恢复更新器，缓存备份也不会自动放回。停用更新会影响后续安全更新。
+
 ## 必须安装 Visual Studio 吗
 
 日常运行不需要。项目提供已编译的桥接 DLL，只需匹配的 Windows 微信、64 位 Python、Python 依赖和 Microsoft Visual C++ x64 运行库。修改原生源码并重新编译时才需要 MSVC 工具链。

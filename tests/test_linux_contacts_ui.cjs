@@ -52,7 +52,8 @@ test('账号切换时忽略旧账号扫描结果',async()=>{
 });
 
 test('Linux 导航不再隐藏联系人页面',()=>{
-  const navigation=source.slice(source.indexOf('function navigate()'),source.indexOf('function renderRobotOptions()'));
-  assert.doesNotMatch(navigation,/\['tasks','contacts','moments','articles'\]/);
-  assert.match(source,/for\(const page of \['tasks','moments','articles'\]\)/);
+  const setup=source.slice(source.lastIndexOf('if(isLinux){'));
+  const hidden=setup.match(/for\(const page of \[([^\]]+)\]\).*classList\.add\('hidden'\)/);
+  assert.ok(hidden);
+  assert.deepEqual(hidden[1].match(/[a-z]+/g),['moments','articles']);
 });

@@ -1,0 +1,28 @@
+"""启动微信前保护当前已验证构建；也可恢复更新程序。"""
+import argparse
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from plugins.wechat_update_guard.guard import GuardError, protect, restore
+
+
+def main():
+    parser = argparse.ArgumentParser(description='微信 4.2.0.12 更新保护')
+    choice = parser.add_mutually_exclusive_group(required=True)
+    choice.add_argument('--protect', action='store_true', help='停用已验证的更新器并备份 4.2.0.13 缓存')
+    choice.add_argument('--restore', action='store_true', help='恢复更新器，不自动放回更新缓存')
+    args = parser.parse_args()
+    try:
+        print((protect if args.protect else restore)(ROOT))
+        return 0
+    except GuardError as error:
+        print(f'操作未完成：{error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

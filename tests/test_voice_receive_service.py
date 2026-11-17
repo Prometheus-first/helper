@@ -46,7 +46,7 @@ class VoiceReceiveServiceTests(unittest.TestCase):
         self.assertEqual(ReceivedMediaMessageV6.native_message_id.offset, 267552)
         self.assertEqual(NativeTextService._poll_export, b'WxPollMediaMessageV7')
 
-    def test_binary_nuls_are_preserved_and_xml_is_not_exposed(self):
+    def test_binary_nuls_and_complete_voice_xml_are_preserved(self):
         raw = self.incoming()
         self.assertIsNone(self.service._map_message(raw))
         result = self.delivered[0]
@@ -56,7 +56,9 @@ class VoiceReceiveServiceTests(unittest.TestCase):
         self.assertEqual(data['native_message_id'], '123456')
         self.assertEqual(result['voice_status'], 'pending')
         self.assertTrue(result['monitor_only'])
-        for field in ('raw_content', 'msg', 'content'):
+        self.assertEqual(result['voice_xml'], XML.decode())
+        self.assertEqual(result['raw_content'], XML.decode())
+        for field in ('msg', 'content'):
             self.assertEqual(result[field], '')
 
     def test_group_voice_keeps_conversation_and_real_sender(self):

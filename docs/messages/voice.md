@@ -24,6 +24,34 @@ ctx.reply_voice(message, voice_path)
 
 原生发送按连接和账号核对，不使用文本随机等待。文件快照放在本项目 `.runtime/voices/` 的当前账号子目录，调用结束后清理；原生入口在排队前把音频字节复制到任务持有的内存，避免超时或退出时删除快照影响已排队任务。底层按微信 4.1.15.13 / 4.1.15.56 / 4.2.0.11 / 4.2.0.12 的核心 DLL 精确指纹选择对应地址；其他构建会拒绝加载。发送结果为微信原生接口返回的接受状态，不能单独证明对方已经收到或成功播放。微信 4.1.15.56、4.2.0.11 和 4.2.0.12 收到的完整内联 SILK 语音可用于[语音防撤回](./recall.md)，缺失的音频不会额外下载；本功能不提供语音识别。4.2.0.11 和 4.2.0.12 已在文件传输助手验证发送，并在好友私聊验证接收和撤回补发。
 
+## 读取收到的语音 XML
+
+Windows 与 Linux 的语音事件保留微信提供的完整 XML，读取字段为
+`message.data["voice_xml"]`，`raw_content` 保留相同内容。
+群消息的成员 ID 路由前缀会去掉，XML 中的属性和内容保留原样。
+
+插件在 `plugin.json` 中声明 `"message_types": [34]` 和
+`"requires": ["voice.receive", "voice.xml.receive"]`，即可在 `on_message` 读取。
+
+```python
+from xml.etree import ElementTree as ET
+
+def on_message(self, message, ctx):
+    xml = message.data.get("voice_xml", "")
+    if message.type != 34 or not xml:
+        return
+    root = ET.fromstring(xml)
+    voice = root if root.tag == "voicemsg" else root.find("voicemsg")
+    aeskey = voice.get("aeskey", "")
+    voiceurl = voice.get("voiceurl", "")
+```
+
+声明 `voice.xml.receive` 的插件会收到带有效 XML 的 `ready`、`failed` 或 `unavailable` 语音事件。
+只声明 `voice.receive` 的插件沿用完整音频缓存后的投递流程。
+音频缓存失败时，插件仍可读取本次微信实际提供的元数据。
+`voice_status == "ready"` 时可使用 `voice_path` 读取缓存的 SILK 音频。
+消息监控只显示语音类型、时长和缓存状态。
+
 ## Fish Audio 文字转语音
 
 `voice_reply` 是可选插件，默认关闭。它把 `mention_chat` 已生成的回复合成为微信语音；人格与此人此前十条上下文保持原有处理。菜单、总结、接龙仍发文字。

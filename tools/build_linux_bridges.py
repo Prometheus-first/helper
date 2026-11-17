@@ -16,7 +16,8 @@ def build(root=ROOT):
         for name in ('text_bridge', 'send_bridge'):
             source = root / 'native/linux' / (name + '.c')
             output = target / (name + '.so')
-            if output.exists() and output.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+            dependencies = (source, root / 'native/linux/personal_account.h')
+            if output.exists() and output.stat().st_mtime_ns >= max(p.stat().st_mtime_ns for p in dependencies):
                 continue
             with tempfile.TemporaryDirectory(prefix='.build-', dir=target) as temporary:
                 candidate = Path(temporary) / output.name

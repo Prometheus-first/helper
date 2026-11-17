@@ -1,0 +1,7 @@
+{
+  "api": "v1",
+  "default_enabled": false,
+  "description": "阻止已验证的微信 4.2.0.12 更新程序，保护结果可恢复",
+  "requires": [],
+  "message_types": [1]
+}

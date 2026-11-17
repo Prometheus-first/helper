@@ -144,7 +144,7 @@ static DWORD image_download_validate_config(const ImageDownloadConfig& config) {
     if (!log_length || log_length >= std::size(config.base.log_path) ||
         !key_length || key_length >= sizeof(config.filekey) ||
         (aes_length != 32 && aes_length != 64) ||
-        (config.image_type != 1 && config.image_type != 2 && config.image_type != 3))
+        (config.image_type != 1 && config.image_type != 2 && config.image_type != 3 && config.image_type != 4))
         return ERROR_INVALID_PARAMETER;
     for (size_t index = 0; index < aes_length; ++index) {
         const char ch = config.aeskey[index];
@@ -367,7 +367,10 @@ struct ImageDownloadTaskLease {
     explicit ImageDownloadTaskLease(const ImageDownloadConfig& value) : config(value) {
         _InterlockedIncrement(&live_tasks);
     }
-    ~ImageDownloadTaskLease() { _InterlockedDecrement(&live_tasks); }
+    ~ImageDownloadTaskLease() {
+        SecureZeroMemory(&config, sizeof(config));
+        _InterlockedDecrement(&live_tasks);
+    }
 };
 
 // Separate C++ ownership from the SEH/native invocation above (MSVC C2712).
@@ -397,6 +400,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxDownloadImage(void* parameter) {
             if (status != ERROR_SUCCESS) return status;
             HMODULE core = GetModuleHandleW(L"Weixin.dll");
             if (!core || !core_fingerprint(core)) return ERROR_NOT_SUPPORTED;
+            // Type 4 is the video CDN task, verified only on 4.2.0.12.
+            if (config.image_type == 4 && InterlockedCompareExchange(&core_profile_id, 0, 0) != 4)
+                return ERROR_NOT_SUPPORTED;
             core_base = reinterpret_cast<uintptr_t>(core);
             status = image_download_ensure_factory();
             if (status != ERROR_SUCCESS) return status;

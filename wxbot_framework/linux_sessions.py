@@ -73,10 +73,13 @@ class SessionLease:
     capabilities = PANEL_CAPABILITIES
     scope = ManagedLinuxBackend.scope
 
-    def __init__(self, owner, allowed):
+    def __init__(self, owner, allowed, *, image_on_demand_chats=()):
         self.owner, self.allowed = owner, frozenset(allowed)
         self.account = owner.profile['wxid']
         self.capabilities = getattr(owner.backend, 'capabilities', PANEL_CAPABILITIES)
+        self._image_on_demand_chats = frozenset(image_on_demand_chats)
+        if self._image_on_demand_chats:
+            self.capabilities = self.capabilities | {'image.fetch'}
         self.session_id = uuid.uuid4().hex
         self.closed = False
         self._native_backend = owner.backend
@@ -157,6 +160,13 @@ class SessionLease:
                 self.owner.backend is self._native_backend and self.owner.wechat_running() and
                 self.owner.profile.get('logged_in') and self.owner.profile.get('wxid') == self.account)
 
+    def fetch_image(self, request_id):
+        with self._delivery_lock:
+            receiver = self._media_receiver
+        if receiver is None or not self._is_current():
+            raise RuntimeError('当前微信连接没有可用的图片取图凭证')
+        return receiver.fetch_image(request_id)
+
     @staticmethod
     def _media_key(message):
         return message.chat_id, message.data.get('native_message_id'), message.type
@@ -168,26 +178,32 @@ class SessionLease:
             self._emitter(message)
 
     def _prepare_media_delivery(self, message):
-        """只有完整 ready 缓存交给普通插件，最近 1000 条媒体每条只交付一次。"""
+        """完整媒体或有效语音 XML 交给插件，最近 1000 条媒体每条只交付一次。"""
         media = {3: 'image', 49: 'file', 34: 'voice'}.get(message.type)
         if media is None or not message.data.get('media_cache_only'):
             return message
-        data = dict(message.data, monitor_only=True, dispatch_to_plugins=False)
+        data = dict(message.data, monitor_only=True, dispatch_to_plugins=False, voice_xml_only=False)
         from .recall import message_id
         key = self._media_key(message)
         receiver = self._voice_receiver if message.type == 34 else self._media_receiver
+        voice_metadata_only = bool(message.type == 34 and data.get('voice_xml') and
+                                   data.get('voice_status') in ('failed', 'unavailable'))
         if (message.is_self or data.get('bot_generated') or not message_id(data.get('native_message_id')) or
                 data.get('self_wxid') != self.account or
                 (self.allowed and message.chat_id not in self.allowed) or
                 media + '.receive' not in self.capabilities or receiver is None or
-                not callable(getattr(receiver, 'owns_ready', None)) or not receiver.owns_ready(message)):
+                not callable(getattr(receiver, 'owns_ready', None)) or
+                (not voice_metadata_only and not receiver.owns_ready(message))):
             return replace(message, data=data)
         with self._delivery_lock:
             if not self.closed and key not in self._delivered_media:
                 self._delivered_media[key] = None
                 while len(self._delivered_media) > 1000:
                     self._delivered_media.popitem(last=False)
-                data.update(monitor_only=False, dispatch_to_plugins=True)
+                if voice_metadata_only:
+                    data['voice_xml_only'] = True
+                else:
+                    data.update(monitor_only=False, dispatch_to_plugins=True)
         return replace(message, data=data)
 
     def _media_ready(self, message):
@@ -261,7 +277,10 @@ class SessionLease:
                             is_current=self._is_current, callback=self._media_ready,
                             request_image=self._request_image if self._image_scope_generation is not None else None)
                     if message.type != 34:
-                        message = self._media_receiver.submit(message)
+                        if message.type == 3 and message.chat_id in self._image_on_demand_chats:
+                            message = self._media_receiver.submit(message, defer_image=True)
+                        else:
+                            message = self._media_receiver.submit(message)
             except (OSError, ValueError, RuntimeError):
                 data = dict(message.data)
                 media = 'voice' if message.type == 34 else 'image' if message.type == 3 else 'file'
@@ -494,11 +513,11 @@ class LinuxSessionController:
                 return
         lease.receive(message)
 
-    def lease(self, allowed):
+    def lease(self, allowed, *, image_on_demand_chats=()):
         with self.lock:
             if not self.profile.get('logged_in') or not self.wechat_running():
                 raise PanelError('请先登录微信并等待账号识别', 409)
-            return SessionLease(self, allowed)
+            return SessionLease(self, allowed, image_on_demand_chats=image_on_demand_chats)
 
     def attach(self, lease, emit):
         with self.lock:

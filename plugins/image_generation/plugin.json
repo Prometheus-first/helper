@@ -1,0 +1,7 @@
+{
+  "api": "v1",
+  "default_enabled": false,
+  "description": "AI 生图：发送 /生图 加提示词生成图片",
+  "requires": ["text.receive", "text.send", "image.send"],
+  "message_types": [1]
+}

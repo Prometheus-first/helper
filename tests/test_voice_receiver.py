@@ -58,7 +58,7 @@ class VoiceReceiverTests(unittest.TestCase):
     def saved(self):
         return list(self.directory.rglob('*.silk')) if self.directory.exists() else []
 
-    def test_ready_caches_identical_tencent_bytes_and_strips_private_metadata(self):
+    def test_ready_caches_audio_and_preserves_complete_voice_xml(self):
         receiver = self.receiver()
         self.assertTrue(receiver.submit(event(), SILK))
         self.wait(lambda: len(self.events) == 1)
@@ -69,9 +69,21 @@ class VoiceReceiverTests(unittest.TestCase):
         self.assertEqual(len(path.stem), 32)
         self.assertEqual(path.read_bytes(), SILK)
         self.assertEqual((row['voice_duration_ms'], row['voice_size']), (1000, len(SILK)))
-        public = json.dumps(row)
-        for private in ('raw_content', 'aeskey', 'private-credential', 'private-client', 'voice_payload', 'image_xml'):
-            self.assertNotIn(private, public)
+        self.assertEqual(row['voice_xml'], xml())
+        self.assertEqual(row['raw_content'], xml())
+        for field in ('msg', 'content'):
+            self.assertEqual(row[field], '')
+        for field in ('voice_payload', 'image_xml'):
+            self.assertNotIn(field, row)
+
+    def test_xml_attributes_are_available_even_when_inline_audio_is_missing(self):
+        receiver = self.receiver()
+        metadata = xml(voiceurl='fixture-cdn-token', voiceformat='4', extra='preserved &amp; exact')
+        self.assertFalse(receiver.submit(event(raw_content=metadata), b''))
+        row, = self.events
+        self.assertEqual(row['voice_status'], 'failed')
+        self.assertEqual(row['voice_xml'], metadata)
+        self.assertEqual(row['raw_content'], metadata)
 
     def test_standard_silk_requires_tail_and_is_normalized_without_encoding(self):
         receiver = self.receiver()

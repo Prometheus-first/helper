@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -9,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from wxbot_framework.linux_sessions import LinuxSessionController, ManagedLinuxBackend
 from wxbot_framework.panel_common import PanelError
-from wxbot_framework.sdk import Message
+from wxbot_framework.sdk import Message, PluginContext
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -30,6 +32,63 @@ class Backend:
     def stop(self): self.process.running=False
 
 class LinuxSessionTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'Linux 私有缓存')
+    def test_plugin_fetches_deferred_image_without_a_helper_copy(self):
+        from wxbot_framework.linux_media_receiver import parse_linux_media_payload
+
+        owner = self.sessions[0]
+        backend = owner.backend
+        backend.session_id = 'native-current'
+        backend.instance_home = self.root / 'home'
+        backend.configure_image_downloads = Mock(return_value=7)
+        backend.clear_image_downloads = Mock()
+        peer = 'wxid_peer'
+        body = b'\x89PNG\r\n\x1a\nfixture'
+        xml = f'<msg><img md5="{hashlib.md5(body).hexdigest()}" length="{len(body)}" aeskey="secret"/></msg>'
+        source = backend.instance_home / 'xwechat_files' / backend.account / 'msg' / 'attach' / 'image.dat'
+
+        def download(*_args):
+            source.parent.mkdir(parents=True)
+            source.write_bytes(body)
+            return True
+
+        backend.request_image = Mock(side_effect=download)
+        store = owner.panel.store
+        store._save(dict(store.load(), image_on_demand_chats=[peer]))
+        app = owner.panel._application(self.root, store)
+        app._connect()
+        self.addCleanup(app.stop)
+        lease = app.backend
+        ctx = PluginContext('image_fixture', {}, app.service, lease.capabilities)
+        fetch_plugin = Mock()
+        fetch_plugin.spec.api, fetch_plugin.spec.message_types = 'v1', {3}
+        fetch_plugin.spec.requires = {'image.fetch'}
+        cached_plugin = Mock()
+        cached_plugin.spec.api, cached_plugin.spec.message_types = 'v1', {3}
+        cached_plugin.spec.requires = {'image.receive'}
+        source_message = Message('', peer, type=3, session_id=backend.session_id, data={
+            'native_message_id': '123', 'self_wxid': backend.account,
+            '_linux_media': parse_linux_media_payload(3, xml),
+        })
+        with patch.dict(app.plugins.records, {'fetch': fetch_plugin, 'cached': cached_plugin}):
+            owner._on_message(source_message)
+            owner._on_message(source_message)
+            fetch_plugin.enqueue.assert_called_once()
+            cached_plugin.enqueue.assert_not_called()
+        notice = fetch_plugin.enqueue.call_args.args[0]
+        request_id = notice.data['image_request_id']
+        self.assertEqual(notice.data['image_status'], 'deferred')
+        self.assertEqual(notice.data['native_message_id'], '123')
+        self.assertNotIn('secret', str(notice.data))
+        self.assertFalse(notice.image_path)
+        backend.request_image.assert_not_called()
+        self.assertEqual(ctx.fetch_image(request_id, expected_session=notice.session_id), body)
+        backend.request_image.assert_called_once()
+        self.assertEqual(list((owner.workspace / 'recall_media').rglob('image-*')), [])
+        lease.stop()
+        with self.assertRaises(RuntimeError):
+            ctx.fetch_image(request_id)
+
     def test_upload_snapshots_are_cleaned_only_after_managed_wechat_exits(self):
         owner = self.sessions[0]
         backend = owner.backend
