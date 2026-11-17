@@ -674,6 +674,27 @@ class NativeTextService(NativeFileHelperService):
             self._check_account(force=True)
             return self.last_result.get("success") is True
 
+    def delete_friend(self, wxid):
+        """Delete exactly one current friend, retaining the conversation history."""
+        from wxbot_framework.friend_add import validate_friend_wxid
+        wxid = validate_friend_wxid(wxid)
+        with self._calls:
+            if self.wechat_version != "4.2.0.12":
+                raise RuntimeError("仅微信 4.2.0.12 支持删除好友")
+            snapshot = self.contacts()
+            account = snapshot["account"]
+            if wxid == account or sum(row.get("wxid") == wxid for row in snapshot["contacts"]) != 1:
+                raise ValueError("该联系人已不在当前账号的好友名单中")
+            self._check_account(force=True)
+            if account != self.self_wxid or snapshot["session_id"] != self._friend_session_id:
+                raise RuntimeError("联系人所属的微信连接已结束")
+            self.last_result = self._run("--delete-friend", pid=self.pid, keep_loaded=True,
+                preserve_report=self.preserve_reports, account=account, target=wxid)
+            self._check_account(force=True)
+            if account != self.self_wxid or snapshot["session_id"] != self._friend_session_id:
+                raise RuntimeError("联系人所属的微信连接已结束")
+            return self.last_result.get("delete_status", "unknown")
+
     def invite_group_members(self, room, members):
         from wxbot_framework.group_management import validate_group_id, validate_group_members
         room = validate_group_id(room)

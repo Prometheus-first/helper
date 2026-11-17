@@ -39,6 +39,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "file.receive", "file.send", "friend.file.receive", "friend.file.send",
     "group.file.receive", "group.file.send", "voice.receive", "voice.xml.receive", "voice.send",
     "friend.voice.send", "group.voice.send", "video.send", "group.video.send", "video.receive", "friend.video.receive", "group.video.receive", "friend.request.send",
+    "friend.delete",
     "text.quote.send", "message.recall.local",
     "miniprogram.control",
     "contact.read",
@@ -157,6 +158,9 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def send_friend_request(self, wxid, room, message):
         return self.raw.send_friend_request(wxid, room, message)
+
+    def delete_friend(self, wxid):
+        return self.raw.delete_friend(wxid)
 
     def invite_group_members(self, room, members):
         return self.raw.invite_group_members(room, members)

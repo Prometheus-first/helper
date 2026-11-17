@@ -81,6 +81,7 @@ python main.py
 | 安装、选择账号、添加群 | [快速开始](docs/guide/quick-start.md) · [账号与群聊](docs/guide/account-and-groups.md) |
 | 启停账号、监控消息、修改插件 | [网页管理台](docs/guide/web-panel.md) |
 | 扫描好友、查看资料和标签 | [扫描联系人](docs/guide/web-panel.md#扫描联系人) |
+| 删除单个好友并保留聊天记录（仅微信 4.2.0.12） | [调用方式与实测结果](docs/guide/web-panel.md#删除好友) |
 | 关注公众号、自动同步文章和站内阅读 | [公众号文章](docs/guide/web-panel.md#公众号文章) |
 | 图片、文件、视频、表情和语音 | [图片](docs/messages/images.md) · [文件](docs/messages/files.md) · [视频](docs/messages/videos.md) · [表情](docs/messages/emoticons.md) · [语音](docs/messages/voice.md) |
 | 合并转发与防撤回 | [合并转发](docs/messages/forwarded.md) · [防撤回](docs/messages/recall.md) |

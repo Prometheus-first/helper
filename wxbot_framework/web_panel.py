@@ -657,7 +657,10 @@ class PanelController:
                         snapshot.get('account') != account):
                     raise PanelError('联系人所属的微信账号已变化', 409)
                 self.directory_cache.save_contacts(account, snapshot)
-            return dict(snapshot, session_id=session)
+            result = dict(snapshot, session_id=session)
+            if 'friend.delete' in getattr(backend, 'capabilities', ()):
+                result['can_delete'] = True
+            return result
         return self._call(query)
 
     def _article_account(self, expected=None, *, required=False):
@@ -976,6 +979,63 @@ class PanelController:
                 with self.lock:
                     self.send_jobs[identifier].update(status='sent')
         threading.Thread(target=deliver, name='PanelFriendAdd', daemon=True).start()
+        return self.send_status(identifier)
+
+    def delete_friend(self, data):
+        from .account import validate_account
+        from .friend_add import validate_friend_wxid
+
+        wxid = validate_friend_wxid(data.get('wxid'))
+        account = validate_account(data.get('account'))
+        identifier, session = data.get('request_id'), data.get('session_id')
+        if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', identifier):
+            raise PanelError('删除请求编号无效')
+        if not isinstance(session, str) or not session or len(session) > 80:
+            raise PanelError('请重新扫描联系人', 409)
+        if data.get('keep_history') is not True or wxid == account:
+            raise PanelError('请确认保留聊天记录并选择一位好友')
+        payload = ('friend_delete', account, session, wxid)
+        with self.lock:
+            previous = self.send_jobs.get(identifier)
+            if previous is not None:
+                if previous['payload'] != payload:
+                    raise PanelError('该请求编号已被使用', 409)
+                return self.send_status(identifier)
+            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
+                raise PanelError('上一条请求仍在处理，请等待结果', 409)
+            if any(job['status'] == 'unknown' and job['payload'] == payload
+                   for job in self.send_jobs.values()):
+                raise PanelError('这个好友已有结果待核对的删除请求，请先在微信核对', 409)
+            app = self.app
+            if app is None or not app._connection_ready or self.state == 'stopping':
+                raise PanelError('请先启动并连接机器人', 409)
+            if (app.config.get('wechat_account') != account or
+                    not app.service.session_is_current(session)):
+                raise PanelError('微信账号或连接已变化，请重新扫描联系人', 409)
+            if 'friend.delete' not in getattr(app.backend, 'capabilities', ()):
+                raise PanelError('仅微信 4.2.0.12 支持删除好友', 409)
+            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload,
+                                          'status': 'sending', 'error': ''}
+            while len(self.send_jobs) > 64:
+                del self.send_jobs[next(iter(self.send_jobs))]
+
+        def deliver():
+            status = 'unknown'
+            error = '微信未返回可确认的删除结果，请在微信核对'
+            try:
+                result = app.service.delete_friend(wxid, expected_session=session)
+                if result == 'deleted':
+                    status, error = 'deleted', ''
+                elif result == 'rejected':
+                    status, error = 'failed', '微信拒绝了这个删除请求'
+            except ValueError:
+                status, error = 'failed', '该联系人已不在当前账号的好友名单中'
+            except Exception:
+                pass
+            with self.lock:
+                self.send_jobs[identifier].update(status=status, error=error)
+
+        threading.Thread(target=deliver, name='PanelFriendDelete', daemon=True).start()
         return self.send_status(identifier)
 
     def send_connection(self):

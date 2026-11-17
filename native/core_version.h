@@ -77,6 +77,15 @@ static uintptr_t core_rva(uintptr_t legacy) {
             case 0x7544b0: return 0x77b3f0;
             case 0x1a26440: return 0x1a69dc0;
             case 0x1a5a850: return 0x1a5a850; // 4.2.0.12 VerifyUser
+            // Single-contact removal, oplog exchange and its protobuf vtables.
+            case 0x710470: return 0x710470;
+            case 0x19db290: return 0x19db290;
+            case 0x9116c88: return 0x9116c88; // micromsg.SKBuiltinBuf
+            case 0x96d13a8: return 0x96d13a8;
+            case 0x96d1428: return 0x96d1428;
+            case 0x9828018: return 0x9828018;
+            case 0x9828098: return 0x9828098;
+            case 0x9828118: return 0x9828118;
             case 0x94f780: return 0x94f780; // 4.2.0.12 native small-program IPC dispatcher
             // 4.2.0.12 only: quote lookup, construction, destruction, and text-builder call sites.
             case 0x1804cc0: return 0x1804cc0;

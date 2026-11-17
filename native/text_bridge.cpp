@@ -9,6 +9,7 @@
 #define WXBOT_FRIEND_RECEIVE
 #define WXBOT_QUOTE_SEND
 #define WXBOT_LOCAL_RECALL
+#define WXBOT_FRIEND_DELETE
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();
@@ -585,6 +586,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxGetReceiveStatistics(void* param
 #include "group_management.h"
 #include "friend_request.h"
 #include "friend_add.h"
+#include "friend_delete.h"
 #include "friend_receive.h"
 
 // 定向只读探针：仅在手动发送 WXBOT_AT_PROBE 的消息中记录 msgsource 字符串。

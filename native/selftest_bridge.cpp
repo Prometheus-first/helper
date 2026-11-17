@@ -41,6 +41,10 @@ static volatile LONG live_completions = 0;
 static volatile LONG live_tasks = 0;
 static bool hook_created = false;
 static bool factory_hook_created = false;
+#ifdef WXBOT_FRIEND_DELETE
+static bool friend_delete_hook_created = false;
+static volatile LONG friend_delete_reply_callbacks = 0;
+#endif
 #ifdef WXBOT_QUOTE_SEND
 static bool quote_manager_hook_created = false;
 #endif
@@ -651,6 +655,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
 #endif
     const auto target = reinterpret_cast<void*>(core_address(core_base, 0x178f100));
     MH_STATUS status = MH_OK;
+#ifdef WXBOT_FRIEND_DELETE
+    auto friend_delete_target = friend_delete_hook_created
+        ? reinterpret_cast<void*>(core_address(core_base, 0x19db290)) : nullptr;
+    if (friend_delete_hook_created) {
+        status = MH_DisableHook(friend_delete_target);
+        if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
+    }
+#endif
     if (hook_created) {
         status = MH_DisableHook(target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
@@ -718,10 +730,24 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         status = MH_DisableHook(image_factory_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
-    for (int attempt = 0; (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) && attempt < 100; ++attempt) Sleep(50);
-    if (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (active_callbacks == 0 && live_completions == 0 && live_tasks == 0
+#ifdef WXBOT_FRIEND_DELETE
+            && friend_delete_reply_callbacks == 0
+#endif
+        ) break;
+        Sleep(50);
+    }
+    if (active_callbacks != 0 || live_completions != 0 || live_tasks != 0
+#ifdef WXBOT_FRIEND_DELETE
+        || friend_delete_reply_callbacks != 0
+#endif
+    ) return ERROR_BUSY;
     bool hooks_present = hook_created || receive_hook_created || factory_hook_created ||
         image_download_factory_hook_created;
+#ifdef WXBOT_FRIEND_DELETE
+    hooks_present = hooks_present || friend_delete_hook_created;
+#endif
 #ifdef WXBOT_RECALL_RECEIVE
     hooks_present = hooks_present || recall_receive_hook_created;
 #endif
@@ -736,6 +762,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         local_recall_delete_hook_created || local_recall_insert_hook_created || local_recall_replace_hook_created;
 #endif
     if (!hooks_present) return 0;
+#ifdef WXBOT_FRIEND_DELETE
+    if (friend_delete_hook_created) {
+        status = MH_RemoveHook(friend_delete_target);
+        if (status != MH_OK) return 600 + status;
+        friend_delete_hook_created = false;
+    }
+#endif
     if (hook_created) {
         status = MH_RemoveHook(target);
         if (status != MH_OK) return 600 + status;

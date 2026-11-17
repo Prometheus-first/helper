@@ -4,10 +4,15 @@ import re
 from .account import validate_account
 from .group_management import validate_group_id
 
-def validate_friend_add(wxid, room, message, *, self_wxid=None, allow_auto=False):
+def validate_friend_wxid(wxid):
     validate_account(wxid)
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,126}", wxid):
         raise ValueError("请填写有效的个人微信 ID")
+    return wxid
+
+
+def validate_friend_add(wxid, room, message, *, self_wxid=None, allow_auto=False):
+    validate_friend_wxid(wxid)
     if room in (None, "") and allow_auto:
         room = ""
     else:

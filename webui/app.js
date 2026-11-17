@@ -42,6 +42,7 @@ let sendChatsAttempted = false;
 let taskRows=[], taskActions=[], taskActionSignature='', taskGeneration=0, taskLoading=false, taskLastFetch=0, taskSignature='';
 let groupNameDraft = new Map(), discoveredGroups = [];
 let contactData=null, contactGeneration=0, contactLoading=false, contactError='', contactIdentity='', contactDetail='', contactPage=0, contactSignature='';
+let contactDeleteJob=null, contactDeleteStatus='';
 let directoryLoadedKey='', directoryPendingKey='', directoryGroupsKey='', directoryGeneration=0, directoryRetryAt=0;
 const contactPageSize=50;
 const accountKey = row => row.pid + ':' + row.wxid;
@@ -818,15 +819,17 @@ function retainContacts() {
 }
 function resetContacts(message='') {
   contactGeneration++;contactData=null;contactLoading=false;contactError=message;contactIdentity='';contactDetail='';contactPage=0;contactSignature='';
+  contactDeleteStatus='';
   $('#contact-search').value='';$('#contact-tag').innerHTML='<option value="">全部标签</option>';
   renderContacts();
 }
 function contactTagText(row) {
   return row.tags_status==='ready'?(row.tags?.length?row.tags.join('、'):'无标签'):'暂不可读取';
 }
-function renderContactDetails(row,index) {
+function renderContactDetails(row,index,canDelete) {
   const fields=[['微信 ID',row.wxid,true],['微信号',row.alias,true],['昵称',row.nickname],['备注',row.remark],['描述',row.description],['性别',{male:'男',female:'女'}[row.sex]],['国家或地区',row.country],['省份',row.province],['城市',row.city],['个性签名',row.signature],['好友标签',contactTagText(row)]];
-  return `<tr class="contact-detail"><td colspan="4"><dl id="contact-detail-${index}" class="contact-details" aria-label="${escape(row.remark||row.nickname||row.wxid)} 的资料">${fields.filter(([,value])=>value).map(([label,value,mono])=>`<div><dt>${label}</dt><dd${mono?' class="contact-id"':''}>${escape(value)}</dd></div>`).join('')}</dl></td></tr>`;
+  const button=canDelete?`<button type="button" class="secondary small" data-friend-delete="${escape(row.wxid)}"${contactDeleteJob?' disabled':''}>删除好友</button>`:'';
+  return `<tr class="contact-detail"><td colspan="4"><dl id="contact-detail-${index}" class="contact-details" aria-label="${escape(row.remark||row.nickname||row.wxid)} 的资料">${fields.filter(([,value])=>value).map(([label,value,mono])=>`<div><dt>${label}</dt><dd${mono?' class="contact-id"':''}>${escape(value)}</dd></div>`).join('')}</dl>${button}</td></tr>`;
 }
 function renderContacts() {
   if(contactData&&contactData.account!==directoryAccount()) {
@@ -836,7 +839,7 @@ function renderContacts() {
     retainContacts();
   }
   const ready=serviceAvailable&&!!state?.connected;
-  $('#scan-contacts').disabled=!ready||busy||contactLoading;
+  $('#scan-contacts').disabled=!ready||busy||contactLoading||!!contactDeleteJob;
   $('#scan-contacts').textContent=contactLoading?'正在扫描…':'扫描联系人';
   $('#contact-search').disabled=!contactData;
   $('#contact-tag').disabled=!contactData;
@@ -845,7 +848,7 @@ function renderContacts() {
   const rows=all.filter(row=>(!query||[row.wxid,row.alias,row.nickname,row.remark,...(row.tags||[])].some(value=>String(value||'').toLowerCase().includes(query)))&&(!tag||(tag==='__untagged'?row.tags_status==='ready'&&!row.tag_ids?.length&&!row.tags?.length:tag==='__unavailable'?row.tags_status!=='ready':row.tag_ids?.includes(tag))));
   const pageCount=Math.max(1,Math.ceil(rows.length/contactPageSize));contactPage=Math.min(contactPage,pageCount-1);
   $('#contact-count').textContent=contactData?((query||tag?rows.length+' / ':'')+all.length+' 位'):'';
-  let status=contactLoading?'正在扫描当前账号的联系人…':contactError;
+  let status=contactLoading?'正在扫描当前账号的联系人…':contactError||contactDeleteStatus;
   if(!status&&contactData) {
     const date=new Date(contactData.scanned_at),time=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
     status=(contactData.cached?'本地缓存':'已保存')+(time?' · '+time:'')+(contactData.complete?'':' · 名单可能尚未同步完整');
@@ -858,14 +861,15 @@ function renderContacts() {
   $('#contact-page').textContent=`第 ${contactPage+1} / ${pageCount} 页`;
   $('#contact-previous').disabled=contactPage===0||contactLoading;
   $('#contact-next').disabled=contactPage>=pageCount-1||contactLoading;
-  const signature=JSON.stringify([contactGeneration,contactLoading,ready,query,tag,contactPage,contactDetail,contactError]);
+  const canDelete=ready&&!busy&&!contactLoading&&contactData?.can_delete===true&&!contactData.cached;
+  const signature=JSON.stringify([contactGeneration,contactLoading,ready,query,tag,contactPage,contactDetail,contactError,canDelete,!!contactDeleteJob]);
   if(signature===contactSignature)return;
   contactSignature=signature;
   const focusId=document.activeElement?.dataset.contact;
   const empty=contactLoading&&!contactData?'正在读取联系人…':!contactData?(!ready?'暂无本地联系人，连接后可扫描。':'尚未扫描联系人。'):query||tag?'没有匹配的联系人。':'本地缓存中暂无好友，请在微信打开通讯录后重新扫描。';
   $('#contact-list').innerHTML=rows.slice(contactPage*contactPageSize,(contactPage+1)*contactPageSize).map(row=>{
     const index=all.indexOf(row),expanded=contactDetail===row.wxid;
-    return `<tr class="contact-row${expanded?' selected':''}"><td><span class="contact-name">${escape(row.remark||row.nickname||row.wxid)}</span>${row.remark&&row.nickname&&row.remark!==row.nickname?`<span class="contact-nickname">${escape(row.nickname)}</span>`:''}<span class="contact-id">${escape(row.wxid)}</span></td><td class="contact-alias"><span class="sr-only">微信号：</span>${escape(row.alias||'未提供')}</td><td class="contact-tags"><span class="sr-only">好友标签：</span>${escape(contactTagText(row))}</td><td class="contact-action"><button type="button" class="text-button small" data-contact="${escape(row.wxid)}" aria-expanded="${expanded}"${expanded?` aria-controls="contact-detail-${index}"`:''} aria-label="${expanded?'收起':'查看'} ${escape(row.remark||row.nickname||row.wxid)} 的资料">${expanded?'收起':'详情'}</button></td></tr>`+(expanded?renderContactDetails(row,index):'');
+    return `<tr class="contact-row${expanded?' selected':''}"><td><span class="contact-name">${escape(row.remark||row.nickname||row.wxid)}</span>${row.remark&&row.nickname&&row.remark!==row.nickname?`<span class="contact-nickname">${escape(row.nickname)}</span>`:''}<span class="contact-id">${escape(row.wxid)}</span></td><td class="contact-alias"><span class="sr-only">微信号：</span>${escape(row.alias||'未提供')}</td><td class="contact-tags"><span class="sr-only">好友标签：</span>${escape(contactTagText(row))}</td><td class="contact-action"><button type="button" class="text-button small" data-contact="${escape(row.wxid)}" aria-expanded="${expanded}"${expanded?` aria-controls="contact-detail-${index}"`:''} aria-label="${expanded?'收起':'查看'} ${escape(row.remark||row.nickname||row.wxid)} 的资料">${expanded?'收起':'详情'}</button></td></tr>`+(expanded?renderContactDetails(row,index,canDelete):'');
   }).join('')||`<tr><td colspan="4" class="table-empty">${empty}</td></tr>`;
   if(focusId)[...$('#contact-list').querySelectorAll('[data-contact]')].find(node=>node.dataset.contact===focusId)?.focus({preventScroll:true});
 }
@@ -887,6 +891,39 @@ async function scanContacts() {
     if(requested===robot&&generation===contactGeneration){contactLoading=false;renderContacts();}
   }
 }
+async function deleteContact(wxid) {
+  const snapshot=contactData,requested=robot;
+  if(contactDeleteJob||contactLoading||busy||!state?.connected||!serviceAvailable||
+    !snapshot?.can_delete||snapshot.cached||!snapshot.session_id||snapshot.account!==directoryAccount())return;
+  const row=snapshot.contacts.find(contact=>contact.wxid===wxid);
+  if(!row||!confirm(`从账号 ${snapshot.account} 删除好友 ${row.remark||row.nickname||wxid}（${wxid}）？聊天记录会保留。`))return;
+  const job={id:crypto.randomUUID(),robot:requested};
+  contactDeleteJob=job;contactDeleteStatus='等待微信确认删除…';contactError='';renderContacts();
+  const current=()=>robot===requested&&contactData===snapshot&&directoryAccount()===snapshot.account;
+  try {
+    let result=await api('friend-delete',{request_id:job.id,wxid,account:snapshot.account,session_id:snapshot.session_id,keep_history:true},requested);
+    for(let attempt=0;current()&&result.status==='sending'&&attempt<45;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      if(!current())return;
+      result=await api('send-status?id='+encodeURIComponent(job.id),undefined,requested);
+    }
+    if(!current())return;
+    if(result.status==='deleted'){
+      contactGeneration++;
+      setContactData({...snapshot,contacts:snapshot.contacts.filter(contact=>contact.wxid!==wxid)});
+      contactDetail='';contactDeleteStatus='微信已确认删除好友';
+      contactDeleteJob=null;renderContacts();
+      await scanContacts();
+    }else{
+      contactDeleteStatus='';contactError=result.error||'微信未返回可确认的删除结果，请在微信核对';
+    }
+  }catch(error){
+    if(current()){contactDeleteStatus='';contactError=error.status?error.message:'暂时无法确认删除结果，请在微信核对';}
+  }finally{
+    if(contactDeleteJob===job)contactDeleteJob=null;
+    renderContacts();
+  }
+}
 async function validateContactSession(requested,generation) {
   if(!contactData||contactData.cached||contactLoading||!state?.connected)return;
   const session=contactData.session_id,scannedGeneration=contactGeneration;
@@ -901,7 +938,13 @@ async function validateContactSession(requested,generation) {
 $('#scan-contacts').onclick=scanContacts;
 $('#contact-search').oninput=()=>{contactPage=0;contactDetail='';renderContacts();};
 $('#contact-tag').onchange=()=>{contactPage=0;contactDetail='';renderContacts();};
-$('#contact-list').onclick=event=>{const button=event.target.closest('[data-contact]');if(!button)return;contactDetail=contactDetail===button.dataset.contact?'':button.dataset.contact;renderContacts();};
+$('#contact-list').onclick=event=>{
+  const remove=event.target.closest('[data-friend-delete]');
+  if(remove){deleteContact(remove.dataset.friendDelete);return;}
+  const button=event.target.closest('[data-contact]');
+  if(!button)return;
+  contactDetail=contactDetail===button.dataset.contact?'':button.dataset.contact;renderContacts();
+};
 for(const [id,direction] of [['previous',-1],['next',1]])$('#contact-'+id).onclick=()=>{contactPage+=direction;contactDetail='';renderContacts();$('#contact-list').closest('table').scrollIntoView({block:'start'});};
 function serviceDisconnected() {
   serviceAvailable=false;
