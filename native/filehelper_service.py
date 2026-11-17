@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pefile
 
-from run_selftest import DLL, TEXT_DLL, K, check, find_wechat, modules, remote_call, run
+from run_selftest import DLL, TEXT_DLL, K, check, find_wechat, modules, run
 from wxbot_framework.bridge_lifecycle import BridgeGuard
 
 logger = logging.getLogger("NativeFileHelper")
@@ -96,7 +96,7 @@ class ReceiveChannel:
         self.message_type = message_type
         self.process = None
         self.buffer = None
-        self.pending = False
+        self._poll_thread = None
         loaded_modules = modules(pid)
         loaded = loaded_modules.get(dll.name.lower())
         if not loaded or Path(loaded[1]).resolve() != dll.resolve():
@@ -118,13 +118,21 @@ class ReceiveChannel:
             raise
 
     def poll(self):
-        if self.pending:
-            raise RuntimeError("上次接收线程超时，不能继续复用缓冲区")
+        if self._poll_thread is None:
+            self._poll_thread = check(K.CreateRemoteThread(self.process, None, 0, self.address,
+                                                          self.buffer, 0, None), "创建接收轮询线程")
+        status = K.WaitForSingleObject(self._poll_thread, 500)
+        if status == 258:  # The same thread and buffer are checked on the next poll.
+            return None
+        if status != 0:
+            raise RuntimeError(f"接收轮询线程等待失败：{status}")
+        result = w.DWORD()
         try:
-            code = remote_call(self.process, self.address, self.buffer)
-        except TimeoutError:
-            self.pending = True
-            raise
+            check(K.GetExitCodeThread(self._poll_thread, c.byref(result)), "读取接收轮询状态")
+        finally:
+            K.CloseHandle(self._poll_thread)
+            self._poll_thread = None
+        code = result.value
         if code:
             raise RuntimeError(f"接收队列读取失败：{code}")
         message = self.message_type()
@@ -147,8 +155,13 @@ class ReceiveChannel:
 
     def close(self):
         if self.process:
-            # 超时线程可能仍持有参数，保留缓冲区直到客户端退出。
-            if self.buffer and not self.pending:
+            if self._poll_thread is not None:
+                wait = K.WaitForSingleObject(self._poll_thread, 0)
+                if wait != 0 and not self.process_exited():
+                    raise RuntimeError("接收线程仍在执行，保留缓冲区和 DLL，稍后再尝试停止")
+                K.CloseHandle(self._poll_thread)
+                self._poll_thread = None
+            if self.buffer and not self.process_exited():
                 K.VirtualFreeEx(self.process, self.buffer, 0, 0x8000)
             K.CloseHandle(self.process)
         self.process = self.buffer = None
@@ -159,6 +172,13 @@ class ReceiveChannel:
         code = w.DWORD()
         check(K.GetExitCodeProcess(self.process, c.byref(code)), "检查微信进程状态")
         return code.value != 259
+
+
+def confirmed_send(result):
+    if not result.get("success") and result.get("code") == 0 and (
+            not result.get("report") or result.get("cleanup_code") == 170):
+        raise TimeoutError("微信未返回可确认的发送结果，请先核对微信")
+    return result.get("success", False)
 
 
 class NativeFileHelperService:
@@ -223,9 +243,12 @@ class NativeFileHelperService:
     def _receive_loop(self):
         try:
             while not self._stop.is_set():
-                with self._calls:
-                    self._before_poll()
-                    message = self._channel.poll()
+                # The receive loop owns its channel until stop() joins it.
+                # A send awaiting its report must not stall this queue.
+                self._before_poll()
+                message = self._channel.poll()
+                if self._stop.is_set():
+                    return
                 if message is None:
                     self._stop.wait(0.3)
                     continue
@@ -266,7 +289,7 @@ class NativeFileHelperService:
                 raise RuntimeError("接收服务没有运行")
             self.last_result = self._run("--dispatch", pid=self.pid, text=content, keep_loaded=True,
                                    preserve_report=self.preserve_reports)
-            return self.last_result["success"]
+            return confirmed_send(self.last_result)
 
     def send_payload(self, payload):
         if payload.get("type") != 11237:

@@ -161,11 +161,18 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   }
   async function pollInteraction(job) {
     if (interactionJobs.get(job.key) !== job || job.status !== 'pending') return;
-    if (!available()) { job.message = '连接中断，正在等待恢复。'; updateInteractions(); scheduleInteractionPoll(job); return; }
+    if (!available()) {
+      if (Date.now() - job.lastConfirmed >= 30000) {
+        job.status = 'unknown'; job.message = '结果未确认，请先在微信核对。';
+      } else {
+        job.message = '连接中断，正在等待恢复。'; scheduleInteractionPoll(job);
+      }
+      updateInteractions(); return;
+    }
     try {
-      const result = await api('moments-interaction-status?id=' + encodeURIComponent(job.id), undefined, job.robot);
+      const result = await api('moments-interaction-status?id=' + encodeURIComponent(job.id), undefined, job.robot, {timeoutMs:8000});
       if (interactionJobs.get(job.key) !== job) return;
-      if (result.status === 'pending') job.message = '正在处理…';
+      if (result.status === 'pending') { job.lastConfirmed = Date.now(); job.message = '正在处理…'; }
       else if (result.status === 'completed') {
         job.status = 'completed'; job.liked = job.action === 'like';
         job.message = job.action === 'like' ? (result.outcome === 'already_liked' ? '已点过赞。' : '已点赞。') : '评论已发送。';
@@ -178,7 +185,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
         job.status = 'unknown'; job.message = '结果未确认，请先在微信核对。';
       }
     } catch (error) {
-      if ([400, 404, 409].includes(error.status)) {
+      if ([400, 403, 404, 409].includes(error.status) || Date.now() - job.lastConfirmed >= 30000) {
         job.status = 'unknown'; job.message = '结果未确认，请先在微信核对。';
       } else job.message = '暂时无法确认结果，正在继续查询。';
     }
@@ -194,11 +201,11 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     const content = action === 'comment' ? entry.input.value : '';
     if (action === 'comment' && (!content.trim() || new TextEncoder().encode(content).length > 1023)) return;
     const job = {id: crypto.randomUUID(), key, robot: entry.robot, session: entry.session,
-      sns_id: String(entry.row.sns_id), action, status: 'pending', message: '正在提交…', liked: false};
+      sns_id: String(entry.row.sns_id), action, status: 'pending', message: '正在提交…', liked: false, lastConfirmed: Date.now()};
     interactionJobs.set(key, job); updateInteractions();
     try {
       await api('moments-interact', {request_id: job.id, session_id: job.session,
-        sns_id: job.sns_id, action, content}, job.robot);
+        sns_id: job.sns_id, action, content}, job.robot, {timeoutMs:8000});
     } catch (error) {
       if ([400, 401, 403, 404, 409, 422].includes(error.status)) {
         job.status = 'failed'; job.message = error.message || '请求未通过，请核对后再试。';
@@ -263,31 +270,43 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   $('#moments-cancel').onclick = () => dialog.close();
   async function pollJob() {
     if (!pending) return;
-    if (!available()) { timer = setTimeout(pollJob, 2000); return; }
     const job = pending;
+    if (!available()) {
+      if (Date.now() - job.lastConfirmed >= 30000) {
+        pending = null;
+        feedback('发布结果未确认，请先在微信核对。不会自动重发。', true);
+        render(false);
+      } else timer = setTimeout(pollJob, 2000);
+      return;
+    }
     try {
-      const result = await api('moments-status?id=' + encodeURIComponent(job.id), undefined, job.robot);
+      const result = await api('moments-status?id=' + encodeURIComponent(job.id), undefined, job.robot, {timeoutMs:8000});
       if (pending !== job) return;
-      if (result.status === 'pending') feedback('正在发布…');
+      if (result.status === 'pending') { job.lastConfirmed = Date.now(); feedback('正在发布…'); }
       else {
         pending = null;
         if (result.status === 'published') { clearDraft(); feedback('已发布。'); }
         else feedback(result.status === 'failed' ? result.error || '发布失败，请核对后再操作。' : '发布结果未确认，请先在微信核对。不会自动重发。', true);
       }
-    } catch { feedback('暂时无法确认发布结果，请先在微信核对。不会自动重发。', true); }
-    finally { render(false); if (pending) timer = setTimeout(pollJob, 2000); }
+    } catch (error) {
+      if (pending !== job) return;
+      if (error.status === 403 || (error.status === 404 && job.accepted) || Date.now() - job.lastConfirmed >= 30000)
+        pending = null;
+      feedback('暂时无法确认发布结果，请先在微信核对。不会自动重发。', true);
+    } finally { render(false); if (pending) timer = setTimeout(pollJob, 2000); }
   }
   $('#moments-publish').onclick = async () => {
     if (!preview || pending || submitting || !connection?.supported) return;
     const draft = preview;
     if (draft.robot !== target || draft.session_id !== connection.session_id) { dialog.close(); feedback('微信连接已变化，请重新预览。', true); return; }
     submitting = true; render(false);
-    const job = {id: crypto.randomUUID(), robot: draft.robot};
+    const job = {id: crypto.randomUUID(), robot: draft.robot, lastConfirmed:Date.now()};
     try {
-      await api('moments-publish', {...draft, request_id: job.id}, job.robot);
+      await api('moments-publish', {...draft, request_id: job.id}, job.robot, {timeoutMs:8000});
+      job.accepted = true;
       pending = job; dialog.close(); feedback('正在发布…'); void pollJob();
     } catch (error) {
-      if (error.status) { $('#moments-confirm-error').textContent = error.message; $('#moments-confirm-error').classList.remove('hidden'); }
+      if (error.status && error.status < 500) { $('#moments-confirm-error').textContent = error.message; $('#moments-confirm-error').classList.remove('hidden'); }
       else { pending = job; dialog.close(); feedback('请求结果未确认，正在查询，请勿重复提交。', true); void pollJob(); }
     } finally { submitting = false; render(false); }
   };

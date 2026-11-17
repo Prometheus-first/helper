@@ -6,16 +6,16 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '../webui/app.js'), 'utf8');
-const code = source.slice(source.indexOf('const roleLabels ='), source.indexOf("$('#refresh-send-chats').onclick=loadSendChats;"));
+const code = source.slice(source.indexOf('const roleLabels ='), source.indexOf("function renderMessages()"));
 
 function fixture(handler) {
   const nodes = new Map();
   const $ = key => {
     if (!nodes.has(key)) nodes.set(key, {value:'', textContent:'', innerHTML:'', disabled:false,
-      classList:{toggle(){}, add(){}, remove(){}}, querySelectorAll(){return [];}});
+      classList:{toggle(){}, add(){}, remove(){}}, querySelectorAll(){return [];}, addEventListener(){}});
     return nodes.get(key);
   };
-  const scope = { $, api:handler, state:{connected:true}, serviceAvailable:true, busy:false,
+  const scope = { $, api:handler, setInterval(){}, sendPolling:false, state:{connected:true}, serviceAvailable:true, busy:false,
     robot:'a', sendMembers:[], mentionSelection:new Set(), sendSession:'', sendGeneration:0,
     sendLoading:false, pendingSend:null, sendChatsAttempted:false,
     escape:s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) };
@@ -81,4 +81,32 @@ test('切换账号后忽略旧账号的会话结果', async () => {
   release(); await old;
   assert.match($('#send-chat').innerHTML, /b@chatroom/);
   assert.doesNotMatch($('#send-chat').innerHTML, /a@chatroom/);
+});
+
+test('已接收的发送请求查不到时退出发送中，保留草稿', async () => {
+  const calls = [];
+  const {scope, $} = fixture(async endpoint => {
+    calls.push(endpoint);
+    throw Object.assign(new Error('请求记录不存在'), {status:404});
+  });
+  $('#send-content').value = '保留这条草稿';
+  scope.pendingSend = {id:'offline-request', robot:'a', accepted:true, lastConfirmed:Date.now()};
+  await scope.pollSendStatus();
+  assert.equal(scope.pendingSend, null);
+  assert.equal($('#send-content').value, '保留这条草稿');
+  assert.equal($('#send-content').disabled, false);
+  assert.match($('#send-status').textContent, /不会自动重发/);
+  assert.deepEqual(calls, ['send-status?id=offline-request']);
+});
+
+test('提交回包丢失时先尝试查询，超过查询期限后解除发送锁', async () => {
+  const {scope, $} = fixture(async () => { throw new Error('网络中断'); });
+  const job = {id:'offline-request', robot:'a', lastConfirmed:Date.now()};
+  scope.pendingSend = job;
+  await scope.pollSendStatus();
+  assert.equal(scope.pendingSend, job);
+  job.lastConfirmed -= 31000;
+  await scope.pollSendStatus();
+  assert.equal(scope.pendingSend, null);
+  assert.equal($('#send-content').disabled, false);
 });

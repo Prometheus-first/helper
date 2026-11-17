@@ -32,6 +32,8 @@ class NativeLifecycleTests(unittest.TestCase):
         self.native = filehelper_service
         self.real_loaded = filehelper_service.loaded_project_bridges
         self.real_cleanup = filehelper_service.cleanup_loaded_bridges
+        self.real_thread = threading.Thread
+        self.receive_channel_type = filehelper_service.ReceiveChannel
         self.guard = Mock()
         self.guard.target_exited.return_value = False
         self.channel = Mock()
@@ -50,6 +52,55 @@ class NativeLifecycleTests(unittest.TestCase):
     def tearDown(self):
         for item in reversed(self.patches):
             item.stop()
+
+    def test_receive_poll_resumes_on_the_same_native_thread(self):
+        native = self.native
+        channel = object.__new__(self.receive_channel_type)
+        channel.process, channel.address, channel.buffer = 1, 2, 3
+        channel._poll_thread = None
+        channel.message_type = native.ReceivedMessage
+        channel.process_exited = Mock(return_value=False)
+
+        def read_message(_process, _buffer, pointer, size, bytes_read):
+            pointer._obj.size = size
+            pointer._obj.present = 1
+            bytes_read._obj.value = size
+            return True
+
+        with patch.object(native, "K") as kernel:
+            kernel.CreateRemoteThread.return_value = 4
+            kernel.WaitForSingleObject.side_effect = [258, 258, 0]
+            kernel.ReadProcessMemory.side_effect = read_message
+            self.assertIsNone(channel.poll())
+            with self.assertRaisesRegex(RuntimeError, "接收线程仍在执行"):
+                channel.close()
+            kernel.VirtualFreeEx.assert_not_called()
+            kernel.CloseHandle.assert_not_called()
+            self.assertEqual(channel.poll().present, 1)
+            kernel.CreateRemoteThread.assert_called_once()
+            kernel.CloseHandle.assert_called_once_with(4)
+            channel.close()
+            kernel.VirtualFreeEx.assert_called_once_with(1, 3, 0, 0x8000)
+
+    def test_receive_can_run_while_send_holds_the_call_lock(self):
+        self.service._channel = self.channel
+        polled = threading.Event()
+        self.channel.poll.side_effect = lambda: polled.set()
+        thread = self.real_thread(target=self.service._receive_loop)
+        with self.service._calls:
+            thread.start()
+            try:
+                self.assertTrue(polled.wait(1))
+            finally:
+                self.service._stop.set()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+
+    def test_admitted_send_without_reply_keeps_an_unknown_outcome(self):
+        with self.assertRaises(TimeoutError):
+            self.native.confirmed_send({"code": 0, "report": None})
+        self.assertFalse(self.native.confirmed_send({"code": 0, "report": {"stage": 21}, "success": False}))
+        self.assertTrue(self.native.confirmed_send({"code": 0, "report": {"stage": 21}, "success": True}))
 
     def test_guard_is_armed_before_loading_and_normal_stop_is_idempotent(self):
         order = []

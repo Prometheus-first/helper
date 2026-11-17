@@ -415,7 +415,7 @@ static DWORD start_impl(void* parameter) {
         return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     if (!wxbot_moments_candidate::anchors_match() || !anchors_match()) return ERROR_REVISION_MISMATCH;
-    if (_InterlockedCompareExchange(&live_tasks, 0, 0) || _InterlockedCompareExchange(&live_completions, 0, 0))
+    if (_InterlockedCompareExchange(&live_tasks, 0, 0) || text_reply_pending())
         return ERROR_BUSY;
     auto lease = std::make_shared<Lease>(cfg);
     auto ticket = std::make_shared<sns_task_lifetime::Ticket>();

@@ -52,10 +52,11 @@ const pages = {overview:'运行概览', plugins:'插件管理', groups:'群聊�
 const pluginNames = {anti_recall_local:['本机防撤回'], anti_recall:['文字防撤回'], anti_recall_image:['图片防撤回'], anti_recall_file:['文件防撤回'], anti_recall_voice:['语音防撤回'], image_gallery:['图库图片'], image_generation:['AI 生图'], wechat_update_guard:['微信更新保护'], picture_idiom:['看图猜成语'], idiom_chain:['成语接龙'], chat_summary:['聊天总结'], mention_chat:['艾特对话'], voice_reply:['语音回复'], group_notice:['进退群提醒'], member_identity:['群内昵称绑定'], personality:['切换人格'], friend_auto_accept:['自动通过好友'], chat_records:['聊天记录管理'], id_responder:['会话 ID 查询'], echo:['文字回声']};
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-async function api(path, body, identifier = robot, {download = false} = {}) {
+async function api(path, body, identifier = robot, {download = false, timeoutMs} = {}) {
   const scope = (path === 'robots' || path === 'accounts' || path.startsWith('accounts/') || path.startsWith('wechat-login/')) ? '' : (path.includes('?') ? '&' : '?') + 'robot=' + encodeURIComponent(identifier);
   const response = await fetch('/api/' + path + scope, {method: body === undefined ? 'GET' : 'POST', cache:'no-store',
     headers:{'X-Helper-Token':token, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
+    ...(timeoutMs === undefined ? {} : {signal:AbortSignal.timeout(timeoutMs)}),
     ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   if (response.ok && download) return response.blob();
   const data = await response.json();
@@ -576,28 +577,35 @@ async function pollSendStatus() {
   const job=pendingSend;if(!job||sendPolling)return;
   sendPolling=true;
   try {
-    const result=await api('send-status?id='+encodeURIComponent(job.id),undefined,job.robot);
+    const result=await api('send-status?id='+encodeURIComponent(job.id),undefined,job.robot,{timeoutMs:8000});
     if(pendingSend!==job||job.robot!==robot)return;
-    if(result.status==='sending')return;
+    if(result.status==='sending'){job.accepted=true;job.lastConfirmed=Date.now();return;}
     pendingSend=null;
     if(job.kind==='friend'){if(result.status==='sent'){$('#friend-add-wxid').value='';$('#friend-add-status').textContent='申请已发送，等待对方处理。';}else $('#friend-add-status').textContent=result.error||'申请未确认，请先核对微信。';}
     else if(result.status==='sent'){$('#send-content').value='';sendFeedback('已发送');}
     else sendFeedback(result.error||'发送未完成，请核对微信后再重发',true);
     renderSendState();
-  } catch(error) {if(pendingSend===job){if(job.kind==='friend')$('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';else sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);}}
+  } catch(error) {
+    if(pendingSend!==job||job.robot!==robot)return;
+    if(error.status===403||(error.status===404&&job.accepted)||Date.now()-job.lastConfirmed>=30000)pendingSend=null;
+    if(job.kind==='friend')$('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';
+    else sendFeedback('暂时无法查询发送结果，请先核对微信。不会自动重发。',true);
+    renderSendState();
+  }
   finally {sendPolling=false;}
 }
 $('#send-form').onsubmit=async event=>{
   event.preventDefault();if($('#send-text').disabled||pendingSend)return;
-  const requested=robot,job={id:crypto.randomUUID(),robot:requested};pendingSend=job;
+  const requested=robot,job={id:crypto.randomUUID(),robot:requested,lastConfirmed:Date.now()};pendingSend=job;
   const body={request_id:job.id,session_id:sendSession,chat_id:$('#send-chat').value,content:$('#send-content').value,at_list:[...mentionSelection]};
   sendFeedback('正在发送…');renderSendState();
   try {
-    await api('send-text',body,requested);
+    await api('send-text',body,requested,{timeoutMs:8000});
+    job.accepted=true;
     if(pendingSend===job)await pollSendStatus();
   } catch(error) {
     if(pendingSend!==job)return;
-    if(error.status){pendingSend=null;sendFeedback(error.message,true);}
+    if(error.status&&error.status<500){pendingSend=null;sendFeedback(error.message,true);}
     else sendFeedback('发送结果暂不确定，请先核对微信。不会自动重发。',true);
     renderSendState();
   }
@@ -605,11 +613,11 @@ $('#send-form').onsubmit=async event=>{
 for(const id of ['friend-add-room','friend-add-wxid','friend-add-message'])$('#'+id).addEventListener('input',renderSendState);
 $('#friend-add-form').onsubmit=async event=>{
   event.preventDefault();if($('#friend-add-submit').disabled||pendingSend)return;
-  const requested=robot,job={id:crypto.randomUUID(),robot:requested,kind:'friend'};pendingSend=job;
+  const requested=robot,job={id:crypto.randomUUID(),robot:requested,kind:'friend',lastConfirmed:Date.now()};pendingSend=job;
   const body={request_id:job.id,session_id:sendSession,room:$('#friend-add-room').value,wxid:$('#friend-add-wxid').value.trim(),message:$('#friend-add-message').value};
   $('#friend-add-status').textContent='正在发送申请…';renderSendState();
-  try {await api('friend-request-send',body,requested);if(pendingSend===job)await pollSendStatus();}
-  catch(error){if(pendingSend!==job)return;if(error.status){pendingSend=null;$('#friend-add-status').textContent=error.message;}else $('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';renderSendState();}
+  try {await api('friend-request-send',body,requested,{timeoutMs:8000});job.accepted=true;if(pendingSend===job)await pollSendStatus();}
+  catch(error){if(pendingSend!==job)return;if(error.status&&error.status<500){pendingSend=null;$('#friend-add-status').textContent=error.message;}else $('#friend-add-status').textContent='结果暂不确定，请先核对微信；不会自动重发。';renderSendState();}
 };
 setInterval(pollSendStatus,1500);
 function renderMessages() {
@@ -901,11 +909,11 @@ async function deleteContact(wxid) {
   contactDeleteJob=job;contactDeleteStatus='等待微信确认删除…';contactError='';renderContacts();
   const current=()=>robot===requested&&contactData===snapshot&&directoryAccount()===snapshot.account;
   try {
-    let result=await api('friend-delete',{request_id:job.id,wxid,account:snapshot.account,session_id:snapshot.session_id,keep_history:true},requested);
+    let result=await api('friend-delete',{request_id:job.id,wxid,account:snapshot.account,session_id:snapshot.session_id,keep_history:true},requested,{timeoutMs:8000});
     for(let attempt=0;current()&&result.status==='sending'&&attempt<45;attempt++){
       await new Promise(resolve=>setTimeout(resolve,1000));
       if(!current())return;
-      result=await api('send-status?id='+encodeURIComponent(job.id),undefined,requested);
+      result=await api('send-status?id='+encodeURIComponent(job.id),undefined,requested,{timeoutMs:8000});
     }
     if(!current())return;
     if(result.status==='deleted'){

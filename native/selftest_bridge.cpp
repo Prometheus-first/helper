@@ -39,6 +39,50 @@ static volatile LONG active_callbacks = 0;
 static volatile LONG triggered_once = 0;
 static volatile LONG live_completions = 0;
 static volatile LONG live_tasks = 0;
+static constexpr ULONGLONG text_reply_timeout_ms = 15000;
+
+// Report admission and native object ownership are separate. Weixin may
+// release a completion later than it invokes it, or never invoke it at all.
+class CompletionReplySlot {
+public:
+    bool busy(ULONGLONG now) {
+        AcquireSRWLockShared(&lock_);
+        const bool result = current_ && now < expires_;
+        ReleaseSRWLockShared(&lock_);
+        return result;
+    }
+
+    uint64_t reserve(ULONGLONG now, ULONGLONG expires) {
+        AcquireSRWLockExclusive(&lock_);
+        uint64_t result = 0;
+        if (now < expires && (!current_ || now >= expires_)) {
+            if (++sequence_ == 0) ++sequence_;
+            current_ = result = sequence_;
+            expires_ = expires;
+        }
+        ReleaseSRWLockExclusive(&lock_);
+        return result;
+    }
+
+    bool finish(uint64_t request, ULONGLONG now) {
+        AcquireSRWLockExclusive(&lock_);
+        const bool matches = request && current_ == request;
+        const bool accepted = matches && now < expires_;
+        if (matches) current_ = 0;
+        ReleaseSRWLockExclusive(&lock_);
+        return accepted;
+    }
+
+private:
+    SRWLOCK lock_ = SRWLOCK_INIT;
+    uint64_t sequence_ = 0, current_ = 0;
+    ULONGLONG expires_ = 0;
+};
+static CompletionReplySlot text_reply_slot;
+
+static bool text_reply_pending() {
+    return text_reply_slot.busy(GetTickCount64());
+}
 static bool hook_created = false;
 static bool factory_hook_created = false;
 #ifdef WXBOT_FRIEND_DELETE
@@ -415,11 +459,13 @@ struct Completion {
     void (__fastcall* invoke)(Completion*, const unsigned char*);
     void (__fastcall* destroy)(Completion*);
     TestConfig config;
+    uint64_t request_id;
 };
 
 static void __fastcall completion_invoke(Completion* self, const unsigned char* result) {
     _InterlockedIncrement(&active_callbacks);
     __try {
+        if (!text_reply_slot.finish(self->request_id, GetTickCount64())) __leave;
         TestResult report{};
         report.stage = 21;
         report.native_status = result && result[0] == 1 ? 0 : 1;
@@ -436,12 +482,13 @@ static void __fastcall completion_invoke(Completion* self, const unsigned char* 
 }
 
 static void __fastcall completion_destroy(Completion* self) {
+    text_reply_slot.finish(self->request_id, GetTickCount64());
     delete self;
     _InterlockedDecrement(&live_completions);
 }
 
-static DWORD dispatch_on_native_task(void* parameter) {
-    if (!parameter || live_completions != 0) return ERROR_BUSY;
+static DWORD dispatch_on_native_task(void* parameter, ULONGLONG deadline) {
+    if (!parameter || text_reply_pending()) return ERROR_BUSY;
     const TestConfig config = *static_cast<const TestConfig*>(parameter);
     if (config.size != sizeof(TestConfig) || config.pid != GetCurrentProcessId()) return 3;
     HMODULE core = GetModuleHandleW(L"Weixin.dll");
@@ -454,7 +501,17 @@ static DWORD dispatch_on_native_task(void* parameter) {
     if (!set_inline(&request.receiver, "filehelper") ||
         !set_native_string(&request.body, config.text) ||
         !set_inline(&description, "wxbot.selftest")) return 13;
-    Completion* completion = new Completion{1, 0, completion_invoke, completion_destroy, config};
+    const auto request_id = text_reply_slot.reserve(GetTickCount64(), deadline);
+    if (!request_id) {
+        free_native_string(&request.body);
+        return ERROR_BUSY;
+    }
+    auto completion = new (std::nothrow) Completion{1, 0, completion_invoke, completion_destroy, config, request_id};
+    if (!completion) {
+        text_reply_slot.finish(request_id, GetTickCount64());
+        free_native_string(&request.body);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
     _InterlockedIncrement(&live_completions);
     TestResult report{};
     __try {
@@ -473,6 +530,7 @@ static DWORD dispatch_on_native_task(void* parameter) {
 
 struct TaskLease {
     TestConfig config;
+    ULONGLONG deadline = GetTickCount64() + text_reply_timeout_ms;
     explicit TaskLease(const TestConfig& value) : config(value) {
         _InterlockedIncrement(&live_tasks);
     }
@@ -512,7 +570,7 @@ static DWORD schedule_task(const TestConfig& config, std::function<void()>* call
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxDispatchSelfTest(void* parameter) {
-    if (!parameter || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
+    if (!parameter || text_reply_pending() || live_tasks != 0) return ERROR_BUSY;
     const TestConfig config = *static_cast<const TestConfig*>(parameter);
     if (config.size != sizeof(TestConfig) || config.pid != GetCurrentProcessId()) return 3;
     const size_t text_length = strnlen_s(config.text, sizeof(config.text));
@@ -524,7 +582,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxDispatchSelfTest(void* parameter
     auto lease = std::make_shared<TaskLease>(config);
     std::function<void()> task = [lease]() {
         _InterlockedIncrement(&active_callbacks);
-        dispatch_on_native_task(&lease->config);
+        dispatch_on_native_task(&lease->config, lease->deadline);
         _InterlockedDecrement(&active_callbacks);
     };
     return schedule_task(config, &task);
@@ -645,8 +703,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollFileHelperMessage(void* para
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxWaitForTasks(void*) {
-    for (int attempt = 0; (active_callbacks != 0 || live_completions != 0 || live_tasks != 0) && attempt < 100; ++attempt) Sleep(50);
-    return active_callbacks != 0 || live_completions != 0 || live_tasks != 0 ? ERROR_BUSY : 0;
+    for (int attempt = 0; (active_callbacks != 0 || text_reply_pending() || live_tasks != 0) && attempt < 100; ++attempt) Sleep(50);
+    return active_callbacks != 0 || text_reply_pending() || live_tasks != 0 ? ERROR_BUSY : 0;
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {

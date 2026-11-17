@@ -276,7 +276,7 @@ static DWORD file_copy_config(void* parameter, FileConfig* config) {
 }
 
 static DWORD file_send_dispatch(void* parameter, bool send, bool video) {
-    if (live_tasks || live_completions) return ERROR_BUSY;
+    if (live_tasks || text_reply_pending()) return ERROR_BUSY;
     FileConfig config{};
     DWORD status = file_copy_config(parameter, &config);
     if (status) return status;

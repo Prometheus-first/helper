@@ -66,8 +66,9 @@ class ScheduledTasks:
                         changed = True
                 if changed:
                     self._write(rows)
-                self.thread = threading.Thread(target=self._loop, name='ScheduledTasks', daemon=True)
-                self.thread.start()
+                worker = threading.Thread(target=self._loop, name='ScheduledTasks', daemon=True)
+                worker.start()
+                self.thread = worker
 
     def close(self):
         self.stop_event.set()
@@ -187,7 +188,11 @@ class ScheduledTasks:
         for task in due:
             if live_clock:
                 if self.slots.acquire(blocking=False):
-                    threading.Thread(target=self._finish_async, args=(task,), name='ScheduledAction', daemon=True).start()
+                    try:
+                        threading.Thread(target=self._finish_async, args=(task,), name='ScheduledAction', daemon=True).start()
+                    except RuntimeError:
+                        self.slots.release()
+                        self._finish(task, '未执行（任务线程未能启动）')
                 else:
                     self._finish(task, '已跳过（任务繁忙）')
             else:
@@ -228,16 +233,14 @@ class ScheduledTasks:
                     return '已取消'
                 action_id = task.get('action_id', 'builtin.send_text')
                 params = task.get('params', {'chat_id': task.get('chat_id'), 'content': task.get('content')})
-                if action_id == 'builtin.send_text':
-                    request_id = secrets.token_hex(16)
-                    result = self.controller.send_text({'request_id': request_id, 'session_id': connection['session_id'], **params})
-                else:
-                    # 仅预约快照；插件回调在锁外运行，避免长任务阻塞配置及其他任务。
-                    result = None
+            # Native sends and plugin actions may acquire the service lock.
+            # It can also enter the task claim guard, so do not take it here.
             if action_id != 'builtin.send_text':
                 self.controller.execute_scheduled_plugin(action_id, params, connection['session_id'], task['account'],
                                                          lambda: self._claim_current(task))
                 return '执行完成'
+            request_id = secrets.token_hex(16)
+            result = self.controller.send_text({'request_id': request_id, 'session_id': connection['session_id'], **params})
             deadline = time.monotonic() + 120
             while result['status'] == 'sending' and time.monotonic() < deadline and not self.stop_event.wait(0.5):
                 result = self.controller.send_status(request_id)

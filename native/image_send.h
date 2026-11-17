@@ -166,7 +166,7 @@ static DWORD send_image_on_task(const TextConfig& config, bool probe) {
 }
 
 static DWORD schedule_image(void* parameter, bool probe) {
-    if (!parameter || live_tasks || live_completions) return ERROR_BUSY;
+    if (!parameter || live_tasks || text_reply_pending()) return ERROR_BUSY;
     const TextConfig config = *static_cast<const TextConfig*>(parameter);
     if (config.base.size != sizeof(TextConfig) || config.base.pid != GetCurrentProcessId() ||
         !valid_target(config.target)) return ERROR_INVALID_PARAMETER;

@@ -2,6 +2,7 @@
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from test_web_panel import PanelFixture
 from wxbot_framework.sdk import ServiceFacade, Message, PluginContext
 from wxbot_framework.web_panel import PanelError
@@ -102,6 +103,33 @@ class ComposerTests(PanelFixture):
             self.assertEqual(self.wait_job()['status'],'failed')
             self.assertFalse(self.backend.calls)
         finally:gate.set()
+    def test_send_timeout_is_unknown_and_a_second_request_can_complete(self):
+        with patch.object(self.backend, "send_text", side_effect=TimeoutError("模拟无回包")):
+            self.controller.send_text(self.data())
+            self.assertEqual(self.wait_job()["status"], "unknown")
+
+        data = dict(self.data(), request_id="synthetic-next-request")
+        self.controller.send_text(data)
+        self.assertEqual(self.wait_job(data["request_id"])["status"], "sent")
+
+    def test_old_session_cannot_lock_or_overwrite_a_new_session(self):
+        old_job = dict(request_id="old-synthetic-request", session_id="prior-session",
+                       status="sending", error="")
+        self.controller.send_jobs[old_job["request_id"]] = old_job
+        self.controller.send_text(self.data())
+        self.assertEqual(self.wait_job()["status"], "sent")
+        self.controller._finish_send_job(old_job, "sent")
+        self.assertEqual(self.wait_job(old_job["request_id"])["status"], "unknown")
+
+    def test_worker_start_failure_releases_the_send_slot(self):
+        with patch("wxbot_framework.web_panel.threading.Thread.start", side_effect=RuntimeError("模拟启动失败")):
+            self.controller.send_text(self.data())
+        self.assertEqual(self.wait_job()["status"], "failed")
+
+        data = dict(self.data(), request_id="synthetic-next-request")
+        self.controller.send_text(data)
+        self.assertEqual(self.wait_job(data["request_id"])["status"], "sent")
+
     def test_invalid_payload_and_private_chat_mention_are_rejected(self):
         for changes in ({'content':''},{'content':'\0'}, {'at_list':[PEER]*2},
                         {'at_list':[PEER],'chat_id':PEER},{'at_list':'bad'},{'request_id':'bad'}):

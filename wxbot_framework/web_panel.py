@@ -843,10 +843,10 @@ class PanelController:
                 raise PanelError('机器人或账号已停止', 409)
             allowed = list(app.config.get('chat_allowlist', []))
         def still_current():
-            with self.lock:
-                current = (self.app is app and self.state == 'running' and app._connection_ready and
-                           not app.stop_event.is_set() and getattr(app.backend, 'session_id', None) == session)
-            return bool(current and valid())
+            # Sending holds the service lock when it checks this guard.
+            # Reading the connection state here must not reacquire the panel lock.
+            return bool(valid() and self.app is app and self.state == 'running' and app._connection_ready and
+                        not app.stop_event.is_set() and getattr(app.backend, 'session_id', None) == session)
         return app.plugins.run_scheduled(action_id, params, session, allowed, still_current)
 
     def save_scheduled_task(self, data):
@@ -857,6 +857,27 @@ class PanelController:
 
     def toggle_scheduled_task(self, data):
         return self.scheduled_tasks.toggle(data)
+
+    def _send_busy(self, session):
+        return any(job['status'] == 'sending' and job['session_id'] == session
+                   for job in self.send_jobs.values())
+
+    def _retire_old_send_jobs(self, session):
+        for job in self.send_jobs.values():
+            if job['status'] == 'sending' and job['session_id'] != session:
+                job.update(status='unknown', error='原发送连接已结束，请在微信核对结果')
+
+    def _finish_send_job(self, job, status, error=''):
+        with self.lock:
+            if job['status'] == 'sending':
+                job.update(status=status, error=error)
+
+    def _start_send_job(self, job, deliver, name):
+        try:
+            threading.Thread(target=deliver, name=name, daemon=True).start()
+        except RuntimeError:
+            self._finish_send_job(job, 'failed', '操作任务未能启动，本次未提交')
+        return self.send_status(job['request_id'])
 
     def send_status(self, identifier):
         with self.lock:
@@ -890,7 +911,7 @@ class PanelController:
                 if previous['payload'] != payload:
                     raise PanelError('发送编号已使用，请重新提交', 409)
                 return self.send_status(identifier)
-            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
+            if self._send_busy(session):
                 raise PanelError('上一条消息仍在发送，请等待结果', 409)
             app = self.app
             if app is None or not app._connection_ready or self.state == 'stopping':
@@ -900,8 +921,9 @@ class PanelController:
             allowed = app.config.get('chat_allowlist', [])
             if allowed and target not in allowed:
                 raise PanelError('该会话不在收发白名单中')
-            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload,
-                                          'status': 'sending', 'error': ''}
+            self._retire_old_send_jobs(session)
+            job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
+                                                    session_id=session, status='sending', error='')
             while len(self.send_jobs) > 64:
                 del self.send_jobs[next(iter(self.send_jobs))]
 
@@ -921,15 +943,13 @@ class PanelController:
                     result = app.service.send_text(target, content, expected_session=session)
                 if result is False:
                     raise RuntimeError('微信未确认发送')
+            except TimeoutError:
+                self._finish_send_job(job, 'unknown', '微信未返回可确认的发送结果，请查看微信和消息监控')
             except Exception:
-                # 不回显异常中的原生路径或请求内容，也不自动重发不确定的结果。
-                with self.lock:
-                    self.send_jobs[identifier].update(status='failed', error='发送未完成，请核对微信和消息监控后再决定是否重发')
+                self._finish_send_job(job, 'failed', '发送未完成，请核对微信和消息监控后再决定是否重发')
             else:
-                with self.lock:
-                    self.send_jobs[identifier].update(status='sent')
-        threading.Thread(target=deliver, name='PanelTextSend', daemon=True).start()
-        return self.send_status(identifier)
+                self._finish_send_job(job, 'sent')
+        return self._start_send_job(job, deliver, 'PanelTextSend')
 
     def send_friend_request(self, data):
         """Submit one account-bound request; duplicate request IDs never resend."""
@@ -947,7 +967,7 @@ class PanelController:
                 if previous['payload'] != payload:
                     raise PanelError('发送编号已使用，请重新提交', 409)
                 return self.send_status(identifier)
-            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
+            if self._send_busy(session):
                 raise PanelError('上一条请求仍在发送，请等待结果', 409)
             app = self.app
             if app is None or not app._connection_ready or self.state == 'stopping':
@@ -959,8 +979,9 @@ class PanelController:
             allowed = app.config.get('chat_allowlist', [])
             if allowed and room and room not in allowed:
                 raise PanelError('来源群不在收发白名单中')
-            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload,
-                                          'status': 'sending', 'error': ''}
+            self._retire_old_send_jobs(session)
+            job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
+                                                    session_id=session, status='sending', error='')
             while len(self.send_jobs) > 64:
                 del self.send_jobs[next(iter(self.send_jobs))]
         def deliver():
@@ -973,13 +994,10 @@ class PanelController:
                                  "目标不在该群的已验证成员列表中", "来源群不在收发白名单中",
                                  "主动好友申请仅适配微信 4.2.0.12"}
                 detail = str(error) if str(error) in safe_messages else '申请未确认，请先核对微信，勿重复发送'
-                with self.lock:
-                    self.send_jobs[identifier].update(status='failed', error=detail)
+                self._finish_send_job(job, 'unknown' if isinstance(error, TimeoutError) else 'failed', detail)
             else:
-                with self.lock:
-                    self.send_jobs[identifier].update(status='sent')
-        threading.Thread(target=deliver, name='PanelFriendAdd', daemon=True).start()
-        return self.send_status(identifier)
+                self._finish_send_job(job, 'sent')
+        return self._start_send_job(job, deliver, 'PanelFriendAdd')
 
     def delete_friend(self, data):
         from .account import validate_account
@@ -1001,7 +1019,7 @@ class PanelController:
                 if previous['payload'] != payload:
                     raise PanelError('该请求编号已被使用', 409)
                 return self.send_status(identifier)
-            if any(job['status'] == 'sending' for job in self.send_jobs.values()):
+            if self._send_busy(session):
                 raise PanelError('上一条请求仍在处理，请等待结果', 409)
             if any(job['status'] == 'unknown' and job['payload'] == payload
                    for job in self.send_jobs.values()):
@@ -1014,8 +1032,9 @@ class PanelController:
                 raise PanelError('微信账号或连接已变化，请重新扫描联系人', 409)
             if 'friend.delete' not in getattr(app.backend, 'capabilities', ()):
                 raise PanelError('仅微信 4.2.0.12 支持删除好友', 409)
-            self.send_jobs[identifier] = {'request_id': identifier, 'payload': payload,
-                                          'status': 'sending', 'error': ''}
+            self._retire_old_send_jobs(session)
+            job = self.send_jobs[identifier] = dict(request_id=identifier, payload=payload,
+                                                    session_id=session, status='sending', error='')
             while len(self.send_jobs) > 64:
                 del self.send_jobs[next(iter(self.send_jobs))]
 
@@ -1032,11 +1051,9 @@ class PanelController:
                 status, error = 'failed', '该联系人已不在当前账号的好友名单中'
             except Exception:
                 pass
-            with self.lock:
-                self.send_jobs[identifier].update(status=status, error=error)
+            self._finish_send_job(job, status, error)
 
-        threading.Thread(target=deliver, name='PanelFriendDelete', daemon=True).start()
-        return self.send_status(identifier)
+        return self._start_send_job(job, deliver, 'PanelFriendDelete')
 
     def send_connection(self):
         def query(app):

@@ -121,6 +121,21 @@ class ScheduledTests(unittest.TestCase):
         self.scheduler.toggle({'id':task['id'], 'enabled':False})
         self.assertFalse(self.scheduler.list()['tasks'][0]['enabled'])
 
+    def test_worker_start_failure_releases_claim_and_slot(self):
+        task = self.create()
+        with patch('wxbot_framework.scheduled_tasks.time.time', return_value=1300), patch(
+                'wxbot_framework.scheduled_tasks.threading.Thread.start', side_effect=RuntimeError('模拟启动失败')):
+            self.scheduler.tick()
+        row = self.scheduler.list()['tasks'][0]
+        self.assertEqual(row['last_status'], '未执行（任务线程未能启动）')
+        self.assertFalse(read_json(self.scheduler.path)['tasks'][0].get('claim'))
+        self.assertNotIn(task['id'], self.scheduler.inflight)
+        for _ in range(8):
+            self.assertTrue(self.scheduler.slots.acquire(blocking=False))
+        for _ in range(8):
+            self.scheduler.slots.release()
+        self.assertEqual(self.controller.sent, [])
+
     def test_running_task_never_overlaps_itself(self):
         task = self.create()
         self.scheduler.inflight.add(task['id'])

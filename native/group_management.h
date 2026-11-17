@@ -217,7 +217,7 @@ static DWORD group_copy_config(void* parameter, GroupManagementConfig* config) {
 }
 
 static DWORD group_management_dispatch(void* parameter, bool execute, uint32_t required_mode) {
-    if (live_tasks || live_completions) return ERROR_BUSY;
+    if (live_tasks || text_reply_pending()) return ERROR_BUSY;
     GroupManagementConfig config{};
     DWORD status = group_copy_config(parameter, &config);
     if (status) return status;

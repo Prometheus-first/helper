@@ -117,7 +117,39 @@ static void test_42012_objects() {
     assert(friend_delete_find_command(&request, "wxid_fake_peer", count) == -1);
 }
 
+static void test_text_reply_timeout() {
+    wchar_t directory[MAX_PATH]{};
+    const auto length = GetTempPathW(MAX_PATH, directory);
+    assert(length && length < MAX_PATH);
+    auto stale = new TextCompletion{};
+    auto next = new TextCompletion{};
+    assert(GetTempFileNameW(directory, L"wxt", 0, stale->config.base.log_path));
+    assert(GetTempFileNameW(directory, L"wxt", 0, next->config.base.log_path));
+    stale->request_id = text_reply_slot.reserve(1, 2);
+    assert(stale->request_id && text_reply_slot.busy(1));
+    _InterlockedIncrement(&live_completions);
+
+    const auto now = GetTickCount64();
+    assert(now >= 2 && WxWaitForTasks(nullptr) == 0 && live_completions == 1);
+    next->request_id = text_reply_slot.reserve(now, now + 10000);
+    assert(next->request_id && next->request_id != stale->request_id);
+    _InterlockedIncrement(&live_completions);
+
+    const unsigned char success = 1;
+    text_completion_invoke(stale, &success);
+    assert(read_report(stale->config.base.log_path).empty());
+    assert(DeleteFileW(stale->config.base.log_path));
+    text_completion_destroy(stale);
+    assert(text_reply_pending() && live_completions == 1);
+    text_completion_invoke(next, &success);
+    assert(read_report(next->config.base.log_path).find("\"completion_success\":true") != std::string::npos);
+    assert(DeleteFileW(next->config.base.log_path));
+    text_completion_destroy(next);
+    assert(!text_reply_pending() && live_completions == 0);
+}
+
 int main() {
+    test_text_reply_timeout();
     using namespace friend_delete_reply;
     const std::string target = "wxid_test_peer";
     const std::string long_target(127, 'a');

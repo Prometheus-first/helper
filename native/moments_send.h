@@ -779,7 +779,7 @@ static DWORD copy_config(void* parameter, MomentsConfig* config) {
 
 static DWORD dispatch(void* parameter, bool execute) {
     if (InterlockedCompareExchange(&live_tasks, 0, 0) ||
-        InterlockedCompareExchange(&live_completions, 0, 0)) return ERROR_BUSY;
+        text_reply_pending()) return ERROR_BUSY;
     auto config = std::unique_ptr<MomentsConfig>(new (std::nothrow) MomentsConfig{});
     if (!config) return ERROR_NOT_ENOUGH_MEMORY;
     DWORD status = copy_config(parameter, config.get());

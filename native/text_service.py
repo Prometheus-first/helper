@@ -11,7 +11,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV6
+from filehelper_service import NativeFileHelperService, ReceivedMediaMessageV6, confirmed_send
 from wxbot_framework.mentions import parse_at_members
 from run_selftest import TEXT_DLL, K, check, modules, wechat_candidates, run
 from wxbot_framework.text import TextRouter, validate_target, validate_mentions
@@ -989,4 +989,4 @@ class NativeTextService(NativeFileHelperService):
                 logger.info("测试文本发送完成：chat_id=%s success=%s native_thread=%s",
                             to_wxid, self.last_result["success"],
                             self.last_result.get("report", {}).get("thread_id"))
-            return self.last_result["success"]
+            return confirmed_send(self.last_result)

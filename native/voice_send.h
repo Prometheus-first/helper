@@ -193,7 +193,7 @@ static DWORD voice_copy_config(void* parameter, VoiceConfig* config) {
 }
 
 static DWORD voice_dispatch(void* parameter, bool send) {
-    if (live_tasks || live_completions) return ERROR_BUSY;
+    if (live_tasks || text_reply_pending()) return ERROR_BUSY;
     VoiceConfig config{};
     DWORD status = voice_copy_config(parameter, &config);
     if (status) return status;

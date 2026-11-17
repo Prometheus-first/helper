@@ -256,7 +256,7 @@ static DWORD emoticon_copy_config(void* parameter, EmoticonConfig* output) {
 }
 
 static DWORD emoticon_dispatch(void* parameter, bool send) {
-    if (live_tasks || live_completions) return ERROR_BUSY;
+    if (live_tasks || text_reply_pending()) return ERROR_BUSY;
     EmoticonConfig config{};
     DWORD status = emoticon_copy_config(parameter, &config);
     if (status != ERROR_SUCCESS) return status;

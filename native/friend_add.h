@@ -132,7 +132,7 @@ static DWORD friend_add_copy(void *parameter, FriendAddConfig *config) {
     return ERROR_SUCCESS;
 }
 static DWORD friend_add_dispatch(void *parameter) {
-    if (!parameter || live_tasks || live_completions)
+    if (!parameter || live_tasks || text_reply_pending())
         return ERROR_BUSY;
     FriendAddCopy copy;
     FriendAddConfig &config = copy.config;

@@ -206,7 +206,7 @@ static DWORD friend_delete_copy(void* parameter, FriendDeleteConfig& config) {
 }
 
 static DWORD friend_delete_dispatch(void* parameter) {
-    if (!parameter || live_tasks || live_completions) return ERROR_BUSY;
+    if (!parameter || live_tasks || text_reply_pending()) return ERROR_BUSY;
     FriendDeleteConfig config{};
     if (friend_delete_copy(parameter, config) != ERROR_SUCCESS) return ERROR_INVALID_PARAMETER;
     if (config.base.base.size != sizeof(config) || config.base.base.pid != GetCurrentProcessId() ||

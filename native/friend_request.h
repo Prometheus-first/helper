@@ -162,7 +162,7 @@ static DWORD friend_request_copy(void* parameter, FriendRequestConfig* config) {
 }
 
 static DWORD friend_request_dispatch(void* parameter, bool execute) {
-    if (live_tasks || live_completions) return ERROR_BUSY;
+    if (live_tasks || text_reply_pending()) return ERROR_BUSY;
     FriendRequestCopy copy;
     DWORD status = friend_request_copy(parameter, &copy.config);
     if (status) return status;

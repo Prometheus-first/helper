@@ -227,7 +227,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxDownloadFile(void* parameter) {
     __try {
         if (_InterlockedCompareExchange(&file_download_admission, 1, 0) != 0) return ERROR_BUSY;
         __try {
-            if (live_completions || live_tasks) return ERROR_BUSY;
+            if (text_reply_pending() || live_tasks) return ERROR_BUSY;
             FileDownloadConfig config{};
             status = file_download_copy_config(parameter, &config);
             if (status != ERROR_SUCCESS) return status;

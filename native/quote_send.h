@@ -54,7 +54,7 @@ static bool quote_string_equals(const SmallString& value, const char* expected) 
     return bytes && std::memcmp(bytes, expected, length) == 0;
 }
 
-static bool quote_on_task(const QuoteTextConfig& config, TestResult* report) {
+static bool quote_on_task(const QuoteTextConfig& config, ULONGLONG deadline, TestResult* report) {
     alignas(16) unsigned char content[0x2f0]{}, source[0x440]{}, extra[0x68]{};
     SharedMessage app{}, provider{}, manager{};
     SmallString session{}, reply{};
@@ -108,7 +108,7 @@ static bool quote_on_task(const QuoteTextConfig& config, TestResult* report) {
                 return false;
 
             report->stage = 83;
-            report->native_status = send_text_on_task(&config.base, nullptr, &quote);
+            report->native_status = send_text_on_task(&config.base, deadline, nullptr, &quote);
             return report->native_status == ERROR_SUCCESS && quote.applied;
         } __except (record_exception(GetExceptionInformation(), report)) {
             return false;
@@ -129,6 +129,7 @@ static bool quote_on_task(const QuoteTextConfig& config, TestResult* report) {
 
 struct QuoteTaskLease {
     QuoteTextConfig config;
+    ULONGLONG deadline = GetTickCount64() + text_reply_timeout_ms;
     explicit QuoteTaskLease(const QuoteTextConfig& value) : config(value) {
         _InterlockedIncrement(&live_tasks);
     }
@@ -157,7 +158,7 @@ static DWORD dispatch_quote(const QuoteTextConfig& config) {
             _InterlockedIncrement(&active_callbacks);
             TestResult report{};
             __try {
-                if (!quote_on_task(lease->config, &report) || report.exception)
+                if (!quote_on_task(lease->config, lease->deadline, &report) || report.exception)
                     write_report(lease->config.base.base, report, "quote_send_failed");
             } __finally { _InterlockedDecrement(&active_callbacks); }
         };
@@ -173,7 +174,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxSendQuoteText(void* parameter) {
     __try {
         if (_InterlockedCompareExchange(&quote_admission, 1, 0) != 0) return ERROR_BUSY;
         admitted = true;
-        if (live_tasks || live_completions) return ERROR_BUSY;
+        if (live_tasks || text_reply_pending()) return ERROR_BUSY;
         return dispatch_quote(*static_cast<const QuoteTextConfig*>(parameter));
     } __finally {
         if (admitted) _InterlockedExchange(&quote_admission, 0);

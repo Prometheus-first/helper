@@ -148,11 +148,13 @@ struct TextCompletion {
     TextConfig config;
     char members[1024];
     bool quoted;
+    uint64_t request_id;
 };
 
 static void __fastcall text_completion_invoke(TextCompletion* self, const unsigned char* result) {
     _InterlockedIncrement(&active_callbacks);
     __try {
+        if (!text_reply_slot.finish(self->request_id, GetTickCount64())) __leave;
         FILE* log = nullptr;
         bool success = result && result[0] == 1;
         if (_wfopen_s(&log, self->config.base.log_path, L"wb") == 0 && log) {
@@ -171,13 +173,14 @@ static void __fastcall text_completion_invoke(TextCompletion* self, const unsign
 }
 
 static void __fastcall text_completion_destroy(TextCompletion* self) {
+    text_reply_slot.finish(self->request_id, GetTickCount64());
     delete self;
     _InterlockedDecrement(&live_completions);
 }
 
-static DWORD send_text_on_task(const TextConfig* config, const char* members = nullptr,
-                               QuoteScope* quote = nullptr) {
-    if (!config || live_completions != 0) return ERROR_BUSY;
+static DWORD send_text_on_task(const TextConfig* config, ULONGLONG deadline,
+                               const char* members = nullptr, QuoteScope* quote = nullptr) {
+    if (!config || text_reply_pending()) return ERROR_BUSY;
     struct TextRequest { SmallString receiver; SmallString body; } request{};
     request.receiver.capacity = request.body.capacity = 15;
     SmallString description{};
@@ -189,9 +192,16 @@ static DWORD send_text_on_task(const TextConfig* config, const char* members = n
         free_native_string(&request.body);
         return ERROR_INVALID_PARAMETER;
     }
+    const auto request_id = text_reply_slot.reserve(GetTickCount64(), deadline);
+    if (!request_id) {
+        free_native_string(&request.receiver);
+        free_native_string(&request.body);
+        return ERROR_BUSY;
+    }
     auto completion = new (std::nothrow) TextCompletion{
-        1, 0, text_completion_invoke, text_completion_destroy, *config, {}, false};
+        1, 0, text_completion_invoke, text_completion_destroy, *config, {}, false, request_id};
     if (!completion) {
+        text_reply_slot.finish(request_id, GetTickCount64());
         free_native_string(&request.receiver);
         free_native_string(&request.body);
         return ERROR_NOT_ENOUGH_MEMORY;
@@ -242,12 +252,13 @@ static bool valid_mentions(const char* members) {
 
 struct AtTaskLease {
     AtTextConfig config;
+    ULONGLONG deadline = GetTickCount64() + text_reply_timeout_ms;
     explicit AtTaskLease(const AtTextConfig& value) : config(value) { _InterlockedIncrement(&live_tasks); }
     ~AtTaskLease() { _InterlockedDecrement(&live_tasks); }
 };
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxSendAtText(void* parameter) {
-    if (!parameter || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
+    if (!parameter || text_reply_pending() || live_tasks != 0) return ERROR_BUSY;
     const AtTextConfig config = *static_cast<const AtTextConfig*>(parameter);
     size_t target_length = strnlen_s(config.base.target, sizeof(config.base.target));
     if (config.base.base.size != sizeof(AtTextConfig) || config.base.base.pid != GetCurrentProcessId() ||
@@ -266,7 +277,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxSendAtText(void* parameter) {
     auto lease = std::make_shared<AtTaskLease>(config);
     std::function<void()> task = [lease]() {
         _InterlockedIncrement(&active_callbacks);
-        __try { send_text_on_task(&lease->config.base, lease->config.members); }
+        __try { send_text_on_task(&lease->config.base, lease->deadline, lease->config.members); }
         __finally { _InterlockedDecrement(&active_callbacks); }
     };
     status = schedule_task(config.base.base, &task);
@@ -275,12 +286,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxSendAtText(void* parameter) {
 
 struct TextTaskLease {
     TextConfig config;
+    ULONGLONG deadline = GetTickCount64() + text_reply_timeout_ms;
     explicit TextTaskLease(const TextConfig& value) : config(value) { _InterlockedIncrement(&live_tasks); }
     ~TextTaskLease() { _InterlockedDecrement(&live_tasks); }
 };
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxSendText(void* parameter) {
-    if (!parameter || live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
+    if (!parameter || text_reply_pending() || live_tasks != 0) return ERROR_BUSY;
     const TextConfig config = *static_cast<const TextConfig*>(parameter);
     if (config.base.size != sizeof(TextConfig) || config.base.pid != GetCurrentProcessId() ||
         !valid_target(config.target)) return ERROR_INVALID_PARAMETER;
@@ -294,7 +306,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxSendText(void* parameter) {
     auto lease = std::make_shared<TextTaskLease>(config);
     std::function<void()> task = [lease]() {
         _InterlockedIncrement(&active_callbacks);
-        __try { send_text_on_task(&lease->config); }
+        __try { send_text_on_task(&lease->config, lease->deadline); }
         __finally { _InterlockedDecrement(&active_callbacks); }
     };
     return schedule_task(config.base, &task);

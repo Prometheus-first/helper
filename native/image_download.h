@@ -392,7 +392,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxDownloadImage(void* parameter) {
     __try {
         if (_InterlockedCompareExchange(&image_download_admission, 1, 0) != 0) return ERROR_BUSY;
         __try {
-            if (live_completions != 0 || live_tasks != 0) return ERROR_BUSY;
+            if (text_reply_pending() || live_tasks != 0) return ERROR_BUSY;
             ImageDownloadConfig config{};
             status = image_download_copy_config(parameter, &config);
             if (status != ERROR_SUCCESS) return status;
