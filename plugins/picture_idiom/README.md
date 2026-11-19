@@ -1,6 +1,6 @@
 # 看图猜成语
 
-群内看图抢答小游戏。默认使用[飞飞看图猜成语 API](https://ffapi.cn/doc/ktccy.html)获取题图和固定答案，不需要 API 密钥；接口、图片下载或缓存写入失败时，自动回退到 26 道本地绘图题。也可以设置 `source: "local"` 完全使用本地题库。不调用大模型或生图接口。
+群内看图抢答小游戏。默认先用问情 API 获取题图和固定答案，失败后尝试飞飞 API，两者都失败时使用 26 道本地绘图题。两个在线题源均无需 API 密钥。设置 `source: "local"` 可使用本地题库。[问情接口文档](https://free.wqwlkj.cn/?action=interface&id=133) · [飞飞接口文档](https://ffapi.cn/doc/ktccy.html)
 
 在程序控制台输入 `enable picture_idiom` 启用，或将 `bot_config.json` 中 `plugins.picture_idiom.enabled` 设为 `true` 后重启。插件默认关闭，目标群需加入成员配置以及非空会话白名单。
 
@@ -19,13 +19,13 @@
 
 ## 题源与配置
 
-在线入口为 `https://ffapi.cn/int/v1/ktccy`。请求不携带微信账号、群号、玩家 ID 或群聊文本；服务商会收到正常 HTTP 请求的 IP 和请求头。题源服务由第三方维护，内容和可用性以实际返回为准。
+首选入口为 `https://free.wqwlkj.cn/wqwlapi/ccy.php`，在线备用入口为 `https://ffapi.cn/int/v1/ktccy`。请求只获取题目；服务商会收到正常 HTTP 请求的 IP 和请求头。题源服务由第三方维护，内容和可用性以实际返回为准。
 
 ```json
 {
   "picture_idiom": {
     "enabled": true,
-    "source": "ffapi",
+    "source": "wqwl",
     "timeout_seconds": 8,
     "wrong_reply_cooldown_seconds": 3
   }
@@ -34,11 +34,11 @@
 
 示例是 `bot_config.json` 的 `plugins` 下的条目，不要覆盖整个主配置。
 
-- `source`：`ffapi` 在线优先，`local` 仅本地。
-- `timeout_seconds`：每次 HTTP 请求的超时，支持 1–30 秒，默认 8 秒。获取题目和下载图片分别请求，整轮耗时可能高于该值。连接或图片失败后，所有群共用一分钟的重试间隔，其间直接使用本地题。
+- `source` 支持 `wqwl`（默认，问情 → 飞飞 → 本地）、`ffapi`（飞飞 → 本地）和 `local`（仅本地）。已有配置中的 `ffapi` 仍按原顺序工作，切换到 `wqwl` 可启用新的优先顺序。
+- `timeout_seconds` 是每次 HTTP 请求的超时，支持 1–30 秒，默认 8 秒。获取题目和下载图片分别请求，整轮耗时可能高于该值。接口、图片或缓存写入失败后，当前题源冷却一分钟，其间尝试后续题源。同一题源的冷却由所有群共用，两个在线题源各自独立计时。
 - `wrong_reply_cooldown_seconds`：答错提醒间隔，支持 0–60 秒，0 表示每次提醒。
 
-每群在线出题时避开最近 32 个已发送的答案，最多尝试两次，仍重复则使用本地题。在线题源不保证整场不重复；本地模式首题为“绕梁三日”，后续随机出题，一轮题库用完前不重复。在线与本地切换时会避开刚出的答案。
+每群在线出题时避开最近 32 个已发送的答案，每个题源最多尝试两次，仍重复则尝试下一个题源。本地模式首题为“绕梁三日”，后续随机出题，一轮题库用完前不重复。在线与本地切换时会避开刚出的答案。
 
 ## 字体和题图
 

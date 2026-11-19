@@ -1,4 +1,4 @@
-"""飞飞题源：只取题图和答案，不发送微信账号、群号或玩家输入。"""
+"""在线题源：只取题图和答案，不发送微信账号、群号或玩家输入。"""
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import math
 from pathlib import Path
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +19,7 @@ from wxbot_framework.text import FOUR_CHINESE
 from .bank import Puzzle
 
 ENDPOINT = 'https://ffapi.cn/int/v1/ktccy'
+WQWL_ENDPOINT = 'https://free.wqwlkj.cn/wqwlapi/ccy.php'
 MAX_JSON_BYTES = 64 * 1024
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_PIXELS = 4_000_000
@@ -36,16 +38,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def image_url(value):
+def image_url(value, *, provider='ffapi'):
     """只允许题源自身的图片入口；旧 HTTP 链接统一使用 HTTPS。"""
     if (not isinstance(value, str) or not value or len(value) > 4096 or '\\' in value or
             any(ord(ch) <= 32 or ord(ch) == 127 for ch in value)):
         raise SourceError('题源返回的图片地址无效')
     try:
         parsed = urllib.parse.urlsplit(value)
-        if (parsed.scheme not in ('http', 'https') or parsed.hostname not in ('ffapi.cn', 'www.ffapi.cn') or
-                parsed.username or parsed.password or parsed.port not in (None, 80, 443) or parsed.fragment or
-                parsed.path not in ('/int/v1/ktccy', '/int/v1/ktccy/')):
+        if (parsed.scheme not in ('http', 'https') or parsed.username or parsed.password or
+                parsed.port not in (None, 80, 443) or parsed.fragment):
+            raise ValueError()
+        if provider == 'ffapi':
+            allowed = (parsed.hostname in ('ffapi.cn', 'www.ffapi.cn') and
+                       parsed.path in ('/int/v1/ktccy', '/int/v1/ktccy/'))
+        else:
+            allowed = (provider == 'wqwl' and parsed.hostname == 'free.wqwlkj.cn' and
+                       re.fullmatch(r'/wqwlapi/data/ccy/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png)', parsed.path))
+        if not allowed:
             raise ValueError()
     except ValueError:
         raise SourceError('题源返回的图片地址不在允许范围') from None
@@ -74,6 +83,10 @@ def clean_image(data):
 
 
 class FFAPI:
+    endpoint = ENDPOINT
+    image_field = 'imgurl'
+    provider = 'ffapi'
+
     def __init__(self, directory, *, timeout_seconds=8):
         if (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or
                 not 1 <= timeout_seconds <= 30):
@@ -95,7 +108,7 @@ class FFAPI:
         return data
 
     def fetch(self, *, exclude=()):
-        raw = self._get(ENDPOINT, limit=MAX_JSON_BYTES, accept='application/json')
+        raw = self._get(self.endpoint, limit=MAX_JSON_BYTES, accept='application/json')
         try:
             result = json.loads(raw)
             if not isinstance(result, dict) or type(result.get('code')) is not int or result['code'] != 1:
@@ -103,7 +116,7 @@ class FFAPI:
             answer = result['answer']
             if not isinstance(answer, str) or not FOUR_CHINESE.fullmatch(answer):
                 raise ValueError()
-            url = image_url(result['imgurl'])
+            url = image_url(result[self.image_field], provider=self.provider)
         except (KeyError, ValueError, TypeError):
             raise SourceError('题源未返回有效的四字成语和图片地址') from None
         if answer in exclude:
@@ -120,3 +133,9 @@ class FFAPI:
             finally:
                 temporary.unlink(missing_ok=True)
         return Puzzle(code, answer, f'答案首字是“{answer[0]}”。', '', 'online', image_path=path)
+
+
+class WQWL(FFAPI):
+    endpoint = WQWL_ENDPOINT
+    image_field = 'img'
+    provider = 'wqwl'

@@ -38,7 +38,7 @@
     },
     "picture_idiom": {
       "enabled": false,
-      "source": "ffapi",
+      "source": "wqwl",
       "timeout_seconds": 8,
       "wrong_reply_cooldown_seconds": 3
     },

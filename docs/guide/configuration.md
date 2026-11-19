@@ -70,7 +70,7 @@
   "plugins": {
     "picture_idiom": {
       "enabled": true,
-      "source": "ffapi",
+      "source": "wqwl",
       "timeout_seconds": 8,
       "wrong_reply_cooldown_seconds": 3
     }
@@ -78,7 +78,7 @@
 }
 ```
 
-`source` 支持 `ffapi`（默认在线优先，失败回退本地）和 `local`（只用本地 26 题）。`timeout_seconds` 是每次 HTTP 请求超时，支持 1–30 秒；取题和下载图分别请求，重复题最多再取一次，整轮等待可能高于这个值。接口或图片失败后一分钟内不重试在线源。
+`source` 支持 `wqwl`（默认，问情 → 飞飞 → 本地）、`ffapi`（飞飞 → 本地）和 `local`（只用本地 26 题）。`timeout_seconds` 是每次 HTTP 请求超时，支持 1–30 秒；取题和下载图分别请求，每个在线源的重复题最多再取一次，整轮等待可能高于这个值。接口、图片或缓存写入失败时，该题源冷却一分钟，仍可尝试其他题源。旧配置的 `ffapi` 保留原有行为，改为 `wqwl` 即使用新的顺序。
 
 `wrong_reply_cooldown_seconds` 支持 0–60 秒，控制本群答错提醒频率。可选 `font_file` 指定中文字体，相对路径以项目目录为起点；未指定时使用本机楷体、微软雅黑或黑体。在线模式也需要中文字体，供本地备用题使用。不需要模型或额外 API 密钥。玩法与缓存说明见[看图猜成语](./features.md#看图猜成语)。
 

@@ -225,8 +225,65 @@ class PictureGameTests(unittest.TestCase):
 
     def test_local_mode_does_not_access_online_source(self):
         self.plugin.online = Mock()
+        self.plugin.primary = Mock()
         self.send('看图猜成语')
         self.plugin.online.fetch.assert_not_called()
+        self.plugin.primary.fetch.assert_not_called()
+
+    def test_wqwl_is_first_choice_and_success_skips_ffapi(self):
+        self.online_question()
+        self.plugin.source = 'wqwl'
+        question = Puzzle('wqwl-test', '前功尽弃', '首字为前', '', 'online',
+                          image_path=Path('wqwl-test.png'))
+        self.plugin.primary = Mock()
+        self.plugin.primary.fetch.return_value = question
+        self.send('看图猜成语')
+        self.assertEqual(self.plugin.games[ROOM].current, question)
+        self.plugin.primary.fetch.assert_called_once_with(exclude=())
+        self.plugin.online.fetch.assert_not_called()
+
+    def test_wqwl_failure_cools_only_primary_then_recovers(self):
+        fallback = self.online_question()
+        self.plugin.source = 'wqwl'
+        self.plugin.primary = Mock()
+        self.plugin.primary.fetch.side_effect = SourceError('primary unavailable')
+        with self.assertLogs('PictureIdiomTest', level='WARNING'):
+            self.send('看图猜成语')
+        self.assertEqual(self.plugin.games[ROOM].current, fallback)
+        self.send('换一题')
+        self.assertEqual(self.plugin.primary.fetch.call_count, 1)
+        self.assertEqual(self.plugin.online.fetch.call_count, 2)
+        self.now += 61
+        self.plugin.primary.fetch.side_effect = None
+        self.plugin.primary.fetch.return_value = PUZZLES[0]
+        self.send('换一题')
+        self.assertEqual(self.plugin.games[ROOM].current, PUZZLES[0])
+        self.assertEqual(self.plugin.primary.fetch.call_count, 2)
+        self.assertEqual(self.plugin.online.fetch.call_count, 2)
+
+    def test_both_online_sources_fail_then_local_remains_available(self):
+        self.online_question()
+        self.plugin.source = 'wqwl'
+        self.plugin.primary = Mock()
+        self.plugin.primary.fetch.side_effect = OSError('cache unavailable')
+        self.plugin.online.fetch.side_effect = SourceError('backup unavailable')
+        with self.assertLogs('PictureIdiomTest', level='WARNING'):
+            self.send('看图猜成语')
+        self.assertEqual(self.plugin.games[ROOM].current, PUZZLES[0])
+        self.send('看图猜成语', room=OTHER)
+        self.assertEqual(self.plugin.primary.fetch.call_count, 1)
+        self.assertEqual(self.plugin.online.fetch.call_count, 1)
+        self.assertEqual(self.plugin.games[OTHER].current, PUZZLES[0])
+
+    def test_two_repeated_primary_questions_fall_back_to_ffapi(self):
+        fallback = self.online_question()
+        self.plugin.source = 'wqwl'
+        self.plugin.primary = Mock()
+        self.plugin.primary.fetch.side_effect = RepeatedQuestion('already played')
+        self.send('看图猜成语')
+        self.assertEqual(self.plugin.primary.fetch.call_count, 2)
+        self.plugin.online.fetch.assert_called_once_with(exclude=())
+        self.assertEqual(self.plugin.games[ROOM].current, fallback)
 
     def test_online_failure_uses_local_cooldown_then_recovers(self):
         online = self.online_question()

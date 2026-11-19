@@ -14,7 +14,7 @@ from wxbot_framework.personality import personality_text
 from wxbot_framework.text import FOUR_CHINESE
 from .bank import PUZZLES, Puzzle
 from .render import CardRenderer
-from .source import FFAPI, RepeatedQuestion, SourceError
+from .source import FFAPI, WQWL, RepeatedQuestion, SourceError
 
 START = frozenset({'看图猜成语', '/看图猜成语'})
 COMMANDS = START | {'提示', '换一题', '公布答案', '退出猜成语'}
@@ -41,10 +41,10 @@ class Plugin:
         if type(cooldown) not in (int, float) or not math.isfinite(cooldown) or not 0 <= cooldown <= 60:
             raise ValueError('wrong_reply_cooldown_seconds 应为 0–60 秒')
         self.cooldown = cooldown
-        self.source = ctx.config.get('source', 'ffapi')
-        if self.source not in ('ffapi', 'local'):
-            raise ValueError('picture_idiom.source 应为 ffapi 或 local')
-        self.next_online_attempt = 0
+        self.source = ctx.config.get('source', 'wqwl')
+        if self.source not in ('wqwl', 'ffapi', 'local'):
+            raise ValueError('picture_idiom.source 应为 wqwl、ffapi 或 local')
+        self.next_online_attempt = {}
         root = getattr(ctx, 'project_root', None) or Path(__file__).resolve().parents[2]
         font = ctx.config.get('font_file')
         if font is not None:
@@ -55,6 +55,7 @@ class Plugin:
         directory = root / '.runtime/picture_idiom' / account
         self.renderer = CardRenderer(directory, font)
         self.online = FFAPI(directory / 'online', timeout_seconds=ctx.config.get('timeout_seconds', 8))
+        self.primary = WQWL(directory / 'online', timeout_seconds=ctx.config.get('timeout_seconds', 8))
 
     def on_unload(self, ctx):
         getattr(self, 'games', {}).clear()
@@ -70,18 +71,25 @@ class Plugin:
         if not game.deck:
             game.deck = self._deck(previous=game.last_code)
         puzzle = None
-        if self.source == 'ffapi' and time.monotonic() >= self.next_online_attempt:
+        sources = () if self.source == 'local' else (('ffapi', self.online),)
+        if self.source == 'wqwl':
+            sources = (('wqwl', self.primary), *sources)
+        for name, source in sources:
+            if time.monotonic() < self.next_online_attempt.get(name, 0):
+                continue
             for _ in range(2):
                 try:
-                    puzzle = self.online.fetch(exclude=tuple(game.recent_answers))
+                    puzzle = source.fetch(exclude=tuple(game.recent_answers))
                     break
                 except RepeatedQuestion:
                     continue
                 except (SourceError, OSError):
-                    # 连续离线时不让每一轮都等待网络超时；一分钟后再试在线源。
-                    self.next_online_attempt = time.monotonic() + 60
-                    ctx.logger.warning('在线成语题源暂不可用，使用本地题库，一分钟后重试')
+                    # 失败题源独立冷却，下一题仍可使用其他在线源。
+                    self.next_online_attempt[name] = time.monotonic() + 60
+                    ctx.logger.warning('在线成语题源 %s 暂不可用，尝试备用题源，一分钟后重试', name)
                     break
+            if puzzle is not None:
+                break
         local_index = None
         if puzzle is None:
             previous = game.recent_answers[-1] if game.recent_answers else ''

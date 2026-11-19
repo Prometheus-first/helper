@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 from PIL import Image, PngImagePlugin
 
 from plugins.picture_idiom.source import (
-    ENDPOINT, MAX_IMAGE_BYTES, MAX_JSON_BYTES, FFAPI, RepeatedQuestion,
+    ENDPOINT, WQWL_ENDPOINT, MAX_IMAGE_BYTES, MAX_JSON_BYTES, FFAPI, WQWL, RepeatedQuestion,
     SourceError, _NoRedirect, clean_image, image_url,
 )
 
@@ -162,6 +162,49 @@ class SourceTests(unittest.TestCase):
         for value in (0, 31, True, '8', float('nan'), float('inf')):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 FFAPI(self.directory, timeout_seconds=value)
+
+    def test_wqwl_fetch_uses_img_field_and_normalizes_actual_image_format(self):
+        api = WQWL(self.directory)
+        image_url_value = 'https://free.wqwlkj.cn/wqwlapi/data/ccy/74c02273cd3a0c53e8570f03e3e380e5.jpg'
+        body = json.dumps({'code': 1, 'answer': '前功尽弃', 'img': image_url_value}).encode()
+        with patch.object(api, '_get', side_effect=[body, picture(metadata=True)]) as get:
+            puzzle = api.fetch()
+        self.assertEqual(get.call_args_list[0].args, (WQWL_ENDPOINT,))
+        self.assertEqual(get.call_args_list[1].args, (image_url_value,))
+        self.assertEqual(puzzle.answer, '前功尽弃')
+        with Image.open(puzzle.image_path) as image:
+            self.assertEqual((image.format, image.info), ('PNG', {}))
+
+    def test_wqwl_invalid_response_and_repeated_answer_skip_download(self):
+        api = WQWL(self.directory)
+        image = 'https://free.wqwlkj.cn/wqwlapi/data/ccy/example.png'
+        valid = {'code': 1, 'img': image, 'answer': '前功尽弃'}
+        cases = [b'not json', b'null', payload(),
+                 *[json.dumps(dict(valid, **change)).encode() for change in
+                   ({'code': -1}, {'code': True}, {'answer': '五个字成语'}, {'img': 'https://127.0.0.1/private'})]]
+        for body in cases:
+            with self.subTest(body=body), patch.object(api, '_get', return_value=body) as get:
+                with self.assertRaises(SourceError):
+                    api.fetch()
+                get.assert_called_once()
+        with patch.object(api, '_get', return_value=json.dumps(valid).encode()) as get:
+            with self.assertRaises(RepeatedQuestion):
+                api.fetch(exclude=('前功尽弃',))
+            get.assert_called_once()
+
+    def test_wqwl_images_must_belong_to_its_question_directory(self):
+        expected = 'https://free.wqwlkj.cn/wqwlapi/data/ccy/example.jpg'
+        self.assertEqual(image_url(expected.replace('https:', 'http:'), provider='wqwl'), expected)
+        for url in ('https://free.wqwlkj.cn.attacker.invalid/wqwlapi/data/ccy/example.jpg',
+                    'https://free.wqwlkj.cn/wqwlapi/data/ccy/../example.jpg',
+                    'https://free.wqwlkj.cn/wqwlapi/data/ccy/%2e%2e/example.jpg',
+                    'https://free.wqwlkj.cn/private/example.jpg',
+                    'https://free.wqwlkj.cn/wqwlapi/data/ccy/example.svg',
+                    'https://user:password@free.wqwlkj.cn/wqwlapi/data/ccy/example.jpg',
+                    'https://free.wqwlkj.cn:8000/wqwlapi/data/ccy/example.jpg',
+                    'https://ffapi.cn/int/v1/ktccy', None):
+            with self.subTest(url=url), self.assertRaises(SourceError):
+                image_url(url, provider='wqwl')
 
 
 if __name__ == '__main__':
