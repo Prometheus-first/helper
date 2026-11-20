@@ -46,7 +46,8 @@ static bool fingerprint_anchors(unsigned action) {
         0x48,0x83,0x39,0,0x74,0x66,0x48,0x83,0xb9,0xa0,1,0,0,0,0x74,0x5c};
     const uintptr_t entry = action == 1 ? 0x30640f0 : 0x3065ac0;
     const unsigned char* prefix = action == 1 ? like : comment;
-    return core_base && InterlockedCompareExchange(&core_profile_id, 0, 0) == 2 &&
+    const LONG profile = InterlockedCompareExchange(&core_profile_id, 0, 0);
+    return core_base && (profile == 2 || (profile == 4 && action == 2)) &&
         std::memcmp(reinterpret_cast<const void*>(core_sns_address(core_base, entry)), prefix, 16) == 0 &&
         std::memcmp(reinterpret_cast<const void*>(core_sns_address(core_base, 0x43b1800)), validate, 16) == 0;
 }
@@ -98,7 +99,8 @@ static Result run(const SharedMessage* service, const SharedMessage* item,
     __try {
         if (!fingerprint_anchors(action)) { out.status = ERROR_REVISION_MISMATCH; __leave; }
         if (!service->object || !service->control || !item->object || !item->control ||
-            *reinterpret_cast<uintptr_t*>(service->object) != core_sns_address(core_base, 0x95e00d8) ||
+            (InterlockedCompareExchange(&core_profile_id, 0, 0) == 2 &&
+             *reinterpret_cast<uintptr_t*>(service->object) != core_sns_address(core_base, 0x95e00d8)) ||
             *reinterpret_cast<const uint64_t*>(item->object) != expected) {
             out.status = ERROR_INVALID_DATA; __leave;
         }

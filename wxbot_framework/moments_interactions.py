@@ -85,7 +85,7 @@ class MomentsInteractions:
         except Exception:
             return False
 
-    def submit(self, data):
+    def submit(self, data, *, guard=None):
         payload, digest = _validate(data)
         identifier = payload['request_id']
         with self._lock:
@@ -100,7 +100,7 @@ class MomentsInteractions:
                 raise PanelError('互动记录已满，请重新连接管理服务后核对结果', 409)
             if not self._current(payload) or not self._allowed(payload['session_id'], payload['sns_id']):
                 raise PanelError('请在当前微信连接中先读取该朋友圈', 409)
-            job = {'request_id': identifier, 'fingerprint': digest, 'status': 'pending',
+            job = {'request_id': identifier, 'fingerprint': digest, 'status': 'pending', 'guard': guard,
                    'error': '', 'outcome': '', 'submitted': False, 'finished': False}
             self._jobs[identifier], self._active = job, identifier
             timer = threading.Timer(self._timeout, self._expire, args=(identifier,))
@@ -126,7 +126,8 @@ class MomentsInteractions:
         try:
             timer.start()
             with self._lock:
-                if (self._closed or job['status'] != 'pending' or not self._current(payload) or
+                if (self._closed or job['status'] != 'pending' or
+                        job['guard'] is not None and not job['guard']() or not self._current(payload) or
                         not self._allowed(payload['session_id'], payload['sns_id'])):
                     return
                 job['submitted'] = True

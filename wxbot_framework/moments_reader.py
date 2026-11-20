@@ -1,4 +1,4 @@
-"""只读电脑微信已经加载的朋友圈缓存；不拉取历史、不注入、不下载媒体。
+"""解码微信朋友圈对象，以及只读电脑微信已经加载的朋友圈缓存。
 
 布局来自 4.1.15.56 的离线反汇编及本机只读样本核对。入口同时核对核心
 文件完整指纹与当前账号；原生地址、原始 XML 和媒体链接不进入返回数据。
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import struct
 import time
+from types import SimpleNamespace
 
 from .account import APP_GLOBAL_RVA, read_current_account, validate_account
 
@@ -205,12 +206,11 @@ def _interactions(memory, item_data, offset, budget, snapshots):
     return records, total, total > count
 
 
-def _decode(memory, candidate, account, core, limit, budget,
-            tables=(_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE)):
+def _decode_items(memory, begin, count, account, limit, budget):
     rows, identifiers, snapshots = [], set(), []
-    for index in range(min(limit, candidate['count'])):
+    for index in range(min(limit, count)):
         budget.check()
-        pair_address = candidate['begin'] + 16 * index
+        pair_address = begin + 16 * index
         shared = _read(memory, pair_address, 16)
         item, control = struct.unpack('<QQ', shared)
         _pointer(item)
@@ -245,12 +245,13 @@ def _decode(memory, candidate, account, core, limit, budget,
             media_before = _read(memory, content + 0x118, 16)
             type_before = _read(memory, content + 0x60, 4)
             content_type = struct.unpack('<I', type_before)[0]
-            begin, end = struct.unpack('<QQ', media_before)
-            if (end < begin or (end - begin) % 16 or end - begin > 16 * 100 or
-                    (begin and not 0x10000 <= begin <= end < _ADDRESS_END) or
-                    (not begin and end)):
+            media_begin, media_end = struct.unpack('<QQ', media_before)
+            if (media_end < media_begin or (media_end - media_begin) % 16 or
+                    media_end - media_begin > 16 * 100 or
+                    (media_begin and not 0x10000 <= media_begin <= media_end < _ADDRESS_END) or
+                    (not media_begin and media_end)):
                 raise ValueError('invalid media vector')
-            media_count = (end - begin) // 16
+            media_count = (media_end - media_begin) // 16
             if (media_before != _read(memory, content + 0x118, 16) or
                     type_before != _read(memory, content + 0x60, 4)):
                 raise _Changed()
@@ -288,10 +289,46 @@ def _decode(memory, candidate, account, core, limit, budget,
                     (current[0x50:0x90] != value[0x50:0x90] or current[0xC2] != value[0xC2])):
                 raise _InteractionChanged()
             raise _Changed()
+    return {'rows': rows, 'loaded_count': count, 'truncated': len(rows) < count}
+
+
+def _decode(memory, candidate, account, core, limit, budget,
+            tables=(_SOURCE_VTABLE, _SOURCE_SECONDARY_VTABLE)):
+    result = _decode_items(memory, candidate['begin'], candidate['count'], account, limit, budget)
     if _source(memory, candidate['address'], core, tables) != candidate:
         raise _Changed()
-    return {'source': 'loaded_pc_moments_cache', 'rows': rows,
-            'loaded_count': candidate['count'], 'truncated': len(rows) < candidate['count']}
+    return dict(result, source='loaded_pc_moments_cache')
+
+
+def decode_moments_vector(read_memory, begin, count, expected_account, core, *, limit=20,
+                          cancelled=lambda: False):
+    """解码调用方持有强引用的服务端首屏结果，不扫描本地列表对象。
+
+    调用方须在读取前后核对账号，并在本函数返回前保留原生结果的生命周期。
+    """
+    validate_account(expected_account)
+    if not callable(read_memory) or not callable(cancelled):
+        raise ValueError('朋友圈读取回调无效')
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError('朋友圈读取条数应为 1–50')
+    if (type(count) is not int or not 0 <= count <= 10000 or type(begin) is not int or
+            not (begin == count == 0 or 0x10000 <= begin < _ADDRESS_END) or
+            begin + count * 16 >= _ADDRESS_END):
+        raise ValueError('朋友圈结果范围无效')
+    _pointer(core)
+    budget = _Budget(cancelled)
+    try:
+        budget.check()
+        result = _decode_items(SimpleNamespace(read=read_memory), begin, count, expected_account,
+                               limit, budget)
+        budget.check()
+        return dict(result, source='native_sns_first_page')
+    except MomentsReadError:
+        raise
+    except _Changed:
+        raise MomentsReadError(_CHANGED) from None
+    except (OSError, ValueError, UnicodeError, struct.error):
+        raise MomentsReadError('暂时无法读取朋友圈回包，请稍后重试') from None
 
 
 class _Region(c.Structure):

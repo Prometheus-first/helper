@@ -15,6 +15,7 @@ else:
 
 _NAMES = {name: ('WxMomentsInteraction' + name).encode() for name in ('Start', 'Poll', 'Cancel', 'Close')}
 _CAPABILITY = b'WxMomentsInteractionCapabilities'
+_COMMENT_NAMES = {name: ('WxMomentsComment' + name).encode() for name in ('Start', 'Poll', 'Cancel', 'Close')}
 _TERMINAL = {5, 6, 7, 8, 11, 12, 13}
 _PREFLIGHT = {50, 87, 170, 1306}
 
@@ -47,6 +48,14 @@ def interaction_capability(bridge_path=TEXT_DLL):
         finally:
             pe.close()
     except (OSError, ValueError, pefile.PEFormatError):
+        return False
+
+
+def comment_capability(bridge_path=TEXT_DLL):
+    try:
+        exports, _ = _exports(bridge_path)
+        return set(_COMMENT_NAMES.values()) <= exports.keys()
+    except (OSError, ValueError):
         return False
 
 
@@ -88,9 +97,10 @@ def _result(poll, closed):
     return {'status': 'unknown', 'unload_blocked': False}
 
 
-def _reap(pid, bridge_path, operation_id):
+def _reap(pid, bridge_path, operation_id, names=None):
     """只处理已存在任务的退出，不调用 Start，不重复点赞或评论。"""
     channel = None
+    names = names or _NAMES
     try:
         loaded = _native().modules(pid).get(Path(bridge_path).name.lower())
         if not loaded or Path(loaded[1]).resolve() != Path(bridge_path).resolve():
@@ -101,7 +111,7 @@ def _reap(pid, bridge_path, operation_id):
         ptr = channel.allocate(bytes(poll))
         until = time.monotonic() + 300
         while time.monotonic() < until:
-            code = channel.call(loaded[0] + exports[_NAMES['Poll']], ptr)
+            code = channel.call(loaded[0] + exports[names['Poll']], ptr)
             if code == 1168:  # Start's remote thread may not have created its lease yet.
                 time.sleep(1)
                 continue
@@ -110,7 +120,7 @@ def _reap(pid, bridge_path, operation_id):
             poll = Poll.from_buffer_copy(channel.read_memory(ptr, c.sizeof(poll)))
             if poll.state == 9:
                 return
-            if poll.state in _TERMINAL and channel.call(loaded[0] + exports[_NAMES['Close']], ptr) == 0:
+            if poll.state in _TERMINAL and channel.call(loaded[0] + exports[names['Close']], ptr) == 0:
                 return
             time.sleep(1)
     except Exception:
@@ -122,14 +132,17 @@ def _reap(pid, bridge_path, operation_id):
 
 def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90):
     cfg = _config(pid, account, payload)
-    if not interaction_capability(bridge_path):
-        return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
     from wxbot_framework.account import read_current_account
     mods = _native().modules(pid)
     loaded, core = mods.get(Path(bridge_path).name.lower()), mods.get('weixin.dll')
     profile = _core_profile(core[1]) if core else None
     if (not loaded or not core or Path(loaded[1]).resolve() != Path(bridge_path).resolve() or
-            profile is None or profile.version != '4.1.15.56'):
+            profile is None or profile.version not in ('4.1.15.56', '4.2.0.12')):
+        return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
+    modern = profile.version == '4.2.0.12'
+    names = _COMMENT_NAMES if modern else _NAMES
+    if (modern and (payload.get('action') != 'comment' or not comment_capability(bridge_path)) or
+            not modern and not interaction_capability(bridge_path)):
         return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
     exports, _ = _exports(bridge_path)
     channel = _Channel(pid)
@@ -143,7 +156,7 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
         parameter = channel.allocate(bytes(cfg))
         # From entering Start, a failure or timeout may leave an accepted task.
         started = True
-        code = channel.call(loaded[0] + exports[_NAMES['Start']], parameter)
+        code = channel.call(loaded[0] + exports[names['Start']], parameter)
         if code in _PREFLIGHT:
             started = False
             return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
@@ -151,14 +164,14 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
         ptr = channel.allocate(bytes(poll))
         until = time.monotonic() + timeout
         while time.monotonic() < until:
-            code = channel.call(loaded[0] + exports[_NAMES['Poll']], ptr)
+            code = channel.call(loaded[0] + exports[names['Poll']], ptr)
             if code:
                 break
             poll = Poll.from_buffer_copy(channel.read_memory(ptr, c.sizeof(poll)))
             if poll.state == 9:
                 break
             if poll.state in _TERMINAL:
-                close = channel.call(loaded[0] + exports[_NAMES['Close']], ptr)
+                close = channel.call(loaded[0] + exports[names['Close']], ptr)
                 if close == 0:
                     closed = True
                     result = _result(poll, True)
@@ -168,7 +181,7 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
             time.sleep(0.15)
         # Cancel stops work that has not entered the interaction, never resends
         # or pretends to abort an already submitted network request.
-        channel.call(loaded[0] + exports[_NAMES['Cancel']], ptr)
+        channel.call(loaded[0] + exports[names['Cancel']], ptr)
         recovery = True
         return {'status': 'unknown', 'unload_blocked': True}
     except Exception:
@@ -178,4 +191,5 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
     finally:
         channel.close()
         if recovery:
-            threading.Thread(target=_reap, args=(pid, bridge_path, cfg.operation_id), name='MomentsInteractionCleanup', daemon=True).start()
+            args = (pid, bridge_path, cfg.operation_id, names) if modern else (pid, bridge_path, cfg.operation_id)
+            threading.Thread(target=_reap, args=args, name='MomentsInteractionCleanup', daemon=True).start()

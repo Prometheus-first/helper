@@ -58,6 +58,11 @@ class InteractionJobsTests(unittest.TestCase):
         self.release.set()
         self.service.close()
 
+    def test_automation_disabled_before_worker_dispatch_never_calls_delivery(self):
+        self.service.submit(request(), guard=lambda: False)
+        wait_status(self.service, 'request_1234567890', 'failed')
+        self.assertEqual(self.calls, [])
+
     def test_idempotency_and_busy_timeout_do_not_resubmit(self):
         self.service.submit(request())
         self.assertTrue(self.entered.wait(1))

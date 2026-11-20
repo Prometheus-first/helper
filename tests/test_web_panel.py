@@ -215,6 +215,17 @@ class ControllerTests(PanelFixture):
         self.assertEqual(read_json(path)['api_key'], '')
         self.assertGreater(len(list((self.root/'.runtime/web/backups').glob('*'))),0)
 
+    def test_configuration_backups_are_distinct_with_same_timestamp(self):
+        path = self.root / 'llm_config.json'
+        original = path.read_bytes()
+        with patch('wxbot_framework.web_panel.time.time_ns', return_value=123456):
+            self.controller.save_configuration({'llm': {'model': 'first-model'}})
+            first = path.read_bytes()
+            self.controller.save_configuration({'llm': {'model': 'second-model'}})
+        backups = (self.root / '.runtime/web/backups').glob('123456-*/*-llm_config.json')
+        self.assertCountEqual([backup.read_bytes() for backup in backups], [original, first])
+        self.assertEqual(read_json(path)['model'], 'second-model')
+
     def test_group_edit_keeps_profiles_and_adds_nonempty_allowlist(self):
         path = self.root/'members_config.json'
         data = read_json(path)

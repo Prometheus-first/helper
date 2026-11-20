@@ -28,7 +28,7 @@ features:
     link: /guide/web-panel#公众号文章
   - icon: 📷
     title: 朋友圈
-    details: 发布文字和图文，读取已加载记录及互动，手动点赞或评论。
+    details: 发布文字和图文；4.2.0.12 实时读取动态首页，支持普通评论和按作者范围自动发送固定评论。
     link: /guide/web-panel#朋友圈
   - icon: 💬
     title: 文本与真实艾特

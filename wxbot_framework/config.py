@@ -6,10 +6,23 @@ import math
 import re
 import os
 import tempfile
+import time
 from pathlib import Path
 
 PLUGIN_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 EXAMPLE_ACCOUNT = "wxid_example_robot"
+
+
+def replace_file(source, destination):
+    """Preserve atomic replacement through brief Windows sharing conflicts."""
+    for attempt in range(6):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as error:
+            if getattr(error, 'winerror', None) not in (5, 32, 33) or attempt == 5:
+                raise
+            time.sleep(.01 * 2**attempt)
 
 
 def account_is_unbound(account):
@@ -145,7 +158,7 @@ class ConfigStore:
                 output.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self.path)
+            replace_file(temporary, self.path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

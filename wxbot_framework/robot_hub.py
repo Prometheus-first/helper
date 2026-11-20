@@ -76,9 +76,9 @@ class RobotWorker:
             headers={'X-Helper-Token': token, 'Content-Type': 'application/json'})
         try:
             # 不使用系统代理转发本机管理请求。
-            # Loading one article includes a bounded client URL load and cache
-            # polling. Catalog pages and other controls retain the short limit.
-            timeout = 45 if route.split('?', 1)[0] in ('article-read', 'message-export') else 20
+            # Server-side Moments reads can wait for one native network request.
+            timeout = {'article-read': 45, 'message-export': 45, 'moments-read': 90}.get(
+                route.split('?', 1)[0], 20)
             return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             try:
@@ -164,6 +164,8 @@ class RobotProxy:
     def moments_connection(self): return self.request('moments-connection')
     def publish_moments(self, data): return self.request('moments-publish', data)
     def read_moments(self, data): return self.request('moments-read', data)
+    def moments_auto_status(self): return self.request('moments-auto-comment')
+    def configure_moments_auto(self, data): return self.request('moments-auto-comment', data)
     def interact_moments(self, data): return self.request('moments-interact', data)
     def moments_interaction_status(self, identifier):
         from urllib.parse import urlencode

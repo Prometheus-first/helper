@@ -72,11 +72,26 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def _handle(self, write=False):
         try:
-            self._check(api=self.path.startswith('/api/'))
+            try:
+                self._check(api=self.path.startswith('/api/'))
+            except PanelError:
+                # On Windows, closing with an unread request body can reset the
+                # connection before the client receives the rejection response.
+                length = self.headers.get('Content-Length', '')
+                if write and not self.headers.get('Transfer-Encoding') and length.isdigit() and 0 < int(length) <= 65536:
+                    previous_timeout = self.connection.gettimeout()
+                    try:
+                        self.connection.settimeout(1)
+                        self.rfile.read(int(length))
+                    except OSError:
+                        pass
+                    finally:
+                        self.connection.settimeout(previous_timeout)
+                raise
             parsed = urlsplit(self.path)
             path = parsed.path
             controller = self.server.controller
-            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js', '/articles.js'):
+            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js', '/moments-auto.js', '/articles.js'):
                 name = 'index.html' if path == '/' else path[1:]
                 raw = (controller.root / 'webui' / name).read_bytes()
                 if name == 'index.html':
@@ -148,6 +163,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     return self.send(200, controller.publish_moments(data))
                 if path == '/api/moments-read':
                     return self.send(200, controller.read_moments(data))
+                if path == '/api/moments-auto-comment':
+                    return self.send(200, controller.configure_moments_auto(data))
                 if path == '/api/articles-read':
                     return self.send(200, controller.read_articles(data))
                 if path == '/api/article-read':
@@ -211,6 +228,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, controller.send_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/moments-connection':
                 return self.send(200, controller.moments_connection())
+            if path == '/api/moments-auto-comment':
+                return self.send(200, controller.moments_auto_status())
             if path == '/api/moments-status':
                 return self.send(200, controller.moments_status(parse_qs(parsed.query).get('id', [''])[0]))
             if path == '/api/moments-interaction-status':

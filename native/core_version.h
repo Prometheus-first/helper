@@ -228,10 +228,18 @@ static uintptr_t core_address(uintptr_t base, uintptr_t legacy) {
     return rva ? base + rva : 0;
 }
 
-// SNS interaction was verified only in 4.1.15.56. These are native profile-2
-// RVAs, not legacy targets; never reuse them in profile 1 or an unknown image.
+// SNS interaction RVAs use profile-2 keys, with an explicit 4.2 comment map.
+// Never reuse unmapped targets in another profile or an unknown image.
 static uintptr_t core_sns_address(uintptr_t base, uintptr_t rva) {
-    if (!base || InterlockedCompareExchange(&core_profile_id, 0, 0) != 2) return 0;
+    if (!base) return 0;
+    const LONG profile = InterlockedCompareExchange(&core_profile_id, 0, 0);
+    // 4.2 comment adapter uses an owned item from the verified first-page query.
+    if (profile == 4) {
+        if (rva == 0x3065ac0) return base + 0x312a370;
+        if (rva == 0x43b1800) return base + 0x44731b0;
+        return 0;
+    }
+    if (profile != 2) return 0;
     static constexpr uintptr_t verified[] = {
         0x5737070, 0x8f52418, 0x9a31818, 0xb9ba4b0, 0x95e00d8, 0x9195c08,
         0x754cd50, 0x754cd70, 0xbb94b20, 0x108aee0, 0x49f2f0,
@@ -246,6 +254,12 @@ static uintptr_t core_video_address(uintptr_t base, uintptr_t rva) {
     if (!base || InterlockedCompareExchange(&core_profile_id, 0, 0) != 4) return 0;
     if (rva != 0x3078f60 && rva != 0x93bd678) return 0;
     return base + rva;
+}
+
+// SnsService's synchronous first-page query, verified only on 4.2.0.12.
+static uintptr_t core_moments_read_address(uintptr_t base) {
+    return base && InterlockedCompareExchange(&core_profile_id, 0, 0) == 4
+        ? base + 0x310a7d0 : 0;
 }
 
 // The publishing RVAs are native 4.1.15.56 values; 4.2 has a separate map.

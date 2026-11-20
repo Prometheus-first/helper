@@ -1,6 +1,9 @@
 """朋友圈读取路由与连接隔离的离线测试，数据均为模拟记录。"""
 import threading
+import sys
+from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from test_moments_integration import MomentsFixture, MomentsHTTPTests
 from wxbot_framework.panel_common import PanelError
@@ -43,6 +46,22 @@ class ReadControllerTests(MomentsFixture):
             with self.assertRaises(PanelError):
                 self.controller.read_moments(bad)
         self.assertEqual(len(calls), 1)
+
+    def test_source_is_whitelisted_and_native_reply_keeps_field_filtering(self):
+        app = self.start()
+        session = app.backend.session_id
+        result = sample()
+        app.service.read_moments = Mock(return_value=result)
+        for source in ('native_sns_first_page', 'loaded_pc_moments_cache'):
+            result['source'] = source
+            response = self.controller.read_moments({'session_id': session})
+            self.assertEqual(response['source'], source)
+            self.assertNotIn('private_field', response)
+            self.assertNotIn('internal_url', response['rows'][0])
+        result['source'] = 'private-native-pointer'
+        with self.assertRaises(PanelError) as error:
+            self.controller.read_moments({'session_id': session})
+        self.assertNotIn('private-native-pointer', str(error.exception))
 
     def test_connection_switch_discards_old_result_and_only_one_read_runs(self):
         app = self.start()
@@ -127,3 +146,60 @@ class ReadCancellationTests(unittest.TestCase):
         thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(errors), 1)
+
+
+class NativeReadTests(unittest.TestCase):
+    def setUp(self):
+        self.native = SimpleNamespace(_calls=threading.RLock(), _owns_bridge=True,
+            _stop=threading.Event(), _channel=object(), _check_account=Mock(),
+            self_wxid='wxid_offline_self', _friend_session_id='offline_session',
+            wechat_version='4.2.0.12', pid=123, _dll='fixture-bridge.dll')
+        transport = ModuleType('native.moments_read_transport')
+        self.fresh = transport.read_fresh_moments = Mock(return_value=sample())
+        replacement = patch.dict(sys.modules, {'native.moments_read_transport': transport})
+        replacement.start()
+        self.addCleanup(replacement.stop)
+
+    def test_native_version_uses_first_page_and_older_versions_use_cache(self):
+        from text_service import NativeTextService
+        with patch('wxbot_framework.moments_reader.read_loaded_moments', return_value=sample()) as cached:
+            result = NativeTextService.read_moments(self.native, 10)
+            self.assertEqual(result, sample())
+            self.assertEqual(self.fresh.call_args.args, (123, 'wxid_offline_self'))
+            self.assertEqual(self.fresh.call_args.kwargs['limit'], 10)
+            self.assertEqual(self.fresh.call_args.kwargs['bridge_path'], 'fixture-bridge.dll')
+            self.assertFalse(self.fresh.call_args.kwargs['cancelled']())
+            cached.assert_not_called()
+            for version in ('4.1.15.56', '4.2.0.11'):
+                self.native.wechat_version = version
+                NativeTextService.read_moments(self.native)
+            self.assertEqual(cached.call_count, 2)
+            self.fresh.assert_called_once()
+
+    def test_native_failure_is_reported_without_using_old_cache(self):
+        from text_service import NativeTextService
+        self.fresh.side_effect = RuntimeError('offline transport failure')
+        with patch('wxbot_framework.moments_reader.read_loaded_moments') as cached:
+            with self.assertRaises(RuntimeError):
+                NativeTextService.read_moments(self.native)
+            cached.assert_not_called()
+
+    def test_connection_change_and_cancellation_discard_the_reply(self):
+        from text_service import NativeTextService
+        for field in ('self_wxid', '_friend_session_id'):
+            before = getattr(self.native, field)
+            def fresh(*_args, **_kwargs):
+                setattr(self.native, field, 'wxid_changed')
+                return sample()
+            self.fresh.side_effect = fresh
+            with self.assertRaisesRegex(RuntimeError, '连接已结束'):
+                NativeTextService.read_moments(self.native)
+            setattr(self.native, field, before)
+        self.fresh.side_effect = lambda *_args, **_kwargs: self.native._stop.set() or sample()
+        with self.assertRaisesRegex(RuntimeError, '连接已结束'):
+            NativeTextService.read_moments(self.native)
+        self.native._stop.clear()
+        self.fresh.reset_mock()
+        with self.assertRaises(RuntimeError):
+            NativeTextService.read_moments(self.native, cancelled=lambda: True)
+        self.fresh.assert_not_called()

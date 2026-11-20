@@ -697,7 +697,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxArmMentionProbe(void* parameter)
 }
 
 #include "moments_send.h"
+#include "moments_read.h"
 
 #ifndef WXBOT_EXCLUDE_SNS_INTERACTION
 #include "moments_interaction_bridge.h"
+#include "moments_comment.h"
 #endif

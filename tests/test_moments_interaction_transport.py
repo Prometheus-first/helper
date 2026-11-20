@@ -29,14 +29,14 @@ class Channel:
     def call(self, address, parameter=None):
         name = next(key for key, value in EXPORTS.items() if BASE + value == address)
         self.calls.append(name)
-        if name == transport._NAMES['Start']:
+        if name == self.case.names['Start']:
             self.config = transport.Config.from_buffer_copy(self.buffers[parameter])
             if self.case.start_error:
                 raise TimeoutError('sensitive diagnostic must not escape')
             return self.case.start_code
         request = transport.Poll.from_buffer_copy(self.buffers[parameter])
         self.case.assertEqual(request.operation_id, self.config.operation_id)
-        if name == transport._NAMES['Poll']:
+        if name == self.case.names['Poll']:
             request.state = self.case.state
             request.attempted = int(self.case.state not in (6, 7, 8, 13))
             request.native_known = request.native_value = int(self.case.state == 11)
@@ -53,6 +53,7 @@ class Channel:
 
 class InteractionTransportTests(unittest.TestCase):
     def setUp(self):
+        self.names = transport._NAMES
         self.start_code, self.start_error, self.state = 0, False, 11
         self.channel = Channel(self)
         self.payload = {'sns_id': '123456789012345678', 'action': 'comment', 'content': '离线评论'}
@@ -75,6 +76,32 @@ class InteractionTransportTests(unittest.TestCase):
         self.mocks[1].return_value = SimpleNamespace(version='4.2.0.11')
         self.assertEqual(self.run_call()['status'], 'failed')
         self.assertEqual(self.channel.calls, [])
+
+    def test_42012_comment_uses_its_own_exports_and_same_ownership_token(self):
+        self.names = transport._COMMENT_NAMES
+        self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
+        modern_exports = {value: i * 0x100 for i, value in enumerate(self.names.values(), 1)}
+        with patch.dict(EXPORTS, modern_exports, clear=True):
+            self.assertEqual(self.run_call(), {'status': 'completed', 'unload_blocked': False})
+        self.assertEqual(self.channel.calls, [self.names[x] for x in ('Start', 'Poll', 'Close')])
+
+    def test_42012_like_and_old_dll_are_rejected_before_remote_submission(self):
+        self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
+        self.assertEqual(self.run_call()['status'], 'failed')  # Missing modern exports.
+        with patch.object(transport, 'comment_capability', return_value=True):
+            self.payload.update(action='like', content='')
+            self.assertEqual(self.run_call()['status'], 'failed')
+        self.assertEqual(self.channel.calls, [])
+
+    def test_42012_timeout_reaper_retains_modern_export_namespace_without_resend(self):
+        self.names = transport._COMMENT_NAMES
+        self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
+        self.start_error = True
+        modern_exports = {value: i * 0x100 for i, value in enumerate(self.names.values(), 1)}
+        with patch.dict(EXPORTS, modern_exports, clear=True):
+            self.assertTrue(self.run_call()['unload_blocked'])
+        self.assertEqual(self.channel.calls, [self.names['Start']])
+        self.assertEqual(self.mocks[-1].call_args.kwargs['args'][-1], self.names)
 
     def test_completed_once_and_cleanup_uses_same_operation_token(self):
         self.assertEqual(self.run_call(), {'status': 'completed', 'unload_blocked': False})

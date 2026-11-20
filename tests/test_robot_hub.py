@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
 
 from test_web_panel import FakeApp, FakeLock
 from wxbot_framework.robot_hub import RobotHub, RobotWorker
@@ -174,6 +175,27 @@ class HubTests(unittest.TestCase):
             self.assertEqual(request('/api/logs?after=0&robot='+identifier)[0],200)
         finally:
             server.shutdown();server.server_close();thread.join(2)
+
+
+class WorkerRequestTests(unittest.TestCase):
+    def test_moments_read_has_native_network_timeout_without_launching_a_worker(self):
+        worker = RobotWorker.__new__(RobotWorker)
+        worker.lock = threading.RLock()
+        worker.endpoint, worker.token = 'http://127.0.0.1:12345', 'offline-worker-token'
+        worker.launch = Mock()
+        opener = Mock()
+        with patch('wxbot_framework.robot_hub.urllib.request.build_opener', return_value=opener):
+            for route, timeout in (('moments-read', 90), ('moments-read?limit=20', 90),
+                                   ('article-read', 45), ('article-read?entry=fixture', 45),
+                                   ('message-export', 45), ('state', 20), ('contacts', 20)):
+                with self.subTest(route=route):
+                    opener.open.reset_mock()
+                    self.assertIs(worker.open_response(route, {}), opener.open.return_value)
+                    opener.open.assert_called_once()
+                    request = opener.open.call_args.args[0]
+                    self.assertEqual(request.full_url, worker.endpoint + '/api/' + route)
+                    self.assertEqual(opener.open.call_args.kwargs['timeout'], timeout)
+        self.assertEqual(worker.launch.call_count, 7)
 
 
 class WorkerProcessTests(unittest.TestCase):

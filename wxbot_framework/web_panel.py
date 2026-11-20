@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 
-from .config import ConfigStore, account_is_unbound, initialize_configs, validate_name
+from .config import ConfigStore, account_is_unbound, initialize_configs, validate_name, replace_file
 from . import chat_export
 from .chat_archive import ChatArchive
 from .members import member_database_path
@@ -54,7 +54,7 @@ def atomic_json(path, data):
             output.write(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -121,6 +121,8 @@ class PanelController:
         self.moments = MomentsPublisher(self.workspace, self._deliver_moments, self._moments_session)
         self.moments_interactions = MomentsInteractions(self._deliver_moments_interaction, self._moments_session,
                                                        self._moments_allowed)
+        from .moments_auto_comment import MomentsAutoComment
+        self.moments_auto = MomentsAutoComment(self, atomic_json, read_json)
         logging.getLogger().addHandler(self.logs)
 
     def _paths(self, config):
@@ -238,6 +240,7 @@ class PanelController:
                 self.worker = threading.Thread(target=run, name='ManagedBot', daemon=False)
                 self.worker.start()
                 self.state = 'running'
+                self.moments_auto.start()
                 try:
                     self.recovery.arm(app, restored=process is not None)
                 except RuntimeError:
@@ -275,6 +278,7 @@ class PanelController:
 
     def close(self):
         self.stop_event.set()
+        self.moments_auto.close()
         self.recovery.cancel()
         self.scheduled_tasks.close()
         self.moments.close()
@@ -420,8 +424,9 @@ class PanelController:
             yield download
 
     def _save_many(self, changes):
-        backup = self.workspace / '.runtime/web/backups' / str(time.time_ns())
-        backup.mkdir(parents=True)
+        backup_root = self.workspace / '.runtime/web/backups'
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup = Path(tempfile.mkdtemp(prefix=f'{time.time_ns()}-', dir=backup_root))
         originals = {path: path.read_bytes() for path in changes}
         for index, (path, raw) in enumerate(originals.items()):
             (backup / f'{index}-{path.name}').write_bytes(raw)
@@ -1238,6 +1243,9 @@ class PanelController:
                         max_images=9, visibility=['public', 'private'])
         if interaction_reported:
             response['interaction_supported'] = interaction_supported
+            for action in ('like', 'comment'):
+                if action + '_supported' in result:
+                    response[action + '_supported'] = interaction_supported and result[action + '_supported'] is True
         return response
 
     def publish_moments(self, data):
@@ -1263,7 +1271,7 @@ class PanelController:
             current = self._moments_session()
             return current is not None and current['session_id'] == session and sns_id in self._moments_seen
 
-    def interact_moments(self, data):
+    def interact_moments(self, data, *, _guard=None):
         # 已接收的相同编号可查询，不依赖此时是否仍在同一连接。
         if isinstance(data, dict):
             try:
@@ -1276,13 +1284,21 @@ class PanelController:
         connection = self.moments_connection()
         if not connection.get('interaction_supported'):
             raise PanelError('当前连接的朋友圈互动能力尚未启用', 409)
-        return self.moments_interactions.submit(data)
+        if isinstance(data, dict) and connection.get(data.get('action', '') + '_supported') is False:
+            raise PanelError('当前微信连接尚未支持该互动操作', 409)
+        return self.moments_interactions.submit(data, guard=_guard)
+
+    def moments_auto_status(self):
+        return self.moments_auto.view()
+
+    def configure_moments_auto(self, data):
+        return self.moments_auto.configure(data)
 
     def moments_interaction_status(self, identifier):
         return self.moments_interactions.status(identifier)
 
     def read_moments(self, data):
-        """仅手动读取当前连接的本地缓存，不保存正文，也不触发微信翻页。"""
+        """手动读取当前连接的朋友圈首页，按后端返回的数据来源标注结果。"""
         if not isinstance(data, dict) or type(data.get('limit', 20)) is not int or not 1 <= data.get('limit', 20) <= 50:
             raise PanelError('读取条数必须是 1 到 50 的整数')
         current = self._moments_session()
@@ -1305,9 +1321,12 @@ class PanelController:
                 from .moments_reader import MomentsReadError
                 if isinstance(error, MomentsReadError):
                     raise PanelError(str(error), 409) from None
-                raise PanelError('朋友圈读取失败，请确认电脑微信已打开朋友圈后重试', 409) from None
+                raise PanelError('朋友圈读取失败，请确认微信在线后重试', 409) from None
             if self._moments_session() != current or self.app is not app or app.backend is not backend:
                 raise PanelError('微信连接已变化，已丢弃旧账号的读取结果', 409)
+            source = result.get('source', 'loaded_pc_moments_cache')
+            if source not in ('loaded_pc_moments_cache', 'native_sns_first_page'):
+                raise PanelError('朋友圈数据来源无法确认，请重新读取', 409)
             # 不转发进程地址、诊断或原生元数据，仅返回页面需要的已验证字段。
             fields = ('sns_id', 'author', 'nickname', 'is_self', 'timestamp', 'time',
                       'private', 'content', 'content_type', 'media_count')
@@ -1334,7 +1353,7 @@ class PanelController:
                         self._moments_seen.move_to_end(identifier)
                 while len(self._moments_seen) > 1000:
                     self._moments_seen.popitem(last=False)
-            return dict(current, source='loaded_pc_moments_cache',
+            return dict(current, source=source,
                         rows=rows,
                         loaded_count=result['loaded_count'], truncated=result['truncated'])
         finally:
@@ -1379,7 +1398,8 @@ class PanelController:
             capability = self.moments_connection()
         except PanelError:
             return {'status': 'failed', 'phase': 'preflight'}
-        if (not capability.get('interaction_supported') or capability['account'] != current['account'] or
+        if (not capability.get('interaction_supported') or capability.get(payload['action'] + '_supported') is False or
+                capability['account'] != current['account'] or
                 self._moments_session() != current or self.app is not app or app.backend is not backend):
             return {'status': 'failed', 'phase': 'preflight'}
         interact = getattr(service, 'interact_moments', None)

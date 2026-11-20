@@ -6,6 +6,9 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   let fetching = false, reading = false, submitting = false, images = [], preview = null, pending = null, timer = null;
   let feedBusy = false, feedGeneration = 0;
   const interactionJobs = new Map(), likedEntries = new Set(), feedEntries = new Set(), interactionTimers = new Set();
+  const autoComment = window.createMomentsAutoComment?.({api, available, current: () => ({
+    robot: target, session: connection?.session_id,
+    supported: connection?.comment_supported ?? connection?.interaction_supported ?? false})});
   const interactionKey = (robot, session, id) => JSON.stringify([robot, session, id]);
   const feedStatus = (message, error = false) => {
     const node = $('#moments-read-status'); node.textContent = message; node.classList.toggle('account-error', error);
@@ -87,6 +90,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     $('#moments-read').disabled = !ready || feedBusy;
     $('#moments-read').textContent = feedBusy ? '读取中…' : '读取列表';
     for (const entry of feedEntries) updateInteraction(entry);
+    autoComment?.render();
     for (const option of $('#moments-visibility').options) option.disabled = !!connection?.visibility && !connection.visibility.includes(option.value);
     if (check && !$('#page-moments').classList.contains('hidden')) void refresh();
   }
@@ -95,7 +99,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
   $('#moments-read').onclick = async () => {
     if (feedBusy || !target || !connection?.session_id || !available()) return;
     const requested = target, session = connection.session_id, version = ++feedGeneration;
-    feedBusy = true; feedEntries.clear(); $('#moments-timeline-list').replaceChildren(); feedStatus('正在读取已加载的记录…'); render(false);
+    feedBusy = true; feedEntries.clear(); $('#moments-timeline-list').replaceChildren(); feedStatus('正在读取朋友圈…'); render(false);
     try {
       const result = await api('moments-read', {session_id: session, limit: 20}, requested);
       if (requested !== target || version !== feedGeneration || session !== connection?.session_id) return;
@@ -131,7 +135,8 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
         addInteraction(article, row, requested, session);
         list.append(article);
       }
-      feedStatus(result.rows.length ? '已读取 ' + result.rows.length + ' 条' + (result.truncated ? '，缓存共 ' + result.loaded_count + ' 条。' : '。') : '当前没有已加载的记录，请先在电脑微信打开朋友圈后重试。');
+      const fresh = result.source === 'native_sns_first_page';
+      feedStatus(result.rows.length ? (fresh ? '已从微信服务器读取 ' : '已读取缓存 ') + result.rows.length + ' 条' + (result.truncated ? (fresh ? '，本次首页共 ' : '，缓存共 ') + result.loaded_count + ' 条。' : '。') : fresh ? '微信服务器本次未返回记录。' : '当前没有已加载的记录，请先在电脑微信打开朋友圈后重试。');
     } catch (error) {
       if (requested === target && version === feedGeneration) feedStatus(error.message, true);
     } finally {
@@ -144,13 +149,14 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     const job = interactionJobs.get(entry.key);
     const locked = !!job && ['pending', 'unknown'].includes(job.status);
     const liked = !!entry.row.raw_like_flag || likedEntries.has(entry.key) || !!job?.liked;
-    entry.like.disabled = !current || locked || liked;
+    entry.like.disabled = !current || connection?.like_supported === false || locked || liked;
     entry.like.textContent = liked ? '已点赞' : '点赞';
-    entry.comment.disabled = !current || locked;
-    entry.input.disabled = !current || locked;
+    const canComment = current && connection?.comment_supported !== false;
+    entry.comment.disabled = !canComment || locked;
+    entry.input.disabled = !canComment || locked;
     const size = new TextEncoder().encode(entry.input.value).length;
     entry.counter.textContent = size + ' / 1023 字节';
-    entry.send.disabled = !current || locked || !entry.input.value.trim() || size > 1023;
+    entry.send.disabled = !canComment || locked || !entry.input.value.trim() || size > 1023;
     entry.status.textContent = job?.message || '';
     entry.status.classList.toggle('account-error', !!job && ['failed', 'unknown'].includes(job.status));
   }
@@ -197,6 +203,7 @@ window.createMomentsComposer = ({api, robots, label, available}) => {
     const key = entry.key, prior = interactionJobs.get(key);
     if (entry.robot !== target || entry.session !== connection?.session_id || !available() ||
         !connection?.interaction_supported || (prior && ['pending', 'unknown'].includes(prior.status)) ||
+        connection?.[action + '_supported'] === false ||
         (action === 'like' && (entry.row.raw_like_flag || likedEntries.has(key) || prior?.liked))) return;
     const content = action === 'comment' ? entry.input.value : '';
     if (action === 'comment' && (!content.trim() || new TextEncoder().encode(content).length > 1023)) return;

@@ -790,15 +790,17 @@ class NativeTextService(NativeFileHelperService):
 
     def moments_capabilities(self):
         from moments_transport import moments_capabilities
-        from moments_interaction_transport import interaction_capability
+        from moments_interaction_transport import interaction_capability, comment_capability
         with self._calls:
             if not self._owns_bridge or self._stop.is_set() or self._channel is None:
                 return {'supported': False, 'reason': '微信尚未连接'}
             self._check_account(force=True)
             result = moments_capabilities(self.pid, bridge_path=self._dll)
-            result['interaction_supported'] = (self.wechat_version == '4.1.15.56' and
-                                               result.get('inspect_supported') is True and
-                                               interaction_capability(self._dll))
+            result['like_supported'] = (self.wechat_version == '4.1.15.56' and
+                                        result.get('inspect_supported') is True and interaction_capability(self._dll))
+            result['comment_supported'] = (result['like_supported'] or
+                self.wechat_version == '4.2.0.12' and comment_capability(self._dll))
+            result['interaction_supported'] = result['like_supported'] or result['comment_supported']
             return result
 
     def interact_moments(self, payload):
@@ -819,11 +821,21 @@ class NativeTextService(NativeFileHelperService):
     def read_moments(self, limit=20, *, cancelled=lambda: False):
         from wxbot_framework.moments_reader import read_loaded_moments
         with self._calls:
-            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None or cancelled():
                 raise RuntimeError('微信尚未连接')
             self._check_account(force=True)
-            return read_loaded_moments(self.pid, self.self_wxid, limit=limit,
-                                       cancelled=lambda: self._stop.is_set() or cancelled())
+            account, session = self.self_wxid, self._friend_session_id
+            should_cancel = lambda: self._stop.is_set() or cancelled()
+            if self.wechat_version == '4.2.0.12':
+                from native.moments_read_transport import read_fresh_moments
+                result = read_fresh_moments(self.pid, account, bridge_path=self._dll,
+                                           limit=limit, cancelled=should_cancel)
+            else:
+                result = read_loaded_moments(self.pid, account, limit=limit, cancelled=should_cancel)
+            self._check_account(force=True)
+            if should_cancel() or account != self.self_wxid or session != self._friend_session_id:
+                raise RuntimeError('朋友圈所属的微信连接已结束')
+            return result
 
     def miniprogram_commands(self, app_id, session_id, requests, *, check_app=True, cancelled=lambda: False):
         from native.miniprogram_transport import execute_commands

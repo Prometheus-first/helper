@@ -79,12 +79,14 @@ class ImageGenerationTests(unittest.TestCase):
                               plugin_is_active=lambda name: True, _service=SimpleNamespace(session_is_current=lambda s: s == 'ok'),
                               logger=Mock())
         sent = []
+        image_sent = threading.Event()
         def text(message, value, delivery_guard=None):
             with delivery_guard() if delivery_guard else nullcontext():
                 sent.append(value)
         def image(message, path, delivery_guard=None):
             with delivery_guard():
                 sent.append(Path(path).is_file())
+                image_sent.set()
             return True
         ctx.reply, ctx.reply_image = text, image
         plugin = Plugin()
@@ -103,6 +105,7 @@ class ImageGenerationTests(unittest.TestCase):
                 done.set()
         plugin.client.generate = generate
         plugin.on_message(Message('/生图 橘猫', 'group@chatroom', is_group=True, session_id='ok'), ctx)
+        self.assertTrue(image_sent.wait(3))
         self.assertTrue(done.wait(3))
         self.assertEqual(sent, ['开始生图，请稍候。', True])
         plugin.on_message(Message('/生图 橘猫', 'other@chatroom', is_group=True, session_id='ok'), ctx)

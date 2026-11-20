@@ -85,13 +85,16 @@ class FileTests(unittest.TestCase):
         self.assertTrue(self.source.exists())
 
     def test_send_keeps_long_original_filename_without_receiver_truncation(self):
-        source = self.root / ("a" * 180 + ".txt")
-        source.write_bytes(b"contents")
-        self.assertEqual(inspect_file(source).name, source.name)
-        with prepare_file(source, self.root / "s") as result:
-            self.assertEqual(result.path.name, source.name)
-            self.assertEqual(result.name, source.name)
-            self.assertEqual(result.path.read_bytes(), b"contents")
+        # Keep the worktree's path length out of this basename-preservation test.
+        with tempfile.TemporaryDirectory(prefix="f-") as directory:
+            root = Path(directory).resolve()
+            source = root / ("a" * 180 + ".txt")
+            source.write_bytes(b"contents")
+            self.assertEqual(inspect_file(source).name, source.name)
+            with prepare_file(source, root / "s") as result:
+                self.assertEqual(result.path.name, source.name)
+                self.assertEqual(result.name, source.name)
+                self.assertEqual(result.path.read_bytes(), b"contents")
 
     def test_snapshot_write_failure_cleans_directory(self):
         root = self.root / "snapshots"

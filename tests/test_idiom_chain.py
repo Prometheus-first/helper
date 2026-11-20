@@ -1,5 +1,6 @@
 """验证独立接龙、合并首答和发送失败时的状态，使用内存上下文。"""
 import logging
+from itertools import count
 import time
 import unittest
 from contextlib import nullcontext
@@ -50,6 +51,11 @@ class Context:
 
 class IdiomPluginTests(unittest.TestCase):
     def setUp(self):
+        # Windows Python 3.12's monotonic clock can repeat for 15.6 ms.
+        # Give event ordering a deterministic clock in these synchronous tests.
+        clock = patch('time.monotonic', side_effect=count(time.monotonic() + 1, 0.001).__next__)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.ctx = Context()
         self.plugin = Plugin()
         self.plugin.on_load(self.ctx)

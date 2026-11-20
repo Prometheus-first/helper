@@ -110,6 +110,63 @@ class ReaderTests(unittest.TestCase):
         self.memory.put(SOURCE + 0x10, struct.pack('<Q', CORE + secondary))
         self.assertEqual(len(self.run_read()['rows']), 1)
 
+    def test_native_reply_vector_decodes_without_a_loaded_source(self):
+        self.memory.put(SOURCE, b'\0' * 0x1D4)
+        with patch.object(reader, '_source', side_effect=AssertionError('must not scan cache')), \
+                patch.object(reader, '_locate', side_effect=AssertionError('must not scan cache')):
+            result = reader.decode_moments_vector(self.memory.read, PAIRS, 1, ACCOUNT, CORE)
+        self.assertEqual(result['source'], 'native_sns_first_page')
+        self.assertEqual(result['loaded_count'], 1)
+        self.assertEqual(result['rows'][0]['sns_id'], '18446744073709550001')
+        self.assertTrue(result['rows'][0]['is_self'])
+        self.assertFalse(self.memory.closed)
+
+    def test_multiple_reply_items_keep_entry_vector_when_first_has_media(self):
+        second_item = ITEM + 0x4000
+        self.memory.put(second_item, self.memory.read(ITEM, 0x310))
+        self.memory.put(second_item, struct.pack('<Q', 18446744073709550002))
+        self.memory.string(second_item + 8, '第二条离线昵称')
+        self.memory.string(second_item + 0x1B8, '第二条离线记录')
+        self.memory.put(second_item + 0x300, b'\0' * 16)
+        self.memory.put(PAIRS + 16, struct.pack('<QQ', second_item, second_item + 0x1000))
+        self.memory.put(CURRENT + 0x30, struct.pack('<QQQ', PAIRS, PAIRS + 32, PAIRS + 32))
+        for native in (True, False):
+            with self.subTest(native=native):
+                result = (reader.decode_moments_vector(self.memory.read, PAIRS, 2, ACCOUNT, CORE)
+                          if native else self.run_read())
+                self.assertEqual([row['sns_id'] for row in result['rows']],
+                                 ['18446744073709550001', '18446744073709550002'])
+                self.assertEqual([row['media_count'] for row in result['rows']], [2, 0])
+                self.assertEqual(result['rows'][1]['content'], '第二条离线记录')
+                self.assertEqual(result['loaded_count'], 2)
+                self.assertFalse(result['truncated'])
+
+    def test_native_reply_empty_and_invalid_ranges(self):
+        read = Mock(side_effect=AssertionError('empty reply must not read memory'))
+        result = reader.decode_moments_vector(read, 0, 0, ACCOUNT, CORE)
+        self.assertEqual(result, {'source': 'native_sns_first_page', 'rows': [],
+                                  'loaded_count': 0, 'truncated': False})
+        for begin, count in ((0, 1), (PAIRS, -1), (PAIRS, 10001), (PAIRS, True),
+                             (True, 0), (reader._ADDRESS_END - 8, 1)):
+            with self.assertRaises(ValueError):
+                reader.decode_moments_vector(read, begin, count, ACCOUNT, CORE)
+        read.assert_not_called()
+
+    def test_native_reply_cancellation_and_mutation_are_rejected(self):
+        with self.assertRaisesRegex(reader.MomentsReadError, '已取消'):
+            reader.decode_moments_vector(self.memory.read, PAIRS, 1, ACCOUNT, CORE,
+                                         cancelled=lambda: True)
+        reads = 0
+        def hook(address, size):
+            nonlocal reads
+            if address == ITEM and size == 0x310:
+                reads += 1
+                if reads == 2:
+                    self.memory.put(ITEM + 0x1B4, struct.pack('<I', 1700000001))
+        self.memory.read_hook = hook
+        with self.assertRaisesRegex(reader.MomentsReadError, '列表正在变化'):
+            reader.decode_moments_vector(self.memory.read, PAIRS, 1, ACCOUNT, CORE)
+
     def add_interaction(self, *, comment=False):
         obj = COMMENT_ITEM if comment else LIKE_ITEM
         pairs = COMMENT_PAIRS if comment else LIKE_PAIRS

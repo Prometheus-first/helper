@@ -117,9 +117,11 @@ class MemberTests(unittest.TestCase):
         self.assertEqual(len(self.store.history("成员乙")), 2)
 
     def test_limit_and_time_filter_return_chronological_records(self):
+        since = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
+        self.store._now = lambda: since - timedelta(seconds=1)
         self.store.bind("成员乙", ROOM, JING)
         self.store.record(self.message("第一句", sequence=1))
-        since = datetime.now(timezone.utc)
+        self.store._now = lambda: since + timedelta(seconds=1)
         self.store.record(self.message("第二句", sequence=2))
         self.assertEqual([r["text"] for r in self.store.history("成员乙", limit=1)], ["第二句"])
         self.assertEqual([r["text"] for r in self.store.history("成员乙", since=since)], ["第二句"])

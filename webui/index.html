@@ -7,6 +7,7 @@
   <meta name="color-scheme" content="light dark">
   <title>helper · 本地管理台</title>
   <link rel="icon" href="data:,">
+  <script src="/moments-auto.js"></script>
   <script src="/moments.js"></script>
   <script src="/articles.js"></script>
   <script src="/app.js"></script>
@@ -134,9 +135,21 @@
       <p id="moments-feedback" class="editor-status" role="status" aria-live="polite"></p>
       <div class="form-footer"><button type="button" id="moments-clear" class="text-button">清空草稿</button><button id="moments-preview" type="submit" class="primary" disabled>预览</button></div>
     </form>
+    <section class="moments-timeline" aria-labelledby="moments-auto-heading">
+      <h2 id="moments-auto-heading">自动评论</h2>
+      <form id="moments-auto-form">
+        <label for="moments-auto-enabled"><input id="moments-auto-enabled" type="checkbox">启用固定评论</label>
+        <label for="moments-auto-content">固定评论<textarea id="moments-auto-content" rows="3" placeholder="输入要自动发送的评论"></textarea></label>
+        <label for="moments-auto-interval">检查间隔（秒）<input id="moments-auto-interval" type="number" min="60" max="86400" step="1" value="120" required></label>
+        <label for="moments-auto-authors">指定作者（可选）<textarea id="moments-auto-authors" rows="2" placeholder="填写微信 ID，每行一个；留空处理首页中的全部好友"></textarea></label>
+        <p class="editor-status">首次启用和重新连接会跳过当前列表，之后只评论新发现且发布不超过一小时的动态。同一条只评论一次，跳过自己的动态和已评论的动态，每次最多发送三条。需保持机器人运行。</p>
+        <p id="moments-auto-status" class="editor-status" role="status" aria-live="polite">自动评论已关闭。</p>
+        <button id="moments-auto-save" class="secondary" type="submit" disabled>保存自动评论设置</button>
+      </form>
+    </section>
     <section class="moments-timeline" aria-labelledby="moments-timeline-heading">
-      <div class="section-heading"><h2 id="moments-timeline-heading">已加载的朋友圈</h2><button type="button" id="moments-read" class="secondary" disabled>读取列表</button></div>
-      <p class="editor-status">先在电脑微信打开朋友圈，再读取当前已加载的记录。最多显示 20 条。</p>
+      <div class="section-heading"><h2 id="moments-timeline-heading">朋友圈列表</h2><button type="button" id="moments-read" class="secondary" disabled>读取列表</button></div>
+      <p class="editor-status">微信 4.2.0.12 每次读取会请求朋友圈动态首页，其他版本读取电脑微信已加载的记录。最多显示 20 条，暂不支持个人相册读取。</p>
       <p id="moments-read-status" class="editor-status" role="status" aria-live="polite">尚未读取。</p>
       <div id="moments-timeline-list"></div>
     </section>
