@@ -1,0 +1,8 @@
+{
+  "api": "v1",
+  "commands": ["/抽卡"],
+  "default_enabled": true,
+  "description": "随机抽卡：发送 /抽卡，抽取网站提示词生成图片",
+  "requires": ["text.receive", "text.send", "image.send"],
+  "message_types": [1]
+}

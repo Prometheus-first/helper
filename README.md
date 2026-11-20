@@ -26,7 +26,7 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 - 聊天归档和 CSV 导出：按账号开启本地 SQLite 归档，按会话和日期导出，重连重投按原始消息 ID 去重。
 - 定时任务：按间隔或每天指定时间执行文字发送和插件提供的动作，支持多账号独立管理。
 - 群聊管理：按账号保存已发现群及备注，支持进退群通知、成员昵称绑定、聊天总结、人格切换、成语游戏和图库取图。
-- 模型与语音：支持 OpenAI 兼容的 Chat Completions API、可选的图片生成插件、Fish Audio 合成和按群切换音色。
+- 模型与语音：支持 OpenAI 兼容的 Chat Completions API、图片生成与随机抽卡插件、Fish Audio 合成和按群切换音色。
 - 插件管理：防撤回插件默认折叠，展开后可分别操作；支持在网页修改业务函数与配置、保存生效及恢复默认。
 - 指令分发：斜杠指令按插件注册顺序处理，首个接手的插件可停止向后分发。详见[指令优先级](docs/development/plugins.md#指令优先级)。
 - 小程序：微信 4.2.0.12 原生唤起、组件读取、引擎内点击、文字输入和截图，见[通用开发接口](docs/development/miniprograms.md)。
@@ -74,7 +74,7 @@ python main.py
 | `tts_config.json` | Fish Audio 密钥及语音选项 |
 | `.runtime/image_generation.json` | 可选图片生成插件的渠道、密钥和模型 |
 
-网页可编辑主要配置。图片生成插件使用本地私有配置，设置方法见[AI 生图](docs/guide/features.md#ai-生图)。多账号工作区位于 `.runtime/robots/`；聊天记录、媒体缓存和日志均为本地数据，已被 Git 忽略，请勿提交。具体字段见[配置参考](docs/guide/configuration.md)。
+网页可编辑主要配置。图片生成与抽卡插件使用本地私有配置，设置方法见[AI 生图](docs/guide/features.md#ai-生图)和[随机抽卡](docs/guide/features.md#随机抽卡)。多账号工作区位于 `.runtime/robots/`；聊天记录、媒体缓存和日志均为本地数据，已被 Git 忽略，请勿提交。具体字段见[配置参考](docs/guide/configuration.md)。
 
 ## 文档
 

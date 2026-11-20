@@ -13,6 +13,8 @@ RETRY_DELAYS = (1, 2, 4, 8, 10)
 
 
 class Plugin:
+    plugin_name = 'image_generation'
+
     def on_load(self, ctx):
         self.members = ctx.members
         self.stopped = threading.Event()
@@ -54,7 +56,7 @@ class Plugin:
 
     def _current(self, message, ctx):
         service = getattr(ctx, '_service', None)
-        return (not self.stopped.is_set() and ctx.plugin_is_active('image_generation')
+        return (not self.stopped.is_set() and ctx.plugin_is_active(self.plugin_name)
                 and (not message.is_group or message.chat_id in self.members.groups)
                 and (service is None or service.session_is_current(message.session_id)))
 
