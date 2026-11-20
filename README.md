@@ -4,10 +4,10 @@ Windows 微信机器人 Python 插件框架，提供本地网页管理台和控�
 
 ## 交流
 <summary>交流群二维码</summary>
-<img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/ee23edb9-5c64-42ff-986a-c47397e87bc2" />
 <img width="630" height="952" alt="image" src="https://github.com/user-attachments/assets/43fa3d18-2f71-4fef-be54-d28906c0411d" />
 
-
+## 致谢
+感谢群友Ls对本项目的贡献与支持
 
 [在线文档](https://prometheus-first.github.io/helper/) · [快速开始](docs/guide/quick-start.md) · [插件开发](docs/development/plugins.md)
 
