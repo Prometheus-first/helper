@@ -1,24 +1,24 @@
 #pragma once
-// Exact 4.2.0.12: query an owned homepage vector, retain the matching post,
-// then use the native plain-comment path. No fabricated post or async lookup ABI.
+// Exact 4.2.0.12: reuse the owned post from the successful discovery read.
+// Missing/expired snapshots fail before dispatch; this component never queries SNS.
 namespace fresh_comment {
 using Config = wxbot_sns_interaction::Config;
 using Poll = wxbot_sns_interaction::PollResult;
 using namespace wxbot_sns_interaction;
 struct Lease {
     Config config;
-    fresh_moments::Lease page;
+    std::shared_ptr<moments_posts::Snapshot> snapshot;
+    SharedMessage app{}, kernel{}, service{};
+    TestResult cleanup{};
     volatile LONG state = STARTING, cancel = 0, gate = 0;
     Poll result{};
-    explicit Lease(const Config& cfg) : config(cfg), page(page_config(cfg)) {}
-    static fresh_moments::Config page_config(const Config& cfg) {
-        fresh_moments::Config value{};
-        value.size = sizeof(value); value.pid = cfg.base.pid;
-        value.operation_id = cfg.operation_id;
-        std::memcpy(value.account, cfg.account, sizeof(value.account));
-        return value;
+    Lease(const Config& cfg, std::shared_ptr<moments_posts::Snapshot> source)
+        : config(cfg), snapshot(std::move(source)) { _InterlockedIncrement(&live_tasks); }
+    ~Lease() {
+        snapshot.reset();
+        SecureZeroMemory(&config, sizeof(config));
+        _InterlockedDecrement(&live_tasks);
     }
-    ~Lease() { SecureZeroMemory(&config, sizeof(config)); }
 };
 static SRWLOCK lock = SRWLOCK_INIT;
 static std::shared_ptr<Lease> pending;
@@ -30,24 +30,29 @@ static void run(Lease* lease) {
     LONG state = FAILED;
     __try {
         if (lease->cancel) { state = CANCELED; __leave; }
-        fresh_moments::run(&lease->page);
-        if (lease->page.state == fresh_moments::QUARANTINED) { state = QUARANTINED; __leave; }
-        if (lease->page.state != fresh_moments::READY) __leave;
-        const auto entries = reinterpret_cast<const SharedMessage*>(lease->page.begin);
-        const SharedMessage* item = nullptr;
-        for (size_t i = 0; i < lease->page.count; ++i) {
-            if (entries[i].object && entries[i].control &&
-                    *static_cast<const uint64_t*>(entries[i].object) == lease->config.sns_id) {
-                item = &entries[i]; break;
-            }
-        }
+        if (GetTickCount64() >= lease->snapshot->expires) { state = NOT_FOUND; __leave; }
+        const auto item = lease->snapshot->find(lease->config.sns_id);
         if (!item) { state = NOT_FOUND; __leave; }
-        if (lease->cancel || !emoticon_account_matches(lease->page.app, lease->config.account)) {
+        // These local getters validate the live login/service; none requests a page.
+        using GetApp = SharedMessage* (__fastcall*)(SharedMessage*);
+        using GetService = SharedMessage* (__fastcall*)(void*, SharedMessage*);
+        reinterpret_cast<GetApp>(core_address(core_base, 0x47220))(&lease->app);
+        if (!lease->app.object || lease->app.object != lease->snapshot->app.object ||
+                lease->app.control != lease->snapshot->app.control ||
+                !emoticon_account_matches(lease->app, lease->config.account)) __leave;
+        reinterpret_cast<GetService>(core_address(core_base, 0x36c740))(lease->app.object, &lease->kernel);
+        if (!lease->kernel.object || !lease->kernel.control) __leave;
+        reinterpret_cast<GetService>(core_moments_address(core_base, 0x108aee0))(
+            lease->kernel.object, &lease->service);
+        if (lease->service.object != lease->snapshot->service.object ||
+                lease->service.control != lease->snapshot->service.control) __leave;
+        if (lease->cancel || !emoticon_account_matches(lease->app, lease->config.account)) {
             state = CANCELED; __leave;
         }
         if (_InterlockedCompareExchange(&lease->gate, 1, 0) != 0) { state = CANCELED; __leave; }
-        const auto sent = sns_interaction_call::run(&lease->page.service, item, 2,
+        const auto sent = sns_interaction_call::run(&lease->service, item, 2,
                                                    lease->config.content, lease->config.sns_id);
+        if (sent.attempted) _InterlockedIncrement64(&moments_posts::comments);
         lease->result.attempted = sent.attempted;
         lease->result.native_known = sent.native_known;
         lease->result.native_value = sent.native_value;
@@ -62,7 +67,10 @@ static void run(Lease* lease) {
     }
     // No foreign thread releases the native service/vector while its call runs.
     if (state != QUARANTINED) {
-        if (!fresh_moments::release(&lease->page)) state = QUARANTINED;
+        guarded_release_shared(&lease->service, &lease->cleanup);
+        if (!lease->cleanup.exception) guarded_release_shared(&lease->kernel, &lease->cleanup);
+        if (!lease->cleanup.exception) guarded_release_shared(&lease->app, &lease->cleanup);
+        if (lease->cleanup.exception) state = QUARANTINED;
         else lease->result.cleanup_complete = 1;
     }
     _InterlockedExchange(&lease->state, state);
@@ -77,8 +85,10 @@ static DWORD start(void* parameter) {
     if (!core || !core_fingerprint(core) || core_profile_id != 4) return ERROR_NOT_SUPPORTED;
     core_base = reinterpret_cast<uintptr_t>(core);
     if (!sns_interaction_call::fingerprint_anchors(2)) return ERROR_REVISION_MISMATCH;
+    auto snapshot = moments_posts::acquire(cfg.account, cfg.sns_id);
+    if (!snapshot) return ERROR_NOT_FOUND;
     try {
-        pending = std::make_shared<Lease>(cfg);
+        pending = std::make_shared<Lease>(cfg, std::move(snapshot));
         auto lease = pending;
         std::function<void()> task = [lease]() { run(lease.get()); };
         const DWORD code = schedule_task(cfg.base, &task);

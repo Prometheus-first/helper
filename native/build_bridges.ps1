@@ -45,6 +45,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw '删除好友回包桩测试编译失败。' }
         & '.\friend_delete_reply_test.exe'
         if ($LASTEXITCODE -ne 0) { throw '删除好友回包桩测试失败。' }
+        & cl.exe /nologo /std:c++17 /EHsc /W4 /utf-8 /MD /O2 `
+            ..\..\tests\native_moments_post_cache.cpp /Fe:moments_post_cache_test.exe `
+            /Fo:moments_post_cache_test.obj /link /MACHINE:X64 bcrypt.lib minhook.lib
+        if ($LASTEXITCODE -ne 0) { throw '朋友圈对象引用测试编译失败。' }
+        & '.\moments_post_cache_test.exe'
+        if ($LASTEXITCODE -ne 0) { throw '朋友圈对象引用测试失败。' }
     }
     if ($Target -in @('all', 'filehelper')) {
         New-Item -ItemType Directory -Path '..\build' -Force | Out-Null

@@ -54,7 +54,7 @@ def interaction_capability(bridge_path=TEXT_DLL):
 def comment_capability(bridge_path=TEXT_DLL):
     try:
         exports, _ = _exports(bridge_path)
-        return set(_COMMENT_NAMES.values()) <= exports.keys()
+        return set(_COMMENT_NAMES.values()) | {b'WxRetainMomentsRead'} <= exports.keys()
     except (OSError, ValueError):
         return False
 
@@ -157,7 +157,7 @@ def interact_moments(pid, account, payload, *, bridge_path=TEXT_DLL, timeout=90)
         # From entering Start, a failure or timeout may leave an accepted task.
         started = True
         code = channel.call(loaded[0] + exports[names['Start']], parameter)
-        if code in _PREFLIGHT:
+        if code in _PREFLIGHT or modern and code == 1168:
             started = False
             return {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False}
         poll = Poll(); poll.size = c.sizeof(poll); poll.operation_id = cfg.operation_id

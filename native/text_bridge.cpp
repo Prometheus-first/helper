@@ -10,6 +10,7 @@
 #define WXBOT_QUOTE_SEND
 #define WXBOT_LOCAL_RECALL
 #define WXBOT_FRIEND_DELETE
+#define WXBOT_MOMENTS_CACHE
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();
@@ -697,6 +698,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxArmMentionProbe(void* parameter)
 }
 
 #include "moments_send.h"
+#include "moments_post_cache.h"
+static void text_expire_moments_cache() { moments_posts::expire(); }
+static DWORD text_release_moments_cache() { return moments_posts::clear(); }
 #include "moments_read.h"
 
 #ifndef WXBOT_EXCLUDE_SNS_INTERACTION

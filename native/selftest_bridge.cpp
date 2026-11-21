@@ -10,6 +10,10 @@
 #include <memory>
 #include "vendor/minhook-1.3.4/include/MinHook.h"
 #include "core_version.h"
+#ifdef WXBOT_MOMENTS_CACHE
+static void text_expire_moments_cache();
+static DWORD text_release_moments_cache();
+#endif
 
 struct SharedMessage { void* object; void* control; };
 struct SmallString { char data[16]; uint64_t length; uint64_t capacity; };
@@ -723,6 +727,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartFileHelperReceiver(void* pa
 static DWORD poll_received(ReceivedMessage* output) {
     if (!output) return ERROR_INVALID_PARAMETER;
     _InterlockedIncrement(&active_callbacks);
+#ifdef WXBOT_MOMENTS_CACHE
+    text_expire_moments_cache();
+#endif
     AcquireSRWLockExclusive(&receive_lock);
     *output = {};
     output->size = sizeof(*output);
@@ -847,6 +854,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         || friend_delete_reply_callbacks != 0
 #endif
     ) return ERROR_BUSY;
+#ifdef WXBOT_MOMENTS_CACHE
+    if (text_release_moments_cache() != ERROR_SUCCESS) return ERROR_BUSY;
+#endif
     bool hooks_present = hook_created || receive_hook_created || factory_hook_created ||
         image_download_factory_hook_created;
 #ifdef WXBOT_FRIEND_DELETE

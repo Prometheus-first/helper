@@ -14,6 +14,7 @@ from wxbot_framework.moments_reader import MomentsReadError, decode_moments_vect
 _START = b'WxStartMomentsRead'
 _POLL = b'WxPollMomentsRead'
 _CLOSE = b'WxCloseMomentsRead'
+_RETAIN = b'WxRetainMomentsRead'
 _WAIT = b'WxWaitForTasks'
 _TERMINAL = {2, 3}
 
@@ -89,6 +90,8 @@ def read_fresh_moments(pid, expected_account, *, bridge_path=TEXT_DLL, limit=20,
     exports, _ = _exports(bridge)
     if not {_START, _POLL, _CLOSE, _WAIT} <= exports.keys():
         raise MomentsReadError('请更新朋友圈桥接并重新启动机器人')
+    if keep_loaded and _RETAIN not in exports:
+        raise MomentsReadError('请更新朋友圈对象复用桥接并重新启动机器人')
     existing = modules.get(bridge.name.lower())
     if existing and Path(existing[1]).resolve() != bridge:
         raise MomentsReadError('朋友圈桥接来自其他项目目录')
@@ -141,6 +144,8 @@ def read_fresh_moments(pid, expected_account, *, bridge_path=TEXT_DLL, limit=20,
                     account, core[0], limit=limit, cancelled=cancelled)
                 if cancelled() or read_current_account(channel.read_memory, core[0]) != account:
                     raise MomentsReadError('朋友圈账号或连接已变化，已丢弃读取结果')
+                if keep_loaded and channel.call(loaded[0] + exports[_RETAIN], cleanup_pointer):
+                    raise MomentsReadError('朋友圈对象引用保留失败，请重新读取')
                 break
             if poll.state in (3, 4):
                 raise MomentsReadError('微信未能完成朋友圈刷新，请稍后重试')

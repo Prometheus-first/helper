@@ -67,6 +67,7 @@ static void run(Lease* lease) {
                 !emoticon_account_matches(lease->app, lease->config.account)) __leave;
         using Query = NativeResult* (__fastcall*)(void*, NativeResult*, uint64_t, uint64_t, bool);
         InterlockedExchange(&lease->attempted, 1);
+        _InterlockedIncrement64(&moments_posts::queries);
         // Verified 4.2.0.12 native first-page callers use (0, 0, false).
         auto output = reinterpret_cast<Query>(core_moments_read_address(core_base))(
             lease->service.object, &lease->result, 0, 0, false);
@@ -171,6 +172,17 @@ static DWORD poll(void* parameter, bool close) {
     } else if (result.state == READY) result.state = FAILED;
     return copy_poll(parameter, &result, true) ? ERROR_SUCCESS : ERROR_INVALID_PARAMETER;
 }
+static DWORD retain(void* parameter) {
+    Poll request{};
+    if (!parameter || !copy_poll(parameter, &request, false) || request.size != sizeof(request) ||
+            !request.operation_id) return ERROR_INVALID_PARAMETER;
+    Admission admission;
+    if (!pending || pending->config.operation_id != request.operation_id) return ERROR_NOT_FOUND;
+    if (pending->state != READY || pending->cancel ||
+            !emoticon_account_matches(pending->app, pending->config.account)) return ERROR_NOT_READY;
+    return moments_posts::publish(pending->config.account, pending->app, pending->service,
+        reinterpret_cast<const SharedMessage*>(pending->begin), pending->count);
+}
 } // namespace fresh_moments
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxStartMomentsRead(void* parameter) {
@@ -181,4 +193,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxPollMomentsRead(void* parameter)
 }
 extern "C" __declspec(dllexport) DWORD WINAPI WxCloseMomentsRead(void* parameter) {
     return fresh_moments::poll(parameter, true);
+}
+extern "C" __declspec(dllexport) DWORD WINAPI WxRetainMomentsRead(void* parameter) {
+    return fresh_moments::retain(parameter);
 }

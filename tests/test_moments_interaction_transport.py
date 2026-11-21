@@ -81,6 +81,7 @@ class InteractionTransportTests(unittest.TestCase):
         self.names = transport._COMMENT_NAMES
         self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
         modern_exports = {value: i * 0x100 for i, value in enumerate(self.names.values(), 1)}
+        modern_exports[b'WxRetainMomentsRead'] = 0x900
         with patch.dict(EXPORTS, modern_exports, clear=True):
             self.assertEqual(self.run_call(), {'status': 'completed', 'unload_blocked': False})
         self.assertEqual(self.channel.calls, [self.names[x] for x in ('Start', 'Poll', 'Close')])
@@ -98,10 +99,23 @@ class InteractionTransportTests(unittest.TestCase):
         self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
         self.start_error = True
         modern_exports = {value: i * 0x100 for i, value in enumerate(self.names.values(), 1)}
+        modern_exports[b'WxRetainMomentsRead'] = 0x900
         with patch.dict(EXPORTS, modern_exports, clear=True):
             self.assertTrue(self.run_call()['unload_blocked'])
         self.assertEqual(self.channel.calls, [self.names['Start']])
         self.assertEqual(self.mocks[-1].call_args.kwargs['args'][-1], self.names)
+
+    def test_missing_42012_snapshot_fails_preflight_without_retry_or_reaper(self):
+        self.names = transport._COMMENT_NAMES
+        self.mocks[1].return_value = SimpleNamespace(version='4.2.0.12')
+        self.start_code = 1168
+        modern_exports = {value: i * 0x100 for i, value in enumerate(self.names.values(), 1)}
+        modern_exports[b'WxRetainMomentsRead'] = 0x900
+        with patch.dict(EXPORTS, modern_exports, clear=True):
+            result = self.run_call()
+        self.assertEqual(result, {'status': 'failed', 'phase': 'preflight', 'unload_blocked': False})
+        self.assertEqual(self.channel.calls, [self.names['Start']])
+        self.mocks[-1].assert_not_called()
 
     def test_completed_once_and_cleanup_uses_same_operation_token(self):
         self.assertEqual(self.run_call(), {'status': 'completed', 'unload_blocked': False})

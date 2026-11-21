@@ -14,7 +14,7 @@ BASE = 0x100000
 CORE = 0x200000
 OPERATION = 0x123456789
 EXPORTS = {name: index * 0x100 for index, name in enumerate(
-    (transport._START, transport._POLL, transport._CLOSE, transport._WAIT), 1)}
+    (transport._START, transport._POLL, transport._CLOSE, transport._WAIT, transport._RETAIN), 1)}
 
 
 class FakeChannel:
@@ -51,6 +51,9 @@ class FakeChannel:
             return self.case.start_code
         if name == transport._WAIT:
             return 0
+        if name == transport._RETAIN:
+            self.case.assertTrue(self.native_result_held)
+            return self.case.retain_code
         request = transport.Poll.from_buffer_copy(self.buffers[parameter])
         if name == transport._POLL:
             request.state = 2
@@ -85,6 +88,7 @@ class MomentsReadTransportTests(unittest.TestCase):
     def setUp(self):
         self.events = []
         self.start_code, self.close_code = 0, 0
+        self.retain_code = 0
         self.start_timeout = False
         self.close_codes, self.poll_fields = [], {}
         self.modules = {'weixin.dll': (CORE, 'offline-core.dll'),
@@ -128,7 +132,7 @@ class MomentsReadTransportTests(unittest.TestCase):
 
     def test_success_decodes_before_close_and_releases_exactly_once(self):
         self.assertIs(self.run_read(), self.result)
-        self.assertEqual(self.channel.calls, [transport._START, transport._POLL, transport._CLOSE])
+        self.assertEqual(self.channel.calls, [transport._START, transport._POLL, transport._RETAIN, transport._CLOSE])
         self.assertEqual(self.channel.close_ids, [OPERATION])
         self.assertTrue(self.channel.closed)
         self.assertFalse(self.channel.native_result_held)
@@ -137,6 +141,27 @@ class MomentsReadTransportTests(unittest.TestCase):
         self.assertEqual(self.channel.config.operation_id, OPERATION)
         self.mocks['thread'].assert_not_called()
         self.assert_one_submission()
+
+    def test_retention_failure_closes_read_and_never_returns_unowned_posts(self):
+        self.retain_code = 13
+        with self.assertRaisesRegex(transport.MomentsReadError, '引用保留失败'):
+            self.run_read()
+        self.assertEqual(self.channel.calls.count(transport._CLOSE), 1)
+        self.assertFalse(self.channel.native_result_held)
+
+    def test_standalone_read_does_not_leave_cached_refs_before_unload(self):
+        self.modules.pop(BRIDGE.name.lower())
+        self.run_read(keep_loaded=False)
+        self.assertNotIn(transport._RETAIN, self.channel.calls)
+        self.assertNotIn(BRIDGE.name.lower(), self.modules)
+
+    def test_old_bridge_without_retention_is_rejected_before_submission(self):
+        exports = dict(EXPORTS)
+        exports.pop(transport._RETAIN)
+        self.mocks['exports'].return_value = (exports, None)
+        with self.assertRaisesRegex(transport.MomentsReadError, '对象复用'):
+            self.run_read()
+        self.assertEqual(self.channel.calls, [])
 
     def test_native_failure_never_decodes_retries_or_reads_old_cache(self):
         cases = ({'state': 3}, {'state': 4}, {'state': 5}, {'attempted': 0},
