@@ -388,6 +388,58 @@ class ServiceFacade:
     def friend_requests(self, *, expected_session=None):
         return self._manage("friend_requests", expected_session=expected_session)
 
+    def start_call_video_file(self, path, *, width, height, loop=False, fps=15,
+                              quality='native', expected_session=None):
+        return self._manage('start_call_video_file', str(path),
+            {'width': width, 'height': height, 'loop': loop, 'fps': fps, 'quality': quality},
+            expected_session=expected_session)
+
+    def start_call_video_frames(self, width, height, *, quality='native', expected_session=None):
+        return self._manage('start_call_video_frames', width, height, quality, expected_session=expected_session)
+
+    def start_call_video_facefusion(self, source_photo, *, python_executable, repository,
+                                   width, height, camera_id=0, fps=15, quality='high', preview=False,
+                                   model='inswapper_128_fp16', enhance=False, expected_session=None):
+        return self._manage('start_call_video_facefusion', str(source_photo), {
+            'python_executable': str(python_executable), 'repository': str(repository),
+            'width': width, 'height': height, 'camera_id': camera_id, 'fps': fps, 'quality': quality, 'preview': preview,
+            'model': model, 'enhance': enhance},
+            expected_session=expected_session)
+
+    def submit_call_video_frame(self, pixels, *, expected_session=None):
+        return self._manage('submit_call_video_frame', pixels, expected_session=expected_session)
+
+    def start_call_video_liveportrait(self, source_photo, *, python_executable, repository,
+                                    width, height, camera_id=0, fps=15, quality='high', expected_session=None):
+        return self._manage('start_call_video_liveportrait', str(source_photo), {
+            'python_executable': str(python_executable), 'repository': str(repository),
+            'width': width, 'height': height, 'camera_id': camera_id, 'fps': fps, 'quality': quality},
+            expected_session=expected_session)
+
+    def start_call_video_body_avatar(self, source_photo, *, python_executable, repository,
+                                    linux_python_executable, width, height, wsl_distribution='Ubuntu',
+                                    camera_id=0, fps=15, quality='high', tracking_mode='body', expected_session=None):
+        return self._manage('start_call_video_body_avatar',str(source_photo),{
+            'python_executable':str(python_executable),'repository':str(repository),
+            'linux_python_executable':str(linux_python_executable),'wsl_distribution':wsl_distribution,
+            'width':width,'height':height,'camera_id':camera_id,'fps':fps,'quality':quality,'tracking_mode':tracking_mode},
+            expected_session=expected_session)
+
+    def stop_call_video(self, *, expected_session=None):
+        return self._manage('stop_call_video', expected_session=expected_session)
+
+    def call_video_statistics(self, *, arm=False, expected_session=None):
+        return self._manage('call_video_statistics', arm, expected_session=expected_session)
+
+    def switch_call_video_photo(self, path, *, expected_session=None):
+        return self._manage('switch_call_video_photo', str(path), expected_session=expected_session)
+
+    def call_video_preview(self, *, expected_session=None):
+        return self._manage('call_video_preview', expected_session=expected_session)
+
+    def play_call_video_clip(self, path, *, expected_session=None):
+        return self._manage('play_call_video_clip', str(path), expected_session=expected_session)
+
     def moments_capabilities(self, *, expected_session=None):
         return self._manage("moments_capabilities", expected_session=expected_session)
 
@@ -623,6 +675,44 @@ class PluginContext:
 
     def plugin_is_active(self, name):
         return bool(self._plugin_active and self._plugin_active(name))
+
+    def _call_video(self, method, *args, **kwargs):
+        if 'call_video.replace' not in self.capabilities:
+            raise CapabilityError('当前插件缺少视频通话画面替换能力')
+        return getattr(self._service, method)(*args, **kwargs)
+
+    def start_call_video_file(self, path, **options):
+        return self._call_video('start_call_video_file', path, **options)
+
+    def start_call_video_frames(self, width, height, **options):
+        return self._call_video('start_call_video_frames', width, height, **options)
+
+    def start_call_video_facefusion(self, source_photo, **options):
+        return self._call_video('start_call_video_facefusion', source_photo, **options)
+
+    def start_call_video_liveportrait(self, source_photo, **options):
+        return self._call_video('start_call_video_liveportrait', source_photo, **options)
+
+    def start_call_video_body_avatar(self, source_photo, **options):
+        return self._call_video('start_call_video_body_avatar', source_photo, **options)
+
+    def submit_call_video_frame(self, pixels, **options):
+        return self._call_video('submit_call_video_frame', pixels, **options)
+
+    def stop_call_video(self, **options):
+        return self._call_video('stop_call_video', **options)
+
+    def call_video_statistics(self, **options):
+        return self._call_video('call_video_statistics', **options)
+
+    def switch_call_video_photo(self, path, **options):
+        return self._call_video('switch_call_video_photo', path, **options)
+
+    def call_video_preview(self, **options):
+        return self._call_video('call_video_preview', **options)
+
+    def play_call_video_clip(self, path, **options):
+        return self._call_video('play_call_video_clip', path, **options)
 
     @property
     def speech(self):

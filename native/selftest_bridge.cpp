@@ -310,6 +310,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxInspectCoreVersion(void*) {
     return static_cast<DWORD>(InterlockedCompareExchange(&core_profile_id, 0, 0));
 }
 
+#ifdef WXBOT_VIDEO_PROBE
+#include "video_probe.h"
+#endif
+
 static void release_shared(SharedMessage& message) {
     if (!message.control) return;
     auto control = static_cast<unsigned char*>(message.control);
@@ -764,6 +768,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
 #ifdef WXBOT_LOCAL_RECALL
     InterlockedExchange(&local_recall_enabled, 0);
 #endif
+#ifdef WXBOT_VIDEO_PROBE
+    const DWORD video_disable_code = video_probe_disable();
+    if (video_disable_code) return video_disable_code;
+#endif
     const auto target = reinterpret_cast<void*>(core_address(core_base, 0x178f100));
     MH_STATUS status = MH_OK;
 #ifdef WXBOT_FRIEND_DELETE
@@ -862,6 +870,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
 #ifdef WXBOT_FRIEND_DELETE
     hooks_present = hooks_present || friend_delete_hook_created;
 #endif
+#ifdef WXBOT_VIDEO_PROBE
+    hooks_present = hooks_present || video_hook_created;
+#endif
 #ifdef WXBOT_RECALL_RECEIVE
     hooks_present = hooks_present || recall_receive_hook_created;
 #endif
@@ -882,6 +893,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
         if (status != MH_OK) return 600 + status;
         friend_delete_hook_created = false;
     }
+#endif
+#ifdef WXBOT_VIDEO_PROBE
+    const DWORD video_remove_code = video_probe_remove();
+    if (video_remove_code) return video_remove_code;
 #endif
     if (hook_created) {
         status = MH_RemoveHook(target);

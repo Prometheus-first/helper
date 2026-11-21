@@ -37,7 +37,8 @@ export default defineConfig({
         { text: '合并转发解析', link: '/messages/forwarded' },
         { text: '防撤回与补发', link: '/messages/recall' },
         { text: '表情提取与发送', link: '/messages/emoticons' },
-        { text: '语音合成与发送', link: '/messages/voice' }
+        { text: '语音合成与发送', link: '/messages/voice' },
+        { text: '视频通话画面替换', link: '/messages/call-video' }
       ] },
       { text: '开发与维护', items: [
         { text: '插件开发', link: '/development/plugins' },

@@ -1,0 +1,9 @@
+# Dedicated Python 3.12 environment. Install torch from its cu128 wheel index.
+-r requirements-facefusion.txt
+torch==2.9.1+cu128
+torchgeometry==0.1.2
+omegaconf==2.3.0
+ffmpeg-python==0.2.0
+insightface==0.7.3
+mediapipe==0.10.32
+scikit-image==0.26.0

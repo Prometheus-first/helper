@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from .sdk import Message
+from .sdk import Message, CapabilityError
 
 CAPABILITIES = frozenset({"text.receive", "text.send"})
 TEXT_CAPABILITIES = CAPABILITIES | frozenset({"friend.text.receive", "friend.text.send",
@@ -28,7 +28,7 @@ TEXT_42011_CAPABILITIES = CAPABILITIES | frozenset({
     "group.text.mention", "group.members.read", "group.events", "message.recall",
     "image.receive", "image.send", "file.receive", "file.send",
     "friend.file.receive", "friend.file.send", "group.file.receive", "group.file.send",
-    "voice.receive", "voice.xml.receive", "voice.send", "friend.voice.send", "group.voice.send"})
+    "voice.receive", "voice.xml.receive", "voice.send", "friend.voice.send", "group.voice.send", "call_video.replace"})
 
 
 # 新版只公布已验证的功能；其他能力必须单独适配并完成实测。
@@ -43,6 +43,7 @@ TEXT_42012_CAPABILITIES = CAPABILITIES | frozenset({
     "text.quote.send", "message.recall.local",
     "miniprogram.control",
     "contact.read",
+    "call_video.replace",
 })
 
 
@@ -86,7 +87,7 @@ class NativeTextBackend(NativeFileHelperBackend):
         if self.raw.wechat_version == '4.2.0.12':
             return '文本、语音、图片及文件收发，群艾特、文字撤回和群成员缓存'
         if self.raw.wechat_version == '4.2.0.11':
-            return '文本、语音、图片及文件收发，群艾特、文字撤回和群成员缓存'
+            return '文本、语音、图片及文件收发，群艾特、文字撤回、群成员缓存和实验性视频通话画面替换'
         return '文本、图片与文件收发；语音、表情发送；好友申请与控制台群管理'
 
     @property
@@ -143,6 +144,55 @@ class NativeTextBackend(NativeFileHelperBackend):
 
     def send_voice(self, chat_id, path):
         return self.raw.send_voice(chat_id, path)
+
+    def _require_call_video(self):
+        if 'call_video.replace' not in self.capabilities:
+            raise CapabilityError('视频通话画面替换目前支持已核对的 Windows 微信 4.2.0.11 / 4.2.0.12')
+
+    def start_call_video_file(self, path, options):
+        self._require_call_video()
+        return self.raw.start_call_video_file(path, **options)
+
+    def start_call_video_frames(self, width, height, quality):
+        self._require_call_video()
+        self.raw.start_call_video_frames(width, height, quality=quality)
+        return {'width': width, 'height': height, 'format': 'I420', 'quality': quality}
+
+    def start_call_video_facefusion(self, source_photo, options):
+        self._require_call_video()
+        return self.raw.start_call_video_facefusion(source_photo, **options)
+
+    def switch_call_video_photo(self, path):
+        self._require_call_video()
+        return self.raw.switch_call_video_photo(path)
+
+    def call_video_preview(self):
+        self._require_call_video()
+        return self.raw.call_video_preview()
+
+    def play_call_video_clip(self, path):
+        self._require_call_video()
+        return self.raw.play_call_video_clip(path)
+
+    def start_call_video_liveportrait(self, source_photo, options):
+        self._require_call_video()
+        return self.raw.start_call_video_liveportrait(source_photo, **options)
+
+    def start_call_video_body_avatar(self, source_photo, options):
+        self._require_call_video()
+        return self.raw.start_call_video_body_avatar(source_photo, **options)
+
+    def submit_call_video_frame(self, pixels):
+        self._require_call_video()
+        return self.raw.submit_call_video_frame(pixels)
+
+    def stop_call_video(self):
+        self._require_call_video()
+        return self.raw.stop_call_video()
+
+    def call_video_statistics(self, arm):
+        self._require_call_video()
+        return self.raw.call_video_statistics(arm=arm)
 
     def send_file(self, chat_id, path):
         return self.raw.send_file(chat_id, path)

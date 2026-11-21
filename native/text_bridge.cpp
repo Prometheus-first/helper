@@ -11,6 +11,7 @@
 #define WXBOT_LOCAL_RECALL
 #define WXBOT_FRIEND_DELETE
 #define WXBOT_MOMENTS_CACHE
+#define WXBOT_VIDEO_PROBE
 #include "selftest_bridge.cpp"
 
 static DWORD friend_receive_start();

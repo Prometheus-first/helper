@@ -123,6 +123,8 @@ class PanelController:
                                                        self._moments_allowed)
         from .moments_auto_comment import MomentsAutoComment
         self.moments_auto = MomentsAutoComment(self, atomic_json, read_json)
+        from .call_video_panel import CallVideoPanel
+        self.call_video = CallVideoPanel(self)
         logging.getLogger().addHandler(self.logs)
 
     def _paths(self, config):
@@ -280,6 +282,7 @@ class PanelController:
         self.stop_event.set()
         self.moments_auto.close()
         self.recovery.cancel()
+        self.call_video.close()
         self.scheduled_tasks.close()
         self.moments.close()
         self.moments_interactions.close()

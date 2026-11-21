@@ -88,6 +88,7 @@ python main.py
 | 删除单个好友并保留聊天记录（仅微信 4.2.0.12） | [调用方式与实测结果](docs/guide/web-panel.md#删除好友) |
 | 关注公众号、自动同步文章和站内阅读 | [公众号文章](docs/guide/web-panel.md#公众号文章) |
 | 图片、文件、视频、表情和语音 | [图片](docs/messages/images.md) · [文件](docs/messages/files.md) · [视频](docs/messages/videos.md) · [表情](docs/messages/emoticons.md) · [语音](docs/messages/voice.md) |
+| 视频通话画面替换 | [本地视频与程序帧（Windows 4.2.0.11 / 4.2.0.12，实验功能）](docs/messages/call-video.md) |
 | 合并转发与防撤回 | [合并转发](docs/messages/forwarded.md) · [防撤回](docs/messages/recall.md) |
 | 好友申请、群成员与群管理 | [好友申请与群管理](docs/guide/friends-and-groups.md) |
 | 开发小程序业务 | [小程序通用接口](docs/development/miniprograms.md) |

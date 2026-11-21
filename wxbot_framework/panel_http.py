@@ -91,7 +91,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             parsed = urlsplit(self.path)
             path = parsed.path
             controller = self.server.controller
-            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js', '/moments-auto.js', '/articles.js'):
+            if not write and path in ('/', '/index.html', '/style.css', '/app.js', '/moments.js', '/moments-auto.js', '/articles.js', '/call-video.js'):
                 name = 'index.html' if path == '/' else path[1:]
                 raw = (controller.root / 'webui' / name).read_bytes()
                 if name == 'index.html':
@@ -113,6 +113,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 limit = 2 * 1024 * 1024 if path in ('/api/plugin-source', '/api/plugin-reset', '/api/plugin-business') else 65536
                 if path == '/api/moments-publish':
                     limit = 29 * 1024 * 1024
+                if path == '/api/call-video/upload':
+                    limit = 12 * 1024 * 1024
+                if path == '/api/call-video/upload-video':
+                    limit = 2 * 1024 * 1024
                 # Text is split downstream; its size is constrained by available
                 # resources instead of a separate fixed message-size limit.
                 if size < 1 or (path != '/api/send-text' and size > limit):
@@ -131,6 +135,12 @@ class PanelHandler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data, dict):
                     raise PanelError('请求必须为 JSON 对象')
+                video_actions = {'/api/call-video/upload': 'upload', '/api/call-video/delete': 'delete',
+                                 '/api/call-video/start': 'start', '/api/call-video/stop': 'stop',
+                                 '/api/call-video/switch': 'switch', '/api/call-video/play': 'play',
+                                 '/api/call-video/upload-video': 'upload_video'}
+                if path in video_actions:
+                    return self.send(200, getattr(controller.call_video, video_actions[path])(data))
                 if path == '/api/robots' and hub is not None:
                     return self.send(200, hub.create_robot(data))
                 if path == '/api/accounts/prepare' and hub is not None:
@@ -190,6 +200,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 return self.send(200, {'ok': True})
             if path == '/api/state':
                 return self.send(200, controller.snapshot())
+            if path == '/api/call-video':
+                return self.send(200, controller.call_video.snapshot())
+            if path == '/api/call-video/preview':
+                return self.send(200, controller.call_video.preview())
             if path == '/api/scheduled-tasks':
                 return self.send(200, controller.list_scheduled_tasks())
             if path == '/api/scheduled-actions':

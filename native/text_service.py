@@ -124,6 +124,10 @@ class NativeTextService(NativeFileHelperService):
         self._voice_receiver = None
         self._video_receiver = None
         self._forwarded_receiver = None
+        self._call_video_writer = None
+        self._call_video_playback = None
+        self._call_video_ai = None
+        self._call_video_capture = None
         self.file_directory = Path(file_directory or
                                    Path(__file__).resolve().parent.parent / ".runtime/files")
         self.video_directory = self.file_directory.parent / 'videos'
@@ -321,6 +325,7 @@ class NativeTextService(NativeFileHelperService):
 
     def stop(self):
         self._stop.set()
+        self.stop_call_video()
         if self._video_receiver is not None:
             self._video_receiver.close(timeout=30)
             if self._video_receiver.is_alive:
@@ -364,6 +369,161 @@ class NativeTextService(NativeFileHelperService):
 
     def _before_poll(self):
         self._check_account()
+
+    def video_probe(self, operation='statistics'):
+        """Experimental observer only; no video replacement capability is advertised."""
+        from video_control import call_video_probe
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError('请先连接当前微信账号')
+            self._check_account(force=True)
+            result = call_video_probe(self.pid, operation)
+            self._check_account(force=True)
+            return result
+
+    def start_call_video_frames(self, width, height, *, quality='native'):
+        """Start a packed I420 source; the caller can submit its own program frames."""
+        from video_source import VideoFrameWriter, bind_video_source
+        with self._calls:
+            if not self._owns_bridge or self._stop.is_set() or self._channel is None:
+                raise RuntimeError('请先连接当前微信账号')
+            self._check_account(force=True)
+            if self._call_video_writer is not None:
+                raise RuntimeError('请先停止当前视频源')
+            self.video_probe('start')
+            writer = VideoFrameWriter(width, height)
+            try:
+                bind_video_source(self.pid, writer, self.self_wxid, quality)
+            except BaseException:
+                writer.close()
+                raise
+            self._call_video_writer = writer
+            return writer
+
+    def start_call_video_file(self, path, *, width, height, loop=False, fps=15, quality='native'):
+        from video_source import VideoFilePlayback
+        with self._calls:
+            writer = self.start_call_video_frames(width, height, quality=quality)
+            try:
+                playback = VideoFilePlayback(path, writer, loop=loop, fps=fps,
+                    session_alive=lambda: not self._stop.is_set())
+                self._call_video_playback = playback
+                playback.start()
+            except BaseException:
+                self.stop_call_video()
+                raise
+            return {'width': width, 'height': height, 'format': 'I420', 'fps': fps, 'loop': loop,
+                    'quality': quality}
+
+    def stop_call_video(self):
+        from video_source import unbind_video_source, unbind_video_capture
+        with self._calls:
+            if self._call_video_ai is not None:
+                self._call_video_ai.stop()
+                self._call_video_ai = None
+            if self._call_video_capture is not None:
+                unbind_video_capture(self.pid)
+                self._call_video_capture.close()
+                self._call_video_capture = None
+            if self._call_video_playback is not None:
+                self._call_video_playback.stop()
+                self._call_video_playback = None
+            if self._call_video_writer is not None:
+                self._call_video_writer.disarm()
+                unbind_video_source(self.pid)
+                self._call_video_writer.close()
+                self._call_video_writer = None
+
+    def submit_call_video_frame(self, pixels):
+        with self._calls:
+            if self._stop.is_set() or self._call_video_writer is None:
+                raise RuntimeError('当前连接没有可写的视频源')
+            if self._call_video_playback is not None or self._call_video_ai is not None:
+                raise RuntimeError('文件或 AI 视频播放期间不能混入程序帧，请先停止当前源')
+            self._check_account()
+            return self._call_video_writer.submit(pixels)
+
+    def call_video_statistics(self, *, arm=False):
+        from video_control import call_video_quality
+        if type(arm) is not bool:
+            raise ValueError('arm 必须是布尔值')
+        with self._calls:
+            result = self.video_probe('start' if arm else 'statistics')
+            result['encoder'] = call_video_quality(self.pid)
+            playback = self._call_video_playback
+            result['decoded_frames'] = playback.frames if playback is not None else 0
+            result['decode_failed'] = bool(playback is not None and playback.error is not None)
+            result['ai'] = self._call_video_ai.statistics() if self._call_video_ai is not None else None
+            return result
+
+    def switch_call_video_photo(self, path):
+        with self._calls:
+            self._check_account(force=True)
+            if self._stop.is_set() or self._call_video_ai is None:
+                raise RuntimeError('请先开始换脸')
+            return self._call_video_ai.switch_source_photo(path)
+
+    def call_video_preview(self):
+        with self._calls:
+            self._check_account(force=True)
+            stream = self._call_video_ai
+            frame = stream.latest_frame if stream is not None else None
+            return {'sequence': frame.sequence, 'jpeg': frame.preview_jpeg} if frame is not None else None
+
+    def play_call_video_clip(self, path):
+        with self._calls:
+            self._check_account(force=True)
+            if self._stop.is_set() or self._call_video_ai is None:
+                raise RuntimeError('请先开始换脸')
+            return self._call_video_ai.play_video_clip(path)
+
+    def start_call_video_facefusion(self, source_photo, *, python_executable, repository,
+                                   width, height, camera_id=0, fps=15, quality='high', preview=False,
+                                   model='inswapper_128_fp16', enhance=False):
+        from wxbot_framework.facefusion_stream import FaceFusionStream
+        return self._start_call_video_ai(FaceFusionStream, source_photo, python_executable=python_executable,
+            repository=repository, width=width, height=height, camera_id=camera_id, fps=fps,
+            quality=quality, preview=preview, model=model, enhance=enhance, capture_wechat=True)
+
+    def start_call_video_liveportrait(self, source_photo, *, python_executable, repository,
+                                    width, height, camera_id=0, fps=15, quality='high', preview=False):
+        from wxbot_framework.liveportrait_stream import LivePortraitStream
+        return self._start_call_video_ai(LivePortraitStream, source_photo, python_executable=python_executable,
+            repository=repository, width=width, height=height, camera_id=camera_id, fps=fps,
+            quality=quality, preview=preview)
+
+    def _start_call_video_ai(self, stream_type, source_photo, *, python_executable, repository,
+                            width, height, camera_id, fps, quality, preview, capture_wechat=False, **options):
+        with self._calls:
+            writer = self.start_call_video_frames(width, height, quality=quality)
+            try:
+                if capture_wechat:
+                    from video_source import VideoFrameWriter, bind_video_capture
+                    self._call_video_capture = VideoFrameWriter(width, height)
+                    bind_video_capture(self.pid, self._call_video_capture, self.self_wxid)
+                    options['input_capture'] = self._call_video_capture.capture_descriptor()
+                stream = stream_type(python_executable=python_executable, repository=repository,
+                    source_photo=source_photo, width=width, height=height, camera_id=camera_id, fps=fps,
+                    preview=preview, **options,
+                    on_frame=lambda frame: writer.submit(frame.pixels),
+                    on_end=writer.disarm, session_alive=lambda: not self._stop.is_set())
+                self._call_video_ai = stream
+                stream.start()
+            except BaseException:
+                self.stop_call_video()
+                raise
+            return {'phase': 'starting', 'format': 'I420', 'width': width, 'height': height,
+                    'fps': fps, 'quality': quality}
+
+    def start_call_video_body_avatar(self, source_photo, *, python_executable, repository,
+                                    linux_python_executable, width, height, wsl_distribution='Ubuntu',
+                                    camera_id=0, fps=15, quality='high', preview=False, tracking_mode='body'):
+        from wxbot_framework.body_avatar_stream import BodyAvatarStream
+        return self._start_call_video_ai(BodyAvatarStream, source_photo,
+            python_executable=python_executable, repository=repository,
+            linux_python_executable=linux_python_executable, wsl_distribution=wsl_distribution,
+            width=width, height=height, camera_id=camera_id, fps=fps, quality=quality, preview=preview,
+            tracking_mode=tracking_mode)
 
     def group_members(self, room):
         from wxbot_framework.group_management import validate_group_id

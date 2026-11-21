@@ -1,0 +1,4 @@
+# Windows Python 3.12 worker. GPU reconstruction uses a separate WSL environment.
+numpy==2.5.4
+opencv-contrib-python==5.0.0.93
+mediapipe==0.10.32

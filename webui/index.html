@@ -10,6 +10,7 @@
   <script src="/moments-auto.js"></script>
   <script src="/moments.js"></script>
   <script src="/articles.js"></script>
+  <script src="/call-video.js"></script>
   <script src="/app.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -27,6 +28,7 @@
     <a href="#articles" data-page="articles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14v17H5zM8 8h8M8 12h8M8 16h5"/></svg>公众号文章</a>
     <a href="#models" data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>模型与语音</a>
     <a href="#logs" data-page="logs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1"/></svg>运行日志</a>
+    <a href="#call-video" data-page="call-video"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3"/></svg>视频换脸</a>
   </nav>
   <div class="sidebar-bottom"><a href="https://prometheus-first.github.io/helper/" target="_blank" rel="noreferrer">使用文档<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M6 6h8v8"/></svg></a></div>
 </aside>
@@ -222,6 +224,24 @@
     <div class="log-list" id="log-list" role="log" aria-label="实时日志" aria-live="off"><div class="log-empty">暂无日志。</div></div>
   </section>
 
+  <section class="page hidden" id="page-call-video" aria-labelledby="call-video-heading">
+    <div class="page-heading"><div><h1 id="call-video-heading">视频换脸</h1><p class="note">选择一张照片，在微信视频通话中实时换脸。照片只保存在这台电脑。</p></div></div>
+    <div class="video-layout">
+      <section class="settings-section video-controls">
+        <div class="section-heading"><h2>图片与视频</h2><div class="video-upload-actions"><label class="secondary video-upload" for="video-upload">添加素材<input id="video-upload" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm,.mkv" class="sr-only"></label><button id="video-upload-cancel" class="text-button hidden" type="button">取消上传</button></div></div>
+        <p class="note">点击图片换脸，点击视频播放一次，播完自动回到换脸。播放中也可点击图片立即返回。</p>
+        <div id="video-photos" class="video-photos" aria-label="图片与视频素材库"></div>
+        <div class="field-pair"><label>画面模式<select id="video-mode"><option value="balanced">均衡 · 256 模型</option><option value="fast">流畅 · 128 模型</option></select></label></div>
+        <details class="help-details"><summary>运行环境设置</summary><label>FaceFusion Python<input id="video-python" type="text" autocomplete="off" spellcheck="false"></label><label>FaceFusion 目录<input id="video-repository" type="text" autocomplete="off" spellcheck="false"></label><p class="note">使用已经安装的独立 FaceFusion 环境。停止换脸后可修改。</p></details>
+        <p id="video-status" role="status" aria-live="polite">正在读取换脸状态…</p>
+        <div id="video-playback" class="video-playback hidden"><progress id="video-playback-progress" max="100" value="0" aria-label="视频播放进度"></progress><span id="video-playback-time"></span></div>
+        <div class="video-actions"><button id="video-start" class="primary" type="button">开始换脸</button><button id="video-stop" class="secondary" type="button" disabled>停止换脸</button><button id="video-delete" class="text-button danger-text" type="button">移除所选素材</button></div>
+        <p class="note">图片最多 8 MiB；视频最多 128 MiB、15 分钟。视频画面按原速播放，音频沿用微信通话。</p>
+        <p class="note">先在运行概览启动当前账号，再开始换脸，并在微信中发起视频通话。首次加载模型需要稍候，挂断后自动停止。</p>
+      </section>
+      <section class="settings-section video-preview-panel"><div class="section-heading"><h2>本机预览</h2><span id="video-metrics" class="count"></span></div><div class="video-preview"><img id="video-preview" class="hidden" alt="当前换脸画面"><p id="video-placeholder">开始换脸并接通视频后，画面会显示在这里。</p></div><p class="note">这是发送前画面；接收端清晰度还受微信编码和网络影响。画面保留 AI 测试标记。</p></section>
+    </div>
+  </section>
 </main>
 <div id="toast" class="toast hidden" role="status"></div>
 <dialog id="message-export-dialog" aria-labelledby="message-export-title">

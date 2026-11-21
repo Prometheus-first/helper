@@ -122,6 +122,10 @@ class RobotProxy:
     def request(self, route, body=None):
         return self.hub.request(self.identifier, route, body)
 
+    @property
+    def call_video(self):
+        return CallVideoProxy(self)
+
     def snapshot(self): return self.request('state')
     def configuration(self): return self.request('config')
     def accounts(self): return self.request('accounts')['accounts']
@@ -203,6 +207,21 @@ class RobotProxy:
         return self.request('plugin-business?' + urlencode({'name': name}))
     def save_plugin_business(self, data):
         return self.request('plugin-business', data)
+
+
+class CallVideoProxy:
+    def __init__(self, robot):
+        self.robot = robot
+
+    def snapshot(self): return self.robot.request('call-video')
+    def preview(self): return self.robot.request('call-video/preview')
+    def upload(self, data): return self.robot.request('call-video/upload', data)
+    def delete(self, data): return self.robot.request('call-video/delete', data)
+    def start(self, data): return self.robot.request('call-video/start', data)
+    def stop(self, data): return self.robot.request('call-video/stop', data)
+    def switch(self, data): return self.robot.request('call-video/switch', data)
+    def play(self, data): return self.robot.request('call-video/play', data)
+    def upload_video(self, data): return self.robot.request('call-video/upload-video', data)
 
 
 class RobotHub:
